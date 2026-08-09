@@ -169,7 +169,7 @@
 
   .g-cue{display:flex;align-items:center;gap:4px;flex:none}
   .g-cue.g-cue-col{flex-direction:column;gap:1px}
-  .g-cue.g-cue-col .g-times{font-size:11px}
+  .g-cue.g-cue-col .g-times{font-size:15px;font-weight:500;letter-spacing:0}
   .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--signal)}
   .g-cue .grab:hover:not(:disabled){border-color:var(--signal);color:var(--signal);background:#F6EAE8}
   .g-cue .grab:disabled{opacity:.28;cursor:default}
@@ -476,7 +476,7 @@
     return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
   }
   function timesText(g){
-    return String(g.reps);   // 数字だけ（REC の下に置く）
+    return "×" + g.reps;
   }
 
   function renderGroups(){
