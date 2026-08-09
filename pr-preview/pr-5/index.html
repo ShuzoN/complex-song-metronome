@@ -116,7 +116,7 @@
 
   /* シーケンス先頭の空白（リード） */
   .lead-wrap{padding:10px 14px 0}
-  .lead{position:relative;display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px dashed var(--rule);background:#FFF}
+  .lead{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:8px 9px;border:1px dashed var(--rule);background:#FFF}
   .lead.counting{border-color:var(--brass);border-style:solid}
   .lead.counting::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brass)}
   .lead.na{opacity:.4}
@@ -124,14 +124,13 @@
   .lead input:focus{outline:none;border-color:var(--ink)}
   .lead input:disabled{background:#EDECE6;color:#9A9E93}
   .lead .unit{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .lead{flex-wrap:wrap}
+  .lead-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
   .lead-sep{width:1px;height:20px;background:var(--rule);margin:0 2px}
   .rec{height:28px;padding:0 10px;border:1px solid var(--ink);background:var(--panel);font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--signal)}
   .rec:hover:not(:disabled){background:#F7ECEA}
   .rec:disabled{opacity:.3;cursor:default;color:var(--dim)}
   .rec.on{background:var(--signal);border-color:var(--signal);color:var(--panel)}
   .g-at.hit{color:var(--signal)}
-  .lead-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
 
   /* rhythm groups */
   .groups{padding:10px 14px 4px;display:flex;flex-direction:column;gap:8px}
@@ -158,7 +157,8 @@
   .g-times{font-family:var(--mono);font-size:11.5px;color:var(--brass);white-space:nowrap;letter-spacing:.04em}
   .group.playing .g-times{color:var(--signal)}
 
-  .g-sub{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 9px 41px}
+  .g-sub{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 9px 9px 41px}
+  .g-sub .g-times{margin-left:auto;font-size:12px}
   .chip{font-family:var(--mono);font-size:11px;border:1px solid var(--rule);padding:2px 6px;background:#FAF9F5;color:var(--dim)}
   .chip.now{background:var(--signal);border-color:var(--signal);color:var(--panel)}
   .chip.none{border-style:dashed}
@@ -175,8 +175,8 @@
   .mini.kill:hover:not(:disabled){background:var(--signal);color:var(--panel);border-color:var(--signal)}
 
   .g-cue{display:flex;align-items:center;gap:4px;flex:none}
-  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--ink)}
-  .g-cue .grab:hover:not(:disabled){border-color:var(--brass);color:var(--brass);background:#F7F3E9}
+  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--signal)}
+  .g-cue .grab:hover:not(:disabled){border-color:var(--signal);color:var(--signal);background:#F6EAE8}
   .g-cue .grab:disabled{opacity:.28;cursor:default}
   .g-cue .nudge{width:22px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--dim)}
   .g-cue .nudge:hover{border-color:var(--brass);color:var(--brass);background:#F7F3E9}
@@ -481,10 +481,10 @@
   function fmtTime(sec){
     if(sec == null) return "—";
     const m = Math.floor(sec / 60), r = sec - m * 60;
-    return (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+    return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
   }
   function timesText(g){
-    return "× " + g.reps;
+    return "×" + g.reps;
   }
 
   function renderGroups(){
@@ -545,45 +545,8 @@
 
         const cueBox = document.createElement("span");
         cueBox.className = "g-cue";
-        const grab = document.createElement("button");
-        grab.type = "button"; grab.className = "grab"; grab.textContent = "▶";
-        grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
-        grab.setAttribute("aria-label", "動画の現在位置を記録");
-        grab.disabled = !ytReady;
-        grab.addEventListener("click", e=>{
-          e.stopPropagation();
-          if(!ytReady) return;
-          let t = null;
-          try{ t = ytPlayer.getCurrentTime(); }catch(err){}
-          if(t == null || isNaN(t)) return;
-          commit();
-          g.cue = Math.round(t*100)/100;
-          renderGroups();
-        });
-        const at = document.createElement("span");
-        at.className = "g-at" + (g.cue == null ? " none" : "");
-        at.textContent = fmtTime(g.cue);
-        at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
-        cueBox.appendChild(grab);
-        if(g.cue != null){
-          cueBox.appendChild(nudge(g, -0.1, at));
-          cueBox.appendChild(at);
-          cueBox.appendChild(nudge(g, 0.1, at));
-        }else{
-          cueBox.appendChild(at);
-        }
-        if(g.cue != null){
-          const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
-          clr.classList.add("kill");
-          clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-          clr.addEventListener("click", e=>e.stopPropagation());
-          cueBox.appendChild(clr);
-        }
+        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
         head.appendChild(cueBox);
-        const times = document.createElement("span");
-        times.className = "g-times"; times.dataset.role = "times";
-        times.textContent = timesText(g);
-        head.appendChild(times);
       }
       card.appendChild(head);
 
@@ -603,6 +566,11 @@
             sub.appendChild(c);
           });
         }
+        const times = document.createElement("span");
+        times.className = "g-times"; times.dataset.role = "times";
+        times.title = "再生回数";
+        times.textContent = timesText(g);
+        sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
         card.appendChild(sub);
       }
 
@@ -610,6 +578,13 @@
       if(g.id === activeId){
         const body = document.createElement("div");
         body.className = "g-body";
+
+        const crow = document.createElement("div");
+        crow.className = "g-row";
+        const clab = document.createElement("span");
+        clab.className = "g-label"; clab.textContent = "動画位置";
+        crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
+        body.appendChild(crow);
 
         const row = document.createElement("div");
         row.className = "g-row";
@@ -700,7 +675,7 @@
     const b = document.createElement("button");
     b.type = "button"; b.className = "nudge";
     b.textContent = delta < 0 ? "−" : "＋";
-    b.title = (delta < 0 ? "0.1秒もどす" : "0.1秒すすめる");
+    b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
     b.setAttribute("aria-label", b.title);
     b.addEventListener("click", e=>{
       e.stopPropagation();
@@ -711,6 +686,50 @@
       label.textContent = fmtTime(g.cue);      // 構造は変わらないので再描画しない
     });
     return b;
+  }
+
+  /* いまの動画位置をこのグループに記録する REC（●）ボタン */
+  function cueGrabButton(g){
+    const grab = document.createElement("button");
+    grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
+    grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
+    grab.setAttribute("aria-label", "動画の現在位置を記録");
+    grab.disabled = !ytReady;
+    grab.addEventListener("click", e=>{
+      e.stopPropagation();
+      if(!ytReady) return;
+      let t = null;
+      try{ t = ytPlayer.getCurrentTime(); }catch(err){}
+      if(t == null || isNaN(t)) return;
+      commit();
+      g.cue = Math.round(t*100)/100;
+      renderGroups();
+    });
+    return grab;
+  }
+
+  /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
+  function cueControls(g){
+    const box = document.createElement("span");
+    box.className = "g-cue";
+    box.appendChild(cueGrabButton(g));
+    const at = document.createElement("span");
+    at.className = "g-at" + (g.cue == null ? " none" : "");
+    at.textContent = fmtTime(g.cue);
+    at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
+    if(g.cue != null){
+      box.appendChild(nudge(g, -0.05, at));
+      box.appendChild(at);
+      box.appendChild(nudge(g, 0.05, at));
+      const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
+      clr.classList.add("kill");
+      clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+      clr.addEventListener("click", e=>e.stopPropagation());
+      box.appendChild(clr);
+    }else{
+      box.appendChild(at);
+    }
+    return box;
   }
 
   function mini(label, aria, disabled, fn){
