@@ -1119,6 +1119,10 @@
   const VideoSync = (() => {
     let topWatch = null, cueWatch = null;
     let view = {};
+    // 動画同期の遅延補正（秒）。メトロノームの発音は「音声出力遅延 − 動画出力遅延」ぶん
+    // 動画より遅れて聞こえるため、記録位置より少し手前を狙って刻み出す＝実音が cue に重なる。
+    // 実測でおおよそ 8分音符ぶん（♩=115 換算 ≒ 0.26 秒）。耳で合わせて調整可。
+    const CUE_LATENCY = 0.26;
     function cancel(){ topWatch = null; cueWatch = null; }
 
     function startFromTop(kind){
@@ -1154,12 +1158,14 @@
     }
     function startAtCue(kind, cue){
       const lead = (kind === "lead");
-      const from = lead ? Math.max(0, cue - Transport.LEAD_SEC) : cue;
+      // 発音遅延ぶん手前を狙う。以降の判定・頭出し先はすべて aim 基準（実音が cue に重なる）
+      const aim = Math.max(0, cue - CUE_LATENCY);
+      const from = lead ? Math.max(0, aim - Transport.LEAD_SEC) : aim;
       try{
-        VideoGateway.seekTo(from, true);     // lead なら5秒手前、そうでなければ指定秒そのもの
+        VideoGateway.seekTo(from, true);     // lead なら助走5秒手前、そうでなければ補正後の位置
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      cueWatch = {target: cue, kind, lead, t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
+      cueWatch = {target: aim, kind, lead, t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
       ClockGateway.frame(pollCue);
@@ -1311,9 +1317,13 @@
       const o = opts || {};
       const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
       const adjust = o.adjust || 0;
-      const start = Math.max(ClockGateway.now() + 0.005, ClockGateway.now() + 0.06 + wait + adjust);
+      // 先読みマージンは最小限に。さらに setInterval の初回発火（約25ms先）を待たず、
+      // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
+      // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
+      const start = Math.max(ClockGateway.now() + 0.005, ClockGateway.now() + 0.02 + wait + adjust);
       PlaybackScheduler.prime(start);
       firstBeatTime = wait > 0 ? start : 0;
+      schedulerTick();     // 初回分を即予約（以降は下の setInterval が継続）
       cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
       ClockGateway.frame(draw);
       view.setRunning(true);
