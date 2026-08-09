@@ -919,8 +919,9 @@
     const osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = "square";
     osc.frequency.value = accent ? 1760 : 880;
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(accent ? 0.35 : 0.22, time + 0.002);
+    // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
+    // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
+    gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
     gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
     osc.connect(gain).connect(ctx.destination);
     osc.start(time); osc.stop(time + decay + 0.015);
