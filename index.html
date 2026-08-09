@@ -116,7 +116,7 @@
 
   /* シーケンス先頭の空白（リード） */
   .lead-wrap{padding:10px 14px 0}
-  .lead{position:relative;display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px dashed var(--rule);background:#FFF}
+  .lead{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:8px 9px;border:1px dashed var(--rule);background:#FFF}
   .lead.counting{border-color:var(--brass);border-style:solid}
   .lead.counting::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brass)}
   .lead.na{opacity:.4}
@@ -125,6 +125,12 @@
   .lead input:disabled{background:#EDECE6;color:#9A9E93}
   .lead .unit{font-family:var(--mono);font-size:11px;color:var(--dim)}
   .lead-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+  .lead-sep{width:1px;height:20px;background:var(--rule);margin:0 2px}
+  .rec{height:28px;padding:0 10px;border:1px solid var(--ink);background:var(--panel);font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--signal)}
+  .rec:hover:not(:disabled){background:#F7ECEA}
+  .rec:disabled{opacity:.3;cursor:default;color:var(--dim)}
+  .rec.on{background:var(--signal);border-color:var(--signal);color:var(--panel)}
+  .g-at.hit{color:var(--signal)}
 
   /* rhythm groups */
   .groups{padding:10px 14px 4px;display:flex;flex-direction:column;gap:8px}
@@ -294,6 +300,9 @@
       <input type="number" id="prerollInput" min="0" max="60" step="0.01" value="0.00"
              inputmode="decimal" aria-label="開始までの空白（秒）" title="全体再生のときだけ効きます">
       <span class="unit">秒</span>
+      <span class="lead-sep"></span>
+      <span class="g-label">全体レック</span>
+      <button class="rec" id="recBtn" type="button" title="動画を先頭から流し、各リズムグループの位置を記録します">● REC</button>
       <span class="lead-count" id="prerollCount" hidden></span>
     </div>
   </div>
@@ -325,7 +334,7 @@
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
   const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
   const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), statusText=$("statusText"),
-        prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead");
+        prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
@@ -867,6 +876,9 @@
       startAllBtn.classList.toggle("on", !solo);
       startSoloBtn.classList.toggle("on", solo);
       startAllBtn.title = ""; startSoloBtn.title = "";
+      recBtn.classList.toggle("on", recording);
+      recBtn.textContent = recording ? "■ レック中" : "● REC";
+      recBtn.disabled = !recording;
     }else{
       const ready = plan().length > 0;
       const target = soloTarget();
@@ -878,6 +890,11 @@
       startSoloBtn.classList.remove("on");
       startAllBtn.title = ready ? "" : "拍子を1つ以上追加してください";
       startSoloBtn.title = target ? target.name + " だけを再生" : "再生したいリズムグループをタップして選んでください";
+      recBtn.classList.remove("on");
+      recBtn.textContent = "● REC";
+      recBtn.disabled = !ready || !ytReady;
+      recBtn.title = !ytReady ? "動画を読み込むと使えます"
+        : "動画を先頭から流し、各リズムグループの位置を記録します";
     }
   }
   function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
@@ -943,6 +960,10 @@
       const key = e.gid + ":" + e.rep + ":" + e.bar;
       if(key !== shown){
         shown = key;
+        if(recording && e.gid !== recGid){    // グループが切り替わった最初の1打で記録
+          recGid = e.gid;
+          stampCue(e.gid, e.time);
+        }
         cur = {gid:e.gid, bar:e.bar, rep:e.rep};
         paintBeats(e.meter.num);
         showPulse(e.meter);
@@ -1004,6 +1025,7 @@
   }
   function armCancel(){
     armKind = null; cueWatch = null; topWatch = null; pendingKind = null;
+    recording = false; recGid = null;
     clearTimeout(waitTimer);
     videoPause();
     ytSay("", false);
@@ -1011,6 +1033,34 @@
     updateTransport();
   }
   let topWatch = null;
+  let recording = false, recGid = null;    // 全体レック
+
+  function startRec(){
+    if(running || armKind){ stop(false); return; }       // レック中はトグルで停止
+    if(!ytReady){ ytSay("動画を読み込むと全体レックが使えます", true); return; }
+    if(!plan().length) return;
+    commit();                    // レック1回ぶんをまとめて1手の履歴にする
+    recording = true; recGid = null;
+    start("all");                // 全体レックは常に全体再生・動画は先頭から
+  }
+
+  /* いま鳴り始めたグループに、そのときの動画位置を書き込む */
+  function stampCue(gid, evTime){
+    const g = findGroup(gid);
+    if(!g || !ytReady) return;
+    let t = null;
+    try{ t = ytPlayer.getCurrentTime(); }catch(err){}
+    if(t == null || isNaN(t)) return;
+    const late = Math.max(0, ctx.currentTime - evTime);   // 取りこぼしたフレームぶんを引く
+    g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
+    const card = groupsEl.querySelector('[data-id="' + gid + '"]');
+    const at = card && card.querySelector(".g-at");
+    if(at){                       // 再描画せず表示だけ差し替える
+      at.textContent = fmtTime(g.cue);
+      at.classList.remove("none");
+      at.classList.add("hit");
+    }
+  }
   function startFromTop(kind){
     try{
       ytPlayer.seekTo(0, true);
@@ -1113,6 +1163,7 @@
   function stop(completed, fromVideo){
     running = false;
     armKind = null; cueWatch = null; topWatch = null;
+    recording = false; recGid = null;
     if(!fromVideo) videoPause();
     clearInterval(timer);
     queue.length = 0;
@@ -1165,6 +1216,8 @@
   }
 
   document.addEventListener("visibilitychange", ()=>{ if(running && ctx) scheduler(); });
+
+  recBtn.addEventListener("click", startRec);
 
   startAllBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("all")));
   startSoloBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("solo")));
