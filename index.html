@@ -215,6 +215,18 @@
 
   body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
+  /* 編集／再生 モード切り替えタブ（transport の上） */
+  .mode-tabs{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--ink);margin-top:12px}
+  .mode-tab{height:40px;border:none;background:var(--panel);color:var(--dim);font-family:var(--mono);font-size:11.5px;letter-spacing:.18em}
+  .mode-tab + .mode-tab{border-left:1px solid var(--ink)}
+  .mode-tab:hover:not(.active){background:#EAE9E2;color:var(--ink)}
+  .mode-tab.active{background:var(--signal);color:#FFF}   /* カラーバーと同じ色味・白抜き */
+
+  /* 再生モード：選択中（グループ／5秒前再生の対象）カード */
+  .group.play{cursor:pointer}
+  .group.play.selected{border-color:var(--signal)}
+  .group.play.selected::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--signal)}
+
   .transport{display:grid;grid-template-columns:1.1fr 1fr 1fr;border-top:1px solid var(--ink)}
   .start{height:60px;border:none;font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:0 3px;line-height:1.35}
   .start.primary{background:var(--ink);color:var(--panel)}
@@ -293,6 +305,11 @@
     <input class="seq-name" id="seqName" type="text" value="シーケンス1"
            placeholder="シーケンス名" aria-label="シーケンス名" maxlength="60">
     <p class="io-msg" id="ioMsg" role="status" hidden></p>
+  </div>
+
+  <div class="mode-tabs" role="tablist" aria-label="モード">
+    <button class="mode-tab active" id="editTab" type="button" role="tab" aria-selected="true">編集</button>
+    <button class="mode-tab" id="playTab" type="button" role="tab" aria-selected="false">再生</button>
   </div>
 
   <div class="transport">
@@ -903,6 +920,9 @@
       toggleActive(id){
         Store.apply(s => { s.activeId = (s.activeId === id) ? null : id; }, {render:true});
       },
+      setActive(id){                 // 選択（トグルせず必ずそのグループを対象に）：再生モードの頭出し対象
+        Store.apply(s => { s.activeId = id; }, {render:true});
+      },
       // 読み込んだ Sequence でまるごと差し替える（applyDoc 相当の副作用オーケストレーション）
       replaceSequence(sequence, notes, rawVideo){
         if(Transport.running()) Transport.stop(false);
@@ -1495,6 +1515,7 @@
         prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
+  const editTab=$("editTab"), playTab=$("playTab");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
         ioFile=$("ioFile"), ioMsg=$("ioMsg");
   const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytMsg=$("ytMsg");
@@ -1519,6 +1540,16 @@
     b.addEventListener("click", fn);
     return b;
   }
+
+  /* 編集／再生 の表示モード（UI 限定の状態。シーケンスデータ・履歴・保存には含めない） */
+  const ViewMode = (() => {
+    let mode = "edit";                          // "edit" | "play"
+    return {
+      isPlay: () => mode === "play",
+      get: () => mode,
+      set(m){ if(m === mode) return; mode = m; SequenceView.render(); }
+    };
+  })();
 
   /* ---------- RhythmView（リズム：1拍子の描画） ---------- */
   const RhythmView = {
@@ -1663,8 +1694,11 @@
     function card(g, gi){
       const st = state();
       const running = Transport.running();
+      const play = ViewMode.isPlay();            // 再生モード：編集を廃し、選択可能な折りたたみ一覧に
+      const active = g.id === st.activeId;
+      const expanded = active && !play;          // 編集本体（名前・拍子編集）を開くのは編集モードのみ
       const card = document.createElement("article");
-      card.className = "group" + (g.id === st.activeId ? " active" : "");
+      card.className = "group" + (active ? " active" : "") + (play ? " play" : "") + (play && active ? " selected" : "");
       card.dataset.id = g.id;
       card.tabIndex = 0;
 
@@ -1672,18 +1706,20 @@
       const head = document.createElement("div");
       head.className = "g-head";
 
-      const handle = document.createElement("button");
-      handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
-      handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
-      handle.disabled = running;
-      handle.addEventListener("pointerdown", e=>SequenceView.startDrag(e, gi, card));
-      handle.addEventListener("keydown", e=>{
-        if(e.key === "ArrowUp"){ e.preventDefault(); SequenceService.moveGroup(gi, gi-1); }
-        if(e.key === "ArrowDown"){ e.preventDefault(); SequenceService.moveGroup(gi, gi+1); }
-      });
-      head.appendChild(handle);
+      if(!play){                                 // 並び替えは編集操作なので再生モードでは出さない
+        const handle = document.createElement("button");
+        handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
+        handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
+        handle.disabled = running;
+        handle.addEventListener("pointerdown", e=>SequenceView.startDrag(e, gi, card));
+        handle.addEventListener("keydown", e=>{
+          if(e.key === "ArrowUp"){ e.preventDefault(); SequenceService.moveGroup(gi, gi-1); }
+          if(e.key === "ArrowDown"){ e.preventDefault(); SequenceService.moveGroup(gi, gi+1); }
+        });
+        head.appendChild(handle);
+      }
 
-      if(g.id === st.activeId){
+      if(expanded){
         const name = document.createElement("input");
         name.className = "g-name"; name.type = "text"; name.value = g.name;
         name.setAttribute("aria-label", "リズムグループ名");
@@ -1712,7 +1748,7 @@
       card.appendChild(head);
 
       /* collapsed summary */
-      if(g.id !== st.activeId){
+      if(!expanded){
         const sub = document.createElement("div");
         sub.className = "g-sub";
         if(!g.pattern.rhythms.length){
@@ -1731,7 +1767,7 @@
       }
 
       /* active body */
-      if(g.id === st.activeId){
+      if(expanded){
         const body = document.createElement("div");
         body.className = "g-body";
 
@@ -1765,12 +1801,15 @@
       card.addEventListener("click", e=>{
         if(Transport.running()) return;                       // 再生中は編集に入らない
         if(e.target.closest("input, select, button")) return;
-        SequenceService.toggleActive(g.id);
+        if(play) SequenceService.setActive(g.id);             // 再生モード：頭出し対象を選ぶ（開かない）
+        else SequenceService.toggleActive(g.id);
       });
       card.addEventListener("keydown", e=>{
         if(Transport.running()) return;
         if(e.key === "Enter" && !e.target.closest("input, select, button")){
-          e.preventDefault(); SequenceService.toggleActive(g.id);
+          e.preventDefault();
+          if(play) SequenceService.setActive(g.id);
+          else SequenceService.toggleActive(g.id);
         }
       });
       return card;
@@ -1851,9 +1890,15 @@
 
     function render(){
       const running = Transport.running();
+      const play = ViewMode.isPlay();
       const st = state();
+      editTab.classList.toggle("active", !play);
+      playTab.classList.toggle("active", play);
+      editTab.setAttribute("aria-selected", String(!play));
+      playTab.setAttribute("aria-selected", String(play));
       groupsEl.innerHTML = "";
       groupsEl.classList.toggle("locked", running);
+      addGroupBtn.hidden = play;                 // 追加は編集モードのみ
       addGroupBtn.disabled = running;
       seqNameEl.disabled = running;
       prerollInput.disabled = running;
@@ -1894,6 +1939,8 @@
       addGroupBtn.addEventListener("click", ()=>SequenceService.addGroup());
       undoBtn.addEventListener("click", ()=>HistoryService.undo());
       redoBtn.addEventListener("click", ()=>HistoryService.redo());
+      editTab.addEventListener("click", ()=>ViewMode.set("edit"));
+      playTab.addEventListener("click", ()=>ViewMode.set("play"));
     }
 
     return { startDrag, render, summary, applyTitle, updateHistory, afterRestore, bind };
