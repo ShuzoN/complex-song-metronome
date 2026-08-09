@@ -890,8 +890,32 @@
     renderGroups();
   }
 
+  /* ---------- Sound（純粋：AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
+  const Sound = (() => {
+    let ctx = null;
+    function ensure(){
+      if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if(ctx.state === "suspended") ctx.resume();
+      return ctx;
+    }
+    function now(){ return ctx ? ctx.currentTime : 0; }
+    function click(accent, time, span){
+      const decay = Math.min(0.045, span * 0.55);
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = accent ? 1760 : 880;
+      // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
+      // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
+      gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(time); osc.stop(time + decay + 0.015);
+    }
+    return { ensure, now, click, get ready(){ return !!ctx; } };
+  })();
+
   /* ---------- 再生 ---------- */
-  let ctx=null, running=false, timer=null, finished=false, endTime=0;
+  let running=false, timer=null, finished=false, endTime=0;
   let nextTime=0, beatIdx=0, barIdx=0, repIdx=0, gIdx=0;
   const LOOKAHEAD=25, AHEAD=0.12, queue=[];
   let cur = {gid:null, bar:-1, rep:0};
@@ -963,23 +987,10 @@
   function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
   const beatSeconds = d => Domain.rhythmSeconds(d, bpm);
 
-  function click(accent, time, span){
-    const decay = Math.min(0.045, span * 0.55);
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    osc.type = "square";
-    osc.frequency.value = accent ? 1760 : 880;
-    // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
-    // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
-    gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(time); osc.stop(time + decay + 0.015);
-  }
-
   function scheduler(){
     // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
-    const limit = ctx.currentTime + (document.hidden ? 1.2 : AHEAD);
-    if(finished && ctx.currentTime >= endTime){ stop(true); return; }
+    const limit = Sound.now() + (document.hidden ? 1.2 : AHEAD);
+    if(finished && Sound.now() >= endTime){ stop(true); return; }
     while(!finished && nextTime < limit){
       const gs = plan();
       if(!gs.length){ finished = true; endTime = nextTime; break; }
@@ -991,7 +1002,7 @@
       if(beatIdx >= bar.num) beatIdx = 0;
 
       const span = beatSeconds(bar.den);
-      click(beatIdx === 0, nextTime, span);
+      Sound.click(beatIdx === 0, nextTime, span);
       queue.push({time:nextTime, gid:g.id, rep:repIdx, bar:barIdx, beat:beatIdx, meter:bar});
       nextTime += span;
 
@@ -1012,15 +1023,15 @@
   let shown = "";
   function draw(){
     if(!running) return;
-    if(firstBeatTime && ctx.currentTime < firstBeatTime){
-      prerollCount.textContent = Math.max(0, firstBeatTime - ctx.currentTime).toFixed(2);
+    if(firstBeatTime && Sound.now() < firstBeatTime){
+      prerollCount.textContent = Math.max(0, firstBeatTime - Sound.now()).toFixed(2);
     }else if(document.body.classList.contains("waiting")){
       document.body.classList.remove("waiting");
       leadEl.classList.remove("counting");
       prerollCount.hidden = true;
       statusText.textContent = baseStatus();
     }
-    while(queue.length && queue[0].time <= ctx.currentTime){
+    while(queue.length && queue[0].time <= Sound.now()){
       const e = queue.shift();
       const key = e.gid + ":" + e.rep + ":" + e.bar;
       if(key !== shown){
@@ -1037,7 +1048,7 @@
       const dots = beatsEl.children;
       for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === e.beat);
     }
-    if(finished && ctx.currentTime >= endTime){ stop(true); return; }
+    if(finished && Sound.now() >= endTime){ stop(true); return; }
     requestAnimationFrame(draw);
   }
 
@@ -1116,7 +1127,7 @@
     let t = null;
     try{ t = ytPlayer.getCurrentTime(); }catch(err){}
     if(t == null || isNaN(t)) return;
-    const late = Math.max(0, ctx.currentTime - evTime);   // 取りこぼしたフレームぶんを引く
+    const late = Math.max(0, Sound.now() - evTime);   // 取りこぼしたフレームぶんを引く
     g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
     const card = groupsEl.querySelector('[data-id="' + gid + '"]');
     const at = card && card.querySelector(".g-at");
@@ -1219,8 +1230,7 @@
   function beginPlayback(kind, opts){
     if(kind !== "all" && !soloTarget()) return;
     if(kind === "all" && !plan().length) return;
-    if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if(ctx.state === "suspended") ctx.resume();
+    Sound.ensure();
     mode = (kind === "all") ? "all" : kind;
     soloId = (mode === "all") ? null : activeId;
     running = true; shown = "";
@@ -1235,7 +1245,7 @@
     const o = opts || {};
     const wait = (mode === "all" && !o.skipWait) ? readPreroll() : 0;
     const adjust = o.adjust || 0;
-    nextTime = Math.max(ctx.currentTime + 0.005, ctx.currentTime + 0.06 + wait + adjust);
+    nextTime = Math.max(Sound.now() + 0.005, Sound.now() + 0.06 + wait + adjust);
     firstBeatTime = wait > 0 ? nextTime : 0;
     timer = setInterval(scheduler, LOOKAHEAD);
     requestAnimationFrame(draw);
@@ -1313,7 +1323,7 @@
     beginPlayback(kind);
   }
 
-  document.addEventListener("visibilitychange", ()=>{ if(running && ctx) scheduler(); });
+  document.addEventListener("visibilitychange", ()=>{ if(running && Sound.ready) scheduler(); });
 
   recBtn.addEventListener("click", startRec);
 
