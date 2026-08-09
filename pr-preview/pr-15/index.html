@@ -297,7 +297,7 @@
   <div class="transport">
     <button class="start primary" id="startAllBtn" type="button">全体再生</button>
     <button class="start secondary" id="startSoloBtn" type="button">グループ再生</button>
-    <button class="start secondary" id="startLeadBtn" type="button">−5秒から再生</button>
+    <button class="start secondary" id="startLeadBtn" type="button">グループ再生<br>(5秒前から)</button>
   </div>
 
   <div class="lead-wrap">
@@ -1909,7 +1909,7 @@
 
   /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
   const TransportView = (() => {
-    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
+    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"グループ再生<br>(5秒前から)"};
 
     function paintBeats(n){
       beatsEl.innerHTML = "";
@@ -1959,7 +1959,7 @@
         const active = running ? Transport.mode() : armKind;
         Object.keys(btns).forEach(k=>{
           const on = (k === active);
-          btns[k].textContent = on ? "停止" : LABELS[k];
+          btns[k].innerHTML = on ? "停止" : LABELS[k];   // lead ラベルは <br> を含むため innerHTML
           btns[k].classList.toggle("on", on);
           btns[k].disabled = !on;
           btns[k].title = "";
@@ -1972,7 +1972,7 @@
         const target = Transport.soloTarget();
         const cued = target && target.cue != null && VideoGateway.ready();
         Object.keys(btns).forEach(k=>{
-          btns[k].textContent = LABELS[k];
+          btns[k].innerHTML = LABELS[k];   // lead ラベルは <br> を含むため innerHTML
           btns[k].classList.remove("on");
         });
         startAllBtn.disabled = !ready;
