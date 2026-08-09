@@ -12,7 +12,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: pages-production
+  # 本番配信と PR プレビュー削除が gh-pages 上で競合しないよう、
+  # preview.yml と同じグループにして書き込みを直列化する
+  group: gh-pages-deploy
   cancel-in-progress: false
 
 jobs:

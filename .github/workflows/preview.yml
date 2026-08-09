@@ -12,8 +12,10 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-preview-${{ github.event.number }}
-  cancel-in-progress: true
+  # deploy.yml と共有し、gh-pages への書き込みを直列化（マージ時のレース対策）。
+  # 連続 push でのプレビュー再ビルドはキャンセルせずキューに積む
+  group: gh-pages-deploy
+  cancel-in-progress: false
 
 jobs:
   preview:
