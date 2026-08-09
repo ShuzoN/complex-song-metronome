@@ -1,0 +1,38 @@
+name: Deploy to GitHub Pages
+
+# main にマージ（push）されたら本番サイトを gh-pages ブランチのルートへ配信する。
+# PR プレビュー（pr-preview/ 配下）は消さないよう clean-exclude で保護する。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stage site files
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+          cp .nojekyll _site/.nojekyll
+
+      - name: Deploy to gh-pages (root)
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: _site
+          clean: true
+          clean-exclude: |
+            pr-preview/
