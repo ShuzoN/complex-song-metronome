@@ -1311,9 +1311,13 @@
       const o = opts || {};
       const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
       const adjust = o.adjust || 0;
-      const start = Math.max(ClockGateway.now() + 0.005, ClockGateway.now() + 0.06 + wait + adjust);
+      // 先読みマージンは最小限に。さらに setInterval の初回発火（約25ms先）を待たず、
+      // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
+      // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
+      const start = Math.max(ClockGateway.now() + 0.005, ClockGateway.now() + 0.02 + wait + adjust);
       PlaybackScheduler.prime(start);
       firstBeatTime = wait > 0 ? start : 0;
+      schedulerTick();     // 初回分を即予約（以降は下の setInterval が継続）
       cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
       ClockGateway.frame(draw);
       view.setRunning(true);
