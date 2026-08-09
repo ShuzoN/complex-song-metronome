@@ -1124,18 +1124,27 @@
     try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
 
     if(cueWatch.lead){
-      // 5秒手前から流して、記録位置に重なった瞬間に刻み出す
+      // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
+      // seekTo 直後は getCurrentTime が「巻き戻る前の位置」を数フレーム返すため、
+      // 助走開始点(cue-5)まで実際に戻ったのを確認してから計測を始める
+      // （確認前だと、記録直後で cue 付近にいる位置を「到達」と誤認して即開始してしまう）
       if(t != null && !isNaN(t)){
-        const remain = cueWatch.target - t;
-        if(remain <= 0){
-          const kind = cueWatch.kind;
-          const over = Math.min(-remain, 0.05);
-          cueWatch = null; armKind = null;
-          ytSay("", false);
-          beginPlayback(kind, {skipWait:true, adjust:-over});
-          return;
+        const from = Math.max(0, cueWatch.target - LEAD_SEC);
+        if(!cueWatch.seeked && t <= from + 0.5) cueWatch.seeked = true;   // 助走開始点まで戻った
+        if(cueWatch.seeked){
+          const remain = cueWatch.target - t;
+          if(remain <= 0){
+            const kind = cueWatch.kind;
+            const over = Math.min(-remain, 0.05);
+            cueWatch = null; armKind = null;
+            ytSay("", false);
+            beginPlayback(kind, {skipWait:true, adjust:-over});
+            return;
+          }
+          ytSay("あと " + remain.toFixed(1) + " 秒で開始", false);
+        }else{
+          ytSay("頭出し中…", false);   // まだ助走開始点に戻っていない
         }
-        ytSay("あと " + remain.toFixed(1) + " 秒で開始", false);
       }
     }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
       // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
