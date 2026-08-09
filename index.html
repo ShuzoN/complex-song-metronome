@@ -132,8 +132,6 @@
   .rec.on{background:var(--signal);border-color:var(--signal);color:#FFF}
   .rec.on:hover:not(:disabled){background:#A62A20;border-color:#A62A20}
   .g-at.hit{color:var(--signal)}
-  .chip.rep-cue{font-variant-numeric:tabular-nums}
-  .chip.rep-cue.hit{background:var(--signal);border-color:var(--signal);color:var(--panel)}
 
   /* rhythm groups */
   .groups{padding:10px 14px 4px;display:flex;flex-direction:column;gap:8px}
@@ -352,8 +350,7 @@
 
      エンティティ階層（データ構造）:
        Sequence      … 曲ひとつ分（name, tempo, preroll, video, groups）
-        └ RhythmGroup … 曲の一区間（id, name, reps, cue, repCues, pattern）
-            │            cue=グループ先頭の動画位置、repCues=各くり返し(rep)の動画位置
+        └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern）
             └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
                 └ Rhythm … 1拍子 例 7/8（num, den）。UI 表示は「拍子」
 
@@ -366,7 +363,7 @@
      階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
        Rhythm        {num, den}          … 1拍子（例 7/8）。den ∈ DENOMS, num は 1..den
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
-       RhythmGroup   {id,name,reps,cue,repCues,pattern}  … repCues は rep 単位の動画位置
+       RhythmGroup   {id,name,reps,cue,pattern}
        Sequence      {name,tempo,preroll,video,groups} … 曲ひとつ分
      生成はすべてここを通し、reps/cue/name/tempo/preroll の正規化を1箇所に集約する。
      ======================================================================== */
@@ -400,27 +397,19 @@
     const noteName = den => NOTE_NAME[den];
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
     const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den))});
-    // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
+    // 動画位置（cue）の正規化：null / 0以上を小数2桁へ
     function normCue(v){
       const n = Number(v);
       return (v == null || isNaN(n) || n < 0) ? null : Math.round(n * 100) / 100;
     }
-    // rep 単位のタイムコード配列を reps の長さに整える（不足は null 埋め、超過は切り詰め）
-    function fitCues(arr, reps){
-      const out = [];
-      for(let i = 0; i < reps; i++) out.push(normCue(arr && arr[i]));
-      return out;
-    }
     function makeGroup(spec){
       spec = spec || {};
       const rhythms = spec.rhythms || (spec.pattern && spec.pattern.rhythms) || [];
-      const reps = clampInt(spec.reps, 1, 999, 1);
       return {
         id: uid(),
         name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
-        reps: reps,
-        cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
-        repCues: fitCues(spec.repCues, reps),   // 各くり返しの動画位置（1 group = 1 pattern のまま rep 単位）
+        reps: clampInt(spec.reps, 1, 999, 1),
+        cue: normCue(spec.cue),                 // グループ先頭の動画位置
         pattern: makePattern(rhythms)
       };
     }
@@ -430,7 +419,6 @@
         name: g.name + " のコピー",
         reps: g.reps,
         cue: g.cue,
-        repCues: fitCues(g.repCues, g.reps),
         pattern: {rhythms: g.pattern.rhythms.map(r=>({num:r.num, den:r.den}))}
       };
     }
@@ -455,7 +443,7 @@
 
     return {
       DENOMS, MIN, MAX, TERMS, NOTE_NAME,
-      uid, clampInt, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
+      uid, clampInt, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       noteName, termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
@@ -622,7 +610,6 @@
         L.push("  - name: " + scalarStr(g.name));
         L.push("    repeat: " + g.repeat);
         if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
-        if(g.repCues) L.push("    repCues: [" + g.repCues.map(v => v == null ? "null" : v.toFixed(2)).join(", ") + "]");
         L.push("    pattern: [" + g.pattern.join(", ") + "]");
       });
       return L.join("\n") + "\n";
@@ -939,7 +926,7 @@
     };
   })();
 
-  /* GroupService … リズムグループ単体の属性：名前・くり返し・動画位置（cue / rep 単位の repCues） */
+  /* GroupService … リズムグループ単体の属性：名前・くり返し・動画位置（cue） */
   const GroupService = (() => {
     return {
       setName(id, name){
@@ -952,28 +939,14 @@
           let v = Math.round(Number(value));
           if(isNaN(v)) v = 1;
           g.reps = Math.min(999, Math.max(1, v));
-          g.repCues = Domain.fitCues(g.repCues, g.reps);   // reps に合わせて rep 別 cue の長さを同期
         }, {render:true});
       },
-      setCue(id, value){            // グループ先頭（rep0）の記録・解除（commit＋再描画）
+      setCue(id, value){            // 動画位置の記録・解除（commit＋再描画）
         HistoryService.commit();
-        Store.apply(s => {
-          const g = s.groups.find(x=>x.id===id);
-          if(g){ g.cue = value; if(Array.isArray(g.repCues)) g.repCues[0] = value; }
-        }, {render:true});
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {render:true});
       },
       nudgeCue(id, value){          // ± 微調整（commit は呼び出し側で連打をまとめる。再描画なし）
-        Store.apply(s => {
-          const g = s.groups.find(x=>x.id===id);
-          if(g){ g.cue = value; if(Array.isArray(g.repCues)) g.repCues[0] = value; }
-        }, {});
-      },
-      clearRepCues(id){             // rep 別 cue を一括クリア（グループ cue も含めて解除）
-        HistoryService.commit();
-        Store.apply(s => {
-          const g = s.groups.find(x=>x.id===id);
-          if(g){ g.repCues = g.repCues.map(()=>null); g.cue = null; }
-        }, {render:true});
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {});
       }
     };
   })();
@@ -1023,8 +996,6 @@
           name: g.name,
           repeat: g.reps,
           cue: (g.cue != null) ? g.cue : null,
-          // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
-          repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
           pattern: g.pattern.rhythms.map(Domain.formatRhythm)
         }))
       };
@@ -1051,7 +1022,6 @@
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
           reps: g.repeat,
           cue: g.cue,
-          repCues: Array.isArray(g.repCues) ? g.repCues : null,
           rhythms
         });
       });
@@ -1255,19 +1225,16 @@
       }
       ClockGateway.frame(pollCue);
     }
-    // いま鳴り始めた rep に、そのときの動画位置を書き込む（全体レック）。rep0 はグループ cue も維持
-    function stampCue(gid, rep, evTime){
+    // いま鳴り始めたグループに、そのときの動画位置を書き込む（全体レック）
+    function stampCue(gid, evTime){
       const g = Store.findGroup(gid);
       if(!g || !VideoGateway.ready()) return;
       let t = null;
       try{ t = VideoGateway.time(); }catch(err){}
       if(t == null || isNaN(t)) return;
       const late = Math.max(0, ClockGateway.now() - evTime);   // 取りこぼしたフレームぶんを引く
-      const val = Math.max(0, Math.round((t - late) * 100) / 100);
-      if(!Array.isArray(g.repCues)) g.repCues = Domain.fitCues(null, g.reps);
-      g.repCues[rep] = val;
-      if(rep === 0) g.cue = val;
-      view.stampCueView(gid, rep, val);
+      g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
+      view.stampCueView(gid, g.cue);
     }
     return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, stampCue };
   })();
@@ -1282,7 +1249,7 @@
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
-    let recording = false;                    // 全体レック
+    let recording = false, recGid = null;     // 全体レック
     let resumeActiveId = null;                // 再生前にアクティブだったグループ
     let firstBeatTime = 0;                    // 最初の1打が鳴る時刻（空白があるとき）
     let cur = {gid:null, bar:-1, rep:0};
@@ -1348,8 +1315,9 @@
         const key = e.gid + ":" + e.rep + ":" + e.bar;
         if(key !== shown){
           shown = key;
-          if(recording && e.bar === 0){    // 各くり返し(rep)の頭で記録（rep0=グループ先頭も含む）
-            VideoSync.stampCue(e.gid, e.rep, e.time);
+          if(recording && e.gid !== recGid){    // グループが切り替わった最初の1打で記録
+            recGid = e.gid;
+            VideoSync.stampCue(e.gid, e.time);
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter.num);
@@ -1406,7 +1374,7 @@
     function stop(completed, fromVideo){
       running = false;
       armKind = null; VideoSync.cancel();
-      recording = false;
+      recording = false; recGid = null;
       if(!fromVideo) VideoGateway.pause();
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
@@ -1464,7 +1432,7 @@
     }
     function armCancel(){
       armKind = null; VideoSync.cancel(); pendingKind = null;
-      recording = false;
+      recording = false; recGid = null;
       clearTimeout(waitTimer);
       VideoGateway.pause();
       view.videoMsg("", false);
@@ -1476,7 +1444,7 @@
       if(!VideoGateway.ready()){ view.videoMsg("動画を読み込むと全体レックが使えます", true); return; }
       if(!PlaybackScheduler.plan().length) return;
       HistoryService.commit();                    // レック1回ぶんをまとめて1手の履歴にする
-      recording = true;
+      recording = true; recGid = null;
       start("all");                // 全体レックは常に全体再生・動画は先頭から
     }
     function wake(){ if(running && SoundGateway.ready) schedulerTick(); }
@@ -1694,34 +1662,6 @@
       return box;
     }
 
-    // rep 別 cue の1チップの表示文字（描画と全REC中の生更新で共通に使う）
-    function repCueLabel(i, val){ return "#" + (i + 1) + " " + Fmt.time(val); }
-    // 動画があるか、すでに記録があるときだけ「各周回の頭出し」を出す
-    function showRepCues(g){ return VideoGateway.ready() || g.repCues.some(v => v != null); }
-    function repCuesView(g){
-      const wrap = document.createElement("div");
-      wrap.className = "g-row";
-      const lab = document.createElement("span");
-      lab.className = "g-label"; lab.textContent = "各周回の頭出し";
-      const list = document.createElement("span");
-      list.className = "rep-cues";
-      list.style.display = "flex"; list.style.flexWrap = "wrap"; list.style.gap = "4px";
-      list.style.marginLeft = "auto"; list.style.justifyContent = "flex-end";
-      for(let i = 0; i < g.reps; i++){
-        const c = document.createElement("span");
-        c.className = "chip rep-cue" + (g.repCues[i] == null ? " none" : "");
-        c.dataset.rep = i;
-        c.textContent = repCueLabel(i, g.repCues[i]);
-        list.appendChild(c);
-      }
-      const clr = mini("✕", "各周回の頭出しをクリア", !g.repCues.some(v => v != null), () => GroupService.clearRepCues(g.id));
-      clr.classList.add("kill");
-      clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-      clr.addEventListener("click", e => e.stopPropagation());
-      wrap.append(lab, list, clr);
-      return wrap;
-    }
-
     function card(g, gi){
       const st = state();
       const running = Transport.running();
@@ -1824,8 +1764,6 @@
         row.append(lab, reps);
         body.appendChild(row);
 
-        if(showRepCues(g)) body.appendChild(repCuesView(g));
-
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
         card.appendChild(body);
@@ -1845,19 +1783,14 @@
       return card;
     }
 
-    /* 全体レックで書き込んだ rep 別 cue を、再描画せず表示だけ差し替える */
-    function stampCueView(gid, rep, val){
+    /* 全体レックで書き込んだ cue を、再描画せず表示だけ差し替える */
+    function stampCueView(gid, cue){
       const el = groupsEl.querySelector('[data-id="' + gid + '"]');
-      if(!el) return;
-      const chip = el.querySelector('.rep-cue[data-rep="' + rep + '"]');
-      if(chip){
-        chip.textContent = repCueLabel(rep, val);
-        chip.classList.remove("none");
-        chip.classList.add("hit");
-      }
-      if(rep === 0){                       // rep0 はグループ先頭の表示（.g-at）も更新
-        const at = el.querySelector(".g-at");
-        if(at){ at.textContent = Fmt.time(val); at.classList.remove("none"); at.classList.add("hit"); }
+      const at = el && el.querySelector(".g-at");
+      if(at){
+        at.textContent = Fmt.time(cue);
+        at.classList.remove("none");
+        at.classList.add("hit");
       }
     }
     return { card, stampCueView };
