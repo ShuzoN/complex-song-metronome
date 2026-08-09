@@ -537,7 +537,7 @@
         cueBox.className = "g-cue";
         const grab = document.createElement("button");
         grab.type = "button"; grab.className = "grab"; grab.textContent = "▶";
-        grab.title = "いまの動画の再生位置をこのグループに記録";
+        grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
         grab.setAttribute("aria-label", "動画の現在位置を記録");
         grab.disabled = !ytReady;
         grab.addEventListener("click", e=>{
@@ -553,7 +553,7 @@
         const at = document.createElement("span");
         at.className = "g-at" + (g.cue == null ? " none" : "");
         at.textContent = fmtTime(g.cue);
-        at.title = g.cue == null ? "動画位置は未設定" : "この位置から5秒手前で頭出しします";
+        at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
         cueBox.appendChild(grab);
         if(g.cue != null){
           cueBox.appendChild(nudge(g, -0.1, at));
@@ -971,7 +971,6 @@
     updateTransport();
   }
 
-  const LEAD_IN = 5;          // 秒。cue の手前から流して体を合わせる余裕
   let armKind = null;         // 準備中（動画の頭出し／再生待ち）のモード
   let cueWatch = null;
 
@@ -984,37 +983,75 @@
     return (g && typeof g.cue === "number") ? g.cue : null;
   }
   function armCancel(){
-    armKind = null; cueWatch = null; pendingKind = null;
+    armKind = null; cueWatch = null; topWatch = null; pendingKind = null;
     clearTimeout(waitTimer);
     videoPause();
     ytSay("", false);
     statusText.textContent = "停止中";
     updateTransport();
   }
-  function startAtCue(kind, cue){
-    const from = Math.max(0, cue - LEAD_IN);
+  let topWatch = null;
+  function startFromTop(kind){
     try{
-      ytPlayer.seekTo(from, true);
+      ytPlayer.seekTo(0, true);
       ytPlayer.playVideo();
     }catch(err){ armKind = null; beginPlayback(kind); return; }
-    cueWatch = {target: cue, kind};
+    topWatch = {kind, t0: performance.now()};
     statusText.textContent = "頭出し中";
+    ytSay("先頭に戻しています…", false);
+    requestAnimationFrame(pollTop);
+  }
+  function pollTop(){
+    if(!topWatch) return;
+    let st = -1, t = null;
+    try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
+    // 先頭から実際に動き出したことを確認してから刻み始める（ここで空白が効く）
+    if(st === 1 && t != null && t > 0.02 && t < 2){
+      const kind = topWatch.kind;
+      topWatch = null; armKind = null;
+      ytSay("", false);
+      beginPlayback(kind);
+      return;
+    }
+    if(performance.now() - topWatch.t0 > 6000){
+      const kind = topWatch.kind;
+      topWatch = null; armKind = null;
+      ytSay("動画の応答がないため、メトロノームだけ始めます", true);
+      beginPlayback(kind);
+      return;
+    }
+    requestAnimationFrame(pollTop);
+  }
+  function startAtCue(kind, cue){
+    try{
+      ytPlayer.seekTo(cue, true);      // 指定された秒数そのものから始める
+      ytPlayer.playVideo();
+    }catch(err){ armKind = null; beginPlayback(kind); return; }
+    cueWatch = {target: cue, kind, t0: performance.now()};
+    statusText.textContent = "頭出し中";
+    ytSay("頭出し中…", false);
     requestAnimationFrame(pollCue);
   }
   function pollCue(){
     if(!cueWatch) return;
-    let t = null;
-    try{ t = ytPlayer.getCurrentTime(); }catch(err){}
-    if(t == null || isNaN(t)){ requestAnimationFrame(pollCue); return; }
-    const remain = cueWatch.target - t;
-    if(remain <= 0){
-      const kind = cueWatch.kind, over = Math.min(-remain, 0.05);
+    let st = -1, t = null;
+    try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
+    // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
+    if(st === 1 && t != null && t >= cueWatch.target - 0.1){
+      const kind = cueWatch.kind;
+      const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
       cueWatch = null; armKind = null;
       ytSay("", false);
       beginPlayback(kind, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
       return;
     }
-    ytSay("頭出し中… " + remain.toFixed(1) + " 秒", false);
+    if(performance.now() - cueWatch.t0 > 6000){
+      const kind = cueWatch.kind;
+      cueWatch = null; armKind = null;
+      ytSay("動画の応答がないため、メトロノームだけ始めます", true);
+      beginPlayback(kind, {skipWait:true});
+      return;
+    }
     requestAnimationFrame(pollCue);
   }
 
@@ -1055,7 +1092,7 @@
   }
   function stop(completed, fromVideo){
     running = false;
-    armKind = null; cueWatch = null;
+    armKind = null; cueWatch = null; topWatch = null;
     if(!fromVideo) videoPause();
     clearInterval(timer);
     queue.length = 0;
@@ -1079,8 +1116,14 @@
   function start(kind){
     if(kind === "solo" && !soloTarget()) return;
     if(kind !== "solo" && !plan().length) return;
+    if(videoArmed() && kind !== "solo"){
+      armKind = kind;
+      updateTransport();
+      startFromTop(kind);                     // 全体再生は必ず動画を先頭に戻す
+      return;
+    }
     const cue = cueOf(kind);
-    if(videoArmed() && cue != null){          // 動画位置が設定されていれば、そこから合わせる
+    if(videoArmed() && cue != null){          // グループ再生は記録した位置から合わせる
       armKind = kind;
       updateTransport();
       startAtCue(kind, cue);
