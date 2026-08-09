@@ -1330,21 +1330,109 @@
 
   /* ================= YAML 保存 / 読み込み ================= */
 
-  /* --- 書き出し --- */
-  function yamlScalar(v){
-    const t = String(v);
-    const needsQuote = t === "" || /^\s|\s$/.test(t) || /[:#\[\]{},&*!|>'"%@`]/.test(t)
-      || /^(true|false|null|yes|no|on|off|~|-|\d)/i.test(t);
-    return needsQuote ? '"' + t.replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"' : t;
-  }
+  /* ---------- Yaml（純粋：このスキーマ用の最小エンコーダ／パーサ。DOM もアプリ状態も参照しない） ----------
+     scalarStr … 値を必要なときだけクォートして書き出す
+     parse     … テキストを素の JS オブジェクト（map/list/scalar）へ。ドメインへの変換は applyDoc 側 */
+  const Yaml = (() => {
+    function scalarStr(v){
+      const t = String(v);
+      const needsQuote = t === "" || /^\s|\s$/.test(t) || /[:#\[\]{},&*!|>'"%@`]/.test(t)
+        || /^(true|false|null|yes|no|on|off|~|-|\d)/i.test(t);
+      return needsQuote ? '"' + t.replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"' : t;
+    }
+    function stripComment(line){
+      let q = null, out = "";
+      for(let i=0;i<line.length;i++){
+        const c = line[i];
+        if(q){ out += c; if(c === q) q = null; continue; }
+        if(c === '"' || c === "'"){ q = c; out += c; continue; }
+        if(c === "#" && (i === 0 || /\s/.test(line[i-1]))) break;
+        out += c;
+      }
+      return out.replace(/\s+$/, "");
+    }
+    function unquote(t){
+      if(/^".*"$/s.test(t)) return t.slice(1,-1).replace(/\\"/g,'"').replace(/\\\\/g,"\\");
+      if(/^'.*'$/s.test(t)) return t.slice(1,-1).replace(/''/g,"'");
+      return t;
+    }
+    function scalar(t){
+      t = t.trim();
+      if(t.startsWith("[") && t.endsWith("]")){
+        const inner = t.slice(1,-1).trim();
+        return inner === "" ? [] : inner.split(",").map(x=>scalar(x.trim()));
+      }
+      if(/^["']/.test(t)) return unquote(t);
+      if(t === "" || t === "~" || t === "null") return null;
+      if(t === "true") return true;
+      if(t === "false") return false;
+      if(/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+      return t;
+    }
+    function parse(text){
+      const lines = [];
+      text.replace(/\r\n?/g,"\n").split("\n").forEach((raw,idx)=>{
+        const line = stripComment(raw);
+        if(!line.trim() || /^(---|\.\.\.)\s*$/.test(line.trim())) return;
+        lines.push({indent: line.match(/^ */)[0].length, text: line.trim(), no: idx+1});
+      });
+      let i = 0;
+      const isItem = l => l.text === "-" || l.text.startsWith("- ");
+      const looksMap = t => /^[^\s].*?:(\s|$)/.test(t);
+
+      function block(indent){
+        if(i >= lines.length) return null;
+        return isItem(lines[i]) ? list(indent) : map(indent);
+      }
+      function map(indent){
+        const obj = {};
+        while(i < lines.length && lines[i].indent === indent && !isItem(lines[i])){
+          const l = lines[i];
+          const m = l.text.match(/^([^:]+):\s*(.*)$/);
+          if(!m) throw new Error(l.no + " 行目を解釈できません: " + l.text);
+          const key = m[1].trim(), rest = m[2].trim();
+          if(rest === ""){
+            i++;
+            obj[key] = (i < lines.length && lines[i].indent > indent) ? block(lines[i].indent) : null;
+          }else{
+            obj[key] = scalar(rest); i++;
+          }
+        }
+        return obj;
+      }
+      function list(indent){
+        const arr = [];
+        while(i < lines.length && lines[i].indent === indent && isItem(lines[i])){
+          const l = lines[i];
+          const off = l.text.match(/^-\s*/)[0].length;
+          const rest = l.text.slice(off).trim();
+          if(rest === ""){
+            i++;
+            arr.push(i < lines.length && lines[i].indent > indent ? block(lines[i].indent) : null);
+          }else if(looksMap(rest)){
+            const virt = l.indent + off;
+            lines[i] = {indent: virt, text: rest, no: l.no};
+            arr.push(map(virt));
+          }else{
+            arr.push(scalar(rest)); i++;
+          }
+        }
+        return arr;
+      }
+      return block(lines.length ? lines[0].indent : 0);
+    }
+    return { scalarStr, parse };
+  })();
+
+  /* --- 書き出し（アプリ状態を YAML 文字列にする） --- */
   function toYaml(){
     const L = ["version: 1", "kind: metronome.sequence", "",
-               "name: " + yamlScalar(seqName), "tempo: " + bpm];
+               "name: " + Yaml.scalarStr(seqName), "tempo: " + bpm];
     if(preroll > 0) L.push("preroll: " + preroll.toFixed(2));
-    if(ytCurrent) L.push("video: " + yamlScalar(videoUrl()));
+    if(ytCurrent) L.push("video: " + Yaml.scalarStr(videoUrl()));
     L.push("", "groups:");
     groups.forEach(g=>{
-      L.push("  - name: " + yamlScalar(g.name));
+      L.push("  - name: " + Yaml.scalarStr(g.name));
       L.push("    repeat: " + g.reps);
       if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
       L.push("    pattern: [" + g.pattern.rhythms.map(Domain.formatRhythm).join(", ") + "]");
@@ -1354,90 +1442,6 @@
   function fileName(){
     const base = (seqName.trim() || "sequence").replace(/[\\/:*?"<>|\n\r\t]/g, "_").slice(0,60);
     return base + ".metronome.yml";
-  }
-
-  /* --- 最小YAMLパーサ（このスキーマ用） --- */
-  function stripComment(line){
-    let q = null, out = "";
-    for(let i=0;i<line.length;i++){
-      const c = line[i];
-      if(q){ out += c; if(c === q) q = null; continue; }
-      if(c === '"' || c === "'"){ q = c; out += c; continue; }
-      if(c === "#" && (i === 0 || /\s/.test(line[i-1]))) break;
-      out += c;
-    }
-    return out.replace(/\s+$/, "");
-  }
-  function unquote(t){
-    if(/^".*"$/s.test(t)) return t.slice(1,-1).replace(/\\"/g,'"').replace(/\\\\/g,"\\");
-    if(/^'.*'$/s.test(t)) return t.slice(1,-1).replace(/''/g,"'");
-    return t;
-  }
-  function scalar(t){
-    t = t.trim();
-    if(t.startsWith("[") && t.endsWith("]")){
-      const inner = t.slice(1,-1).trim();
-      return inner === "" ? [] : inner.split(",").map(x=>scalar(x.trim()));
-    }
-    if(/^["']/.test(t)) return unquote(t);
-    if(t === "" || t === "~" || t === "null") return null;
-    if(t === "true") return true;
-    if(t === "false") return false;
-    if(/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
-    return t;
-  }
-  function parseYaml(text){
-    const lines = [];
-    text.replace(/\r\n?/g,"\n").split("\n").forEach((raw,idx)=>{
-      const line = stripComment(raw);
-      if(!line.trim() || /^(---|\.\.\.)\s*$/.test(line.trim())) return;
-      lines.push({indent: line.match(/^ */)[0].length, text: line.trim(), no: idx+1});
-    });
-    let i = 0;
-    const isItem = l => l.text === "-" || l.text.startsWith("- ");
-    const looksMap = t => /^[^\s].*?:(\s|$)/.test(t);
-
-    function block(indent){
-      if(i >= lines.length) return null;
-      return isItem(lines[i]) ? list(indent) : map(indent);
-    }
-    function map(indent){
-      const obj = {};
-      while(i < lines.length && lines[i].indent === indent && !isItem(lines[i])){
-        const l = lines[i];
-        const m = l.text.match(/^([^:]+):\s*(.*)$/);
-        if(!m) throw new Error(l.no + " 行目を解釈できません: " + l.text);
-        const key = m[1].trim(), rest = m[2].trim();
-        if(rest === ""){
-          i++;
-          obj[key] = (i < lines.length && lines[i].indent > indent) ? block(lines[i].indent) : null;
-        }else{
-          obj[key] = scalar(rest); i++;
-        }
-      }
-      return obj;
-    }
-    function list(indent){
-      const arr = [];
-      while(i < lines.length && lines[i].indent === indent && isItem(lines[i])){
-        const l = lines[i];
-        const off = l.text.match(/^-\s*/)[0].length;
-        const rest = l.text.slice(off).trim();
-        if(rest === ""){
-          i++;
-          arr.push(i < lines.length && lines[i].indent > indent ? block(lines[i].indent) : null);
-        }else if(looksMap(rest)){
-          const virt = l.indent + off;
-          lines[i] = {indent: virt, text: rest, no: l.no};
-          arr.push(map(virt));
-        }else{
-          arr.push(scalar(rest)); i++;
-        }
-      }
-      return arr;
-    }
-    const doc = block(lines.length ? lines[0].indent : 0);
-    return doc;
   }
 
   /* --- 取り込み --- */
@@ -1507,7 +1511,7 @@
   }
   function readText(text){
     try{
-      say(applyDoc(parseYaml(text)), false);
+      say(applyDoc(Yaml.parse(text)), false);
     }catch(err){
       say("読み込めませんでした：" + err.message, true);
     }
