@@ -1160,12 +1160,6 @@
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
     function compensate(cue){ return Math.max(0, cue - CUE_LATENCY); }
-    // 助走カウントインの長さ（秒）＝対象グループの先頭1小節ぶん。切り替えの手前から鳴らすため
-    function countInDur(){
-      const g = Transport.soloTarget();
-      const fb = g && g.pattern.rhythms[0];
-      return fb ? fb.num * Domain.rhythmSeconds(fb.den, Store.getState().bpm) : 0;
-    }
     function cancel(){ topWatch = null; cueWatch = null; }
 
     function startFromTop(kind){
@@ -1201,9 +1195,10 @@
     }
     function startAtCue(kind, cue){
       const lead = (kind === "lead");
-      // aim=実音を cue に重ねる補正位置。fire=そこから1小節ぶん手前＝カウントインの刻み出し位置。
+      // aim=実音を cue に重ねる補正位置。fire=そこからカウントイン(前グループ末尾の1〜2小節)ぶん
+      // 手前＝助走の刻み出し位置。
       const aim = compensate(cue);
-      const fire = Math.max(0, aim - countInDur());
+      const fire = Math.max(0, aim - Transport.countInFor(Transport.soloTarget()).dur);
       const from = lead ? Math.max(0, fire - Transport.LEAD_SEC) : fire;
       try{
         VideoGateway.seekTo(from, true);     // lead なら助走5秒手前、そうでなければカウントイン開始点
@@ -1282,6 +1277,8 @@
      UI へは view（onTick/onStatus/updateTransport 相当）経由で反映を委譲する。 */
   const Transport = (() => {
     const LEAD_SEC = 5;                       // −5秒から再生の助走
+    const COUNT_IN_SEC = 2.0;                 // 助走カウントインの目安の長さ（秒）。bpm で本数が決まる
+    const COUNT_IN_MAX_BARS = 2;              // 前グループ末尾から取り込むリズムの上限（1〜2小節）
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
@@ -1303,6 +1300,24 @@
     function soloTarget(){
       const g = Store.findGroup(Store.getState().activeId);
       return (g && g.pattern.rhythms.length) ? g : null;
+    }
+    // 助走カウントイン：対象の「前のリズムグループ」の末尾から、目安秒数に達するまで（最大2小節）を取る。
+    // 前グループが無ければ対象自身の先頭1小節でフォールバック。本数は bpm 依存（小節長が変わるため）。
+    function countInFor(target){
+      if(!target) return {bars:[], dur:0};
+      const st = Store.getState();
+      const idx = st.groups.indexOf(target);
+      let prev = null;
+      for(let i = idx - 1; i >= 0; i--){ if(st.groups[i].pattern.rhythms.length){ prev = st.groups[i]; break; } }
+      const src = prev ? prev.pattern.rhythms : target.pattern.rhythms.slice(0, 1);
+      const bars = [];
+      let dur = 0;
+      for(let i = src.length - 1; i >= 0; i--){
+        bars.unshift(src[i]);
+        dur += src[i].num * Domain.rhythmSeconds(src[i].den, st.bpm);
+        if(dur >= COUNT_IN_SEC || bars.length >= COUNT_IN_MAX_BARS) break;
+      }
+      return {bars, dur};
     }
     function firstGroupFor(kind){
       if(kind !== "all") return soloTarget();
@@ -1364,14 +1379,10 @@
       const o = opts || {};
       const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
       const adjust = o.adjust || 0;
-      // 助走カウントイン（動画同期時のみ）：対象の先頭1小節ぶんを downbeat の手前に鳴らし、
-      // 切り替わりの少し前からメトロノームが聞こえるようにする（音のみ・拍ドットは downbeat から）
-      let ciBeats = 0, ciBeat = 0;
-      if(o.countIn && ciTarget){
-        const fb = ciTarget.pattern.rhythms[0];
-        if(fb){ ciBeats = fb.num; ciBeat = Domain.rhythmSeconds(fb.den, Store.getState().bpm); }
-      }
-      const ciDur = ciBeats * ciBeat;
+      // 助走カウントイン（動画同期時のみ）：前グループ末尾の1〜2小節を downbeat の手前に実際の拍子で
+      // 鳴らし、切り替わりの少し前からメトロノームが聞こえるようにする（音のみ・拍ドットは downbeat から）
+      const ci = o.countIn ? countInFor(ciTarget) : {bars:[], dur:0};
+      const ciDur = ci.dur;
       // 先読みマージンは最小限に。さらに setInterval の初回発火（約25ms先）を待たず、
       // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
@@ -1379,9 +1390,10 @@
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust);
       PlaybackScheduler.prime(start);
       firstBeatTime = wait > 0 ? start : 0;
-      for(let i = 0; i < ciBeats; i++){       // downbeat(start) の手前に ciBeats 発（非アクセント）
-        const ct = start - (ciBeats - i) * ciBeat;
-        if(ct > t0) SoundGateway.click(false, ct, ciBeat);
+      let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
+      for(const bar of ci.bars){
+        const beat = Domain.rhythmSeconds(bar.den, Store.getState().bpm);
+        for(let k = 0; k < bar.num; k++){ if(ct > t0) SoundGateway.click(k === 0, ct, beat); ct += beat; }
       }
       schedulerTick();     // 初回分を即予約（以降は下の setInterval が継続）
       cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
@@ -1491,7 +1503,7 @@
       armKind: () => armKind,
       recording: () => recording,
       cur: () => cur,
-      soloTarget, LEAD_SEC,
+      soloTarget, countInFor, LEAD_SEC,
       clearArm(){ armKind = null; },
       clearPending(){ pendingKind = null; },
       start, stop, startRec, beginPlayback, armCancel, wake, onVideoPlaying, onVideoStopped
