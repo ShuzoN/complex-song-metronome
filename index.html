@@ -234,7 +234,35 @@
   .start.on{background:var(--signal);color:var(--panel)}
   .start:disabled{opacity:.35;cursor:default}
   .start:not(:disabled):active{transform:translateY(1px)}
-  @media (prefers-reduced-motion:reduce){.beat{transition:none}}
+
+  /* 再生パッド（YouTube 風スクラブ）：左＝戻し / 右＝送り / 中央＝一時停止 */
+  .tap-pad{position:relative;display:grid;grid-template-columns:1fr auto 1fr;align-items:stretch;
+           height:150px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);
+           background:var(--ink);overflow:hidden;touch-action:manipulation;user-select:none}
+  .tap-zone{border:none;background:transparent;color:var(--panel);display:flex;flex-direction:column;
+            align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:var(--mono);
+            -webkit-tap-highlight-color:transparent}
+  .tap-zone.left{border-right:1px solid rgba(245,244,239,.14)}
+  .tap-zone.right{border-left:1px solid rgba(245,244,239,.14)}
+  .tap-zone-glyph{font-size:26px;line-height:1;opacity:.9}
+  .tap-zone-sub{font-size:10px;letter-spacing:.12em;color:rgba(245,244,239,.62)}
+  .tap-zone:active{background:rgba(245,244,239,.06)}
+  .tap-zone.flash{background:rgba(196,54,42,.22)}          /* タップ受理の一瞬 */
+  .tap-pad-center{width:88px;border:none;background:transparent;color:var(--panel);cursor:pointer;
+                  display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
+  .tap-pad-icon{width:56px;height:56px;border-radius:50%;border:1.5px solid rgba(245,244,239,.5);
+                background:rgba(245,244,239,.06);display:flex;align-items:center;justify-content:center;
+                font-size:22px;line-height:1;transition:transform 90ms ease,background 120ms ease}
+  .tap-pad-center:active .tap-pad-icon{transform:scale(.92)}
+  .tap-pad.is-paused .tap-pad-icon{border-color:var(--signal);background:rgba(196,54,42,.18);color:#FFF}
+  .tap-pad.is-busy{opacity:.75;pointer-events:none}       /* 吸着待ちのあいだは操作を受けない */
+  /* 合算量オーバーレイ（−15秒 等）を中央にフェード表示 */
+  .tap-flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+             font-family:var(--display);font-size:40px;font-weight:700;color:#FFF;letter-spacing:.02em;
+             text-shadow:0 2px 10px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity 140ms ease}
+  .tap-flash.show{opacity:1;transition:opacity 60ms ease}
+  .tap-flash.back{color:#FFF}
+  @media (prefers-reduced-motion:reduce){.beat,.tap-pad-icon,.tap-flash{transition:none}}
 </style>
 </head>
 <body>
@@ -320,6 +348,22 @@
 
   <div class="pulse" id="pulseView"></div>
   <div class="beats" id="beats" aria-hidden="true"></div>
+
+  <!-- 再生モードのスクラブパッド（YouTube 風）。左＝戻し / 右＝送り / 中央＝一時停止。動画あり再生モードのみ表示 -->
+  <div class="tap-pad" id="tapPad" hidden>
+    <button class="tap-zone left" id="tapLeft" type="button" aria-label="5秒ずつ戻す（ダブルタップ＝−5秒、連打で追加）">
+      <span class="tap-zone-glyph">⏪</span>
+      <span class="tap-zone-sub">5秒ずつ戻す</span>
+    </button>
+    <button class="tap-pad-center" id="tapPause" type="button" aria-label="一時停止／再開">
+      <span class="tap-pad-icon" id="tapPauseIcon">▶</span>
+    </button>
+    <button class="tap-zone right" id="tapRight" type="button" aria-label="5秒ずつ送る（ダブルタップ＝＋5秒、連打で追加）">
+      <span class="tap-zone-glyph">⏩</span>
+      <span class="tap-zone-sub">5秒ずつ送る</span>
+    </button>
+    <div class="tap-flash" id="tapFlash" aria-hidden="true"></div>
+  </div>
 
   <div class="lead-wrap">
     <div class="lead" id="lead">
@@ -415,19 +459,27 @@
     const noteName = den => NOTE_NAME[den];
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
     const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den))});
-    // 動画位置（cue）の正規化：null / 0以上を小数2桁へ
+    // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
     function normCue(v){
       const n = Number(v);
       return (v == null || isNaN(n) || n < 0) ? null : Math.round(n * 100) / 100;
     }
+    // rep 単位のタイムコード配列を reps の長さに整える（不足は null 埋め、超過は切り詰め）
+    function fitCues(arr, reps){
+      const out = [];
+      for(let i = 0; i < reps; i++) out.push(normCue(arr && arr[i]));
+      return out;
+    }
     function makeGroup(spec){
       spec = spec || {};
       const rhythms = spec.rhythms || (spec.pattern && spec.pattern.rhythms) || [];
+      const reps = clampInt(spec.reps, 1, 999, 1);
       return {
         id: uid(),
         name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
-        reps: clampInt(spec.reps, 1, 999, 1),
-        cue: normCue(spec.cue),                 // グループ先頭の動画位置
+        reps: reps,
+        cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
+        repCues: fitCues(spec.repCues, reps),   // 各くり返し(rep)の動画位置。パッドの位置突き合わせに使う（UI なし）
         pattern: makePattern(rhythms)
       };
     }
@@ -437,6 +489,7 @@
         name: g.name + " のコピー",
         reps: g.reps,
         cue: g.cue,
+        repCues: fitCues(g.repCues, g.reps),
         pattern: {rhythms: g.pattern.rhythms.map(r=>({num:r.num, den:r.den}))}
       };
     }
@@ -461,7 +514,7 @@
 
     return {
       DENOMS, MIN, MAX, TERMS, NOTE_NAME,
-      uid, clampInt, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
+      uid, clampInt, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       noteName, termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
@@ -628,6 +681,7 @@
         L.push("  - name: " + scalarStr(g.name));
         L.push("    repeat: " + g.repeat);
         if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
+        if(g.repCues) L.push("    repCues: [" + g.repCues.map(v => v == null ? "null" : v.toFixed(2)).join(", ") + "]");
         L.push("    pattern: [" + g.pattern.join(", ") + "]");
       });
       return L.join("\n") + "\n";
@@ -944,7 +998,7 @@
     };
   })();
 
-  /* GroupService … リズムグループ単体の属性：名前・くり返し・動画位置（cue） */
+  /* GroupService … リズムグループ単体の属性：名前・くり返し・動画位置（cue / rep 単位の repCues） */
   const GroupService = (() => {
     return {
       setName(id, name){
@@ -957,14 +1011,21 @@
           let v = Math.round(Number(value));
           if(isNaN(v)) v = 1;
           g.reps = Math.min(999, Math.max(1, v));
+          g.repCues = Domain.fitCues(g.repCues, g.reps);   // reps に合わせて rep 別 cue の長さを同期
         }, {render:true});
       },
-      setCue(id, value){            // 動画位置の記録・解除（commit＋再描画）
+      setCue(id, value){            // グループ先頭（rep0）の記録・解除（commit＋再描画）
         HistoryService.commit();
-        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {render:true});
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          if(g){ g.cue = value; if(Array.isArray(g.repCues)) g.repCues[0] = value; }
+        }, {render:true});
       },
       nudgeCue(id, value){          // ± 微調整（commit は呼び出し側で連打をまとめる。再描画なし）
-        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {});
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          if(g){ g.cue = value; if(Array.isArray(g.repCues)) g.repCues[0] = value; }
+        }, {});
       }
     };
   })();
@@ -1014,6 +1075,8 @@
           name: g.name,
           repeat: g.reps,
           cue: (g.cue != null) ? g.cue : null,
+          // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
+          repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
           pattern: g.pattern.rhythms.map(Domain.formatRhythm)
         }))
       };
@@ -1040,6 +1103,7 @@
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
           reps: g.repeat,
           cue: g.cue,
+          repCues: Array.isArray(g.repCues) ? g.repCues : null,
           rhythms
         });
       });
@@ -1102,6 +1166,14 @@
     }
     function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
+    // 任意の位置（group/rep/bar/beat）から刻み直す。パッドの再シーク／一時停止復帰で使う
+    function primeAt(startTime, ptr){
+      gIdx = Math.max(0, ptr.gIdx|0); repIdx = Math.max(0, ptr.repIdx|0);
+      barIdx = Math.max(0, ptr.barIdx|0); beatIdx = Math.max(0, ptr.beatIdx|0);
+      finished = false; queue.length = 0; nextTime = startTime;
+    }
+    // 現在の再生ポインタ（一時停止時の記憶用）
+    function pointer(){ return {gIdx, repIdx, barIdx, beatIdx}; }
     function pump(limit){
       while(!finished && nextTime < limit){
         const gs = plan();
@@ -1132,7 +1204,7 @@
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, plan, resetPointer, prime, pump,
+      LOOKAHEAD, AHEAD, queue, plan, resetPointer, prime, primeAt, pointer, pump,
       finished: () => finished, endTime: () => endTime
     };
   })();
@@ -1197,10 +1269,52 @@
       view.videoMsg("頭出し中…", false);
       ClockGateway.frame(pollCue);
     }
+    // パッドの再シーク／一時停止復帰：任意の動画位置 video に、任意のポインタ ptr で吸着し直す。
+    // lead と同じ二段構え（少し手前へ seek → 実到達を確認 → 目標フレームで ptr から刻み出す）。
+    const SNAP_LEAD = 0.4;   // 実到達確認のための小さな助走（秒）
+    function startAtTime(video, ptr){
+      const aim = compensate(video);                 // この動画位置で ptr の拍が鳴るように
+      const from = Math.max(0, aim - SNAP_LEAD);
+      try{
+        VideoGateway.seekTo(from, true);
+        VideoGateway.play();
+      }catch(err){ Transport.clearArm(); Transport.beginPlaybackAt(ptr, {skipWait:true}); return; }
+      cueWatch = {snap:true, target:aim, ptr, from, t0: ClockGateway.perf(), limit: (SNAP_LEAD + 8) * 1000};
+      view.status("頭出し中");
+      view.videoMsg("位置を合わせています…", false);
+      ClockGateway.frame(pollCue);
+    }
     function pollCue(){
       if(!cueWatch) return;
       let st = -1, t = null;
       try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
+
+      if(cueWatch.snap){
+        // 巻き戻し/送り後は getCurrentTime が数フレーム古い位置を返すので、from まで実到達を確認してから計測
+        if(t != null && !isNaN(t)){
+          if(!cueWatch.seeked && t <= cueWatch.from + 0.5) cueWatch.seeked = true;
+          if(cueWatch.seeked){
+            const remain = cueWatch.target - t;
+            if(remain <= 0){
+              const ptr = cueWatch.ptr;
+              const over = Math.min(-remain, 0.05);
+              cueWatch = null; Transport.clearArm();
+              view.videoMsg("", false);
+              Transport.beginPlaybackAt(ptr, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
+              return;
+            }
+          }
+        }
+        if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
+          const ptr = cueWatch.ptr;
+          cueWatch = null; Transport.clearArm();
+          view.videoMsg("動画の応答がないため、メトロノームだけ再開します", true);
+          Transport.beginPlaybackAt(ptr, {skipWait:true});
+          return;
+        }
+        ClockGateway.frame(pollCue);
+        return;
+      }
 
       if(cueWatch.lead){
         // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
@@ -1243,18 +1357,20 @@
       }
       ClockGateway.frame(pollCue);
     }
-    // いま鳴り始めたグループに、そのときの動画位置を書き込む（全体レック）
-    function stampCue(gid, evTime){
+    // いま鳴り始めた rep に、そのときの動画位置を書き込む（全体レック）。rep0 はグループ cue も維持
+    function stampCue(gid, rep, evTime){
       const g = Store.findGroup(gid);
       if(!g || !VideoGateway.ready()) return;
       let t = null;
       try{ t = VideoGateway.time(); }catch(err){}
       if(t == null || isNaN(t)) return;
       const late = Math.max(0, ClockGateway.now() - evTime);   // 取りこぼしたフレームぶんを引く
-      g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
-      view.stampCueView(gid, g.cue);
+      const val = Math.max(0, Math.round((t - late) * 100) / 100);
+      if(!Array.isArray(g.repCues)) g.repCues = Domain.fitCues(null, g.reps);
+      g.repCues[rep] = val;
+      if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ更新（rep チップ UI は無い）
     }
-    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, stampCue };
+    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtTime, stampCue };
   })();
 
   /* ---------- Transport（再生ステートマシン：all/solo/lead・preroll・全REC・動画同期を統括） ----------
@@ -1267,9 +1383,10 @@
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
-    let recording = false, recGid = null;     // 全体レック
+    let recording = false;                    // 全体レック（各 rep の頭で repCues を記録）
     let resumeActiveId = null;                // 再生前にアクティブだったグループ
     let firstBeatTime = 0;                    // 最初の1打が鳴る時刻（空白があるとき）
+    let paused = false, pausedVideo = 0;      // 再生パッドの一時停止（動画位置を記憶して同位置から吸着復帰）
     let cur = {gid:null, bar:-1, rep:0};
     let shown = "";
     let cancelTimer = null;
@@ -1277,7 +1394,7 @@
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
       endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
-      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}
+      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}
     };
     const isSoloMode = m => m === "solo" || m === "lead";
     const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
@@ -1333,9 +1450,8 @@
         const key = e.gid + ":" + e.rep + ":" + e.bar;
         if(key !== shown){
           shown = key;
-          if(recording && e.gid !== recGid){    // グループが切り替わった最初の1打で記録
-            recGid = e.gid;
-            VideoSync.stampCue(e.gid, e.time);
+          if(recording && e.bar === 0){    // 各くり返し(rep)の頭で記録（rep0=グループ先頭も含む）
+            VideoSync.stampCue(e.gid, e.rep, e.time);
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter.num);
@@ -1355,7 +1471,7 @@
       mode = (kind === "all") ? "all" : kind;
       soloId = (mode === "all") ? null : Store.getState().activeId;
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
-      running = true; shown = "";
+      running = true; paused = false; shown = "";
       resumeActiveId = Store.getState().activeId;
       Store.apply({activeId: null});          // 再生中は全グループを非アクティブにする
       view.render();
@@ -1389,10 +1505,115 @@
       else{ view.status(baseStatus()); }
       view.updateTransport();
     }
+    // 任意のポインタ ptr から刻み直す（再生パッドの再シーク／一時停止復帰）。mode/soloId は現状維持。
+    // カウントイン・preroll は入れず、吸着の精度は VideoSync 側の poll に任せる。
+    function beginPlaybackAt(ptr, opts){
+      const o = opts || {};
+      SoundGateway.ensure();
+      running = true; paused = false; shown = "";
+      const adjust = o.adjust || 0;
+      const t0 = ClockGateway.now();
+      const start = Math.max(t0 + 0.005, t0 + 0.02 + adjust);
+      PlaybackScheduler.primeAt(start, ptr);
+      firstBeatTime = 0;
+      schedulerTick();     // 初回分を即予約
+      cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
+      ClockGateway.frame(draw);
+      view.setRunning(true);
+      view.status(baseStatus());
+      view.updateTransport();
+      view.padUpdate();
+    }
+    // メトロノーム側だけ止める（draw ループは running=false で次フレーム終了）。mode/soloId/recording は保つ。
+    function haltEngine(){
+      if(cancelTimer){ cancelTimer(); cancelTimer = null; }
+      PlaybackScheduler.queue.length = 0;
+      running = false; firstBeatTime = 0;
+      view.clearBeats();
+    }
+    // 再生対象グループ列を running 非依存で得る（PlaybackScheduler.plan と同じ並び・同じ solo 絞り込み）。
+    // 一時停止中（running=false）に locate すると plan() が solo 絞り込みを外してしまうため、こちらを使う。
+    function planGroups(){
+      const groups = Store.getState().groups.filter(g => g.pattern.rhythms.length);
+      return (isSoloMode(mode) && soloId) ? groups.filter(g => g.id === soloId) : groups;
+    }
+    // 動画時刻 target → 楽譜上のポインタ＋その拍頭の狙い動画位置。repCues を突き合わせ、rep 内は bpm で補間。
+    // 手掛かり（repCues / group.cue）が皆無なら null。
+    function locate(target){
+      const gs = planGroups();
+      if(!gs.length) return null;
+      const bpm = Store.getState().bpm;
+      const anchors = [];
+      gs.forEach((g, gi) => {
+        const rc = Array.isArray(g.repCues) ? g.repCues : null;
+        for(let r = 0; r < g.reps; r++){
+          let v = rc ? rc[r] : null;
+          if(v == null && r === 0 && g.cue != null) v = g.cue;    // フォールバック：rep0 は group.cue
+          if(v != null) anchors.push({gIdx: gi, repIdx: r, video: v});
+        }
+      });
+      if(!anchors.length) return null;
+      anchors.sort((a,b)=>a.video - b.video);
+      let anc = anchors[0];
+      for(const a of anchors){ if(a.video <= target + 1e-6) anc = a; else break; }   // target 以下で最大＝含有 rep
+      const rhythms = gs[anc.gIdx].pattern.rhythms;
+      const elapsed = Math.max(0, target - anc.video);
+      let barIdx = 0, beatIdx = 0, head = 0, acc = 0, done = false;
+      for(let b = 0; b < rhythms.length && !done; b++){
+        const span = Domain.rhythmSeconds(rhythms[b].den, bpm);
+        for(let k = 0; k < rhythms[b].num; k++){
+          if(acc + span > elapsed){ barIdx = b; beatIdx = k; head = acc; done = true; break; }
+          acc += span;
+        }
+      }
+      if(!done){                                    // rep 末尾を超えた → 最後の拍にとどめる
+        const lb = rhythms.length - 1;
+        barIdx = lb; beatIdx = rhythms[lb].num - 1;
+        head = acc - Domain.rhythmSeconds(rhythms[lb].den, bpm);
+      }
+      return {ptr:{gIdx:anc.gIdx, repIdx:anc.repIdx, barIdx, beatIdx}, aimVideo: anc.video + head};
+    }
+    // 再生パッド：現在の動画位置から deltaSec だけ送り／戻し、メトロノームを吸着し直す（合算済みの量を1回で）
+    function scrub(deltaSec){
+      if(!running || armKind || recording) return;    // 準備中・録音中は無視（running 確定後のみ）
+      if(!VideoGateway.ready()) return;
+      let t = 0; try{ t = VideoGateway.time(); }catch(err){ return; }
+      if(t == null || isNaN(t)) return;
+      const target = Math.max(0, t + deltaSec);
+      const loc = locate(target);
+      haltEngine();                                   // lamp（body.running）は消さず、そのまま吸着へ
+      armKind = "scrub"; view.updateTransport(); view.padUpdate();
+      if(loc){ VideoSync.startAtTime(loc.aimVideo, loc.ptr); }
+      else{                                            // 手掛かり皆無：動画だけ動かし先頭ポインタで吸着（粗）
+        VideoSync.startAtTime(target, {gIdx:0, repIdx:0, barIdx:0, beatIdx:0});
+      }
+    }
+    // 再生パッド中央：一時停止／再開トグル。再開は記憶した動画位置から突き合わせで吸着復帰。
+    function pauseToggle(){
+      if(armKind && !paused) return;                  // 頭出し／吸着待ち中は無視
+      if(paused){                                     // 再開
+        if(!VideoGateway.ready()){ paused = false; view.padUpdate(); return; }
+        armKind = "scrub"; view.updateTransport();
+        const loc = locate(pausedVideo);
+        if(loc){ VideoSync.startAtTime(loc.aimVideo, loc.ptr); }
+        else{ VideoSync.startAtTime(pausedVideo, {gIdx:0, repIdx:0, barIdx:0, beatIdx:0}); }
+        return;
+      }
+      if(!running) return;                            // 一時停止
+      try{ pausedVideo = VideoGateway.time(); }catch(err){ pausedVideo = 0; }
+      if(pausedVideo == null || isNaN(pausedVideo)) pausedVideo = 0;
+      haltEngine();
+      VideoGateway.pause();
+      paused = true;
+      view.setRunning(false);
+      view.status("一時停止");
+      view.updateTransport();
+      view.padUpdate();
+    }
     function stop(completed, fromVideo){
-      running = false;
+      running = false; paused = false;
       armKind = null; VideoSync.cancel();
-      recording = false; recGid = null;
+      recording = false;
       if(!fromVideo) VideoGateway.pause();
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
@@ -1409,6 +1630,7 @@
       PlaybackScheduler.resetPointer();
       view.syncIdle();
       view.updateTransport();
+      view.padUpdate();
     }
     /* --- 再生の入口：動画があれば、動画が実際に鳴り出してから刻み始める --- */
     function start(kind){
@@ -1450,19 +1672,20 @@
     }
     function armCancel(){
       armKind = null; VideoSync.cancel(); pendingKind = null;
-      recording = false; recGid = null;
+      recording = false; paused = false;
       clearTimeout(waitTimer);
       VideoGateway.pause();
       view.videoMsg("", false);
       view.status("停止中");
       view.updateTransport();
+      view.padUpdate();
     }
     function startRec(){
       if(running || armKind){ stop(false); return; }       // レック中はトグルで停止
       if(!VideoGateway.ready()){ view.videoMsg("動画を読み込むと全体レックが使えます", true); return; }
       if(!PlaybackScheduler.plan().length) return;
       HistoryService.commit();                    // レック1回ぶんをまとめて1手の履歴にする
-      recording = true; recGid = null;
+      recording = true;
       start("all");                // 全体レックは常に全体再生・動画は先頭から
     }
     function wake(){ if(running && SoundGateway.ready) schedulerTick(); }
@@ -1488,11 +1711,12 @@
       soloId: () => soloId,
       armKind: () => armKind,
       recording: () => recording,
+      paused: () => paused,
       cur: () => cur,
       soloTarget, countInFor, LEAD_SEC,
       clearArm(){ armKind = null; },
       clearPending(){ pendingKind = null; },
-      start, stop, startRec, beginPlayback, armCancel, wake, onVideoPlaying, onVideoStopped
+      start, stop, startRec, beginPlayback, beginPlaybackAt, scrub, pauseToggle, armCancel, wake, onVideoPlaying, onVideoStopped
     };
   })();
 
@@ -1516,6 +1740,8 @@
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
   const editTab=$("editTab"), playTab=$("playTab");
+  const tapPad=$("tapPad"), tapLeft=$("tapLeft"), tapRight=$("tapRight"), tapPause=$("tapPause"),
+        tapPauseIcon=$("tapPauseIcon"), tapFlash=$("tapFlash");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
         ioFile=$("ioFile"), ioMsg=$("ioMsg");
   const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytMsg=$("ytMsg");
@@ -1547,7 +1773,7 @@
     return {
       isPlay: () => mode === "play",
       get: () => mode,
-      set(m){ if(m === mode) return; mode = m; SequenceView.render(); }
+      set(m){ if(m === mode) return; mode = m; SequenceView.render(); TapPadView.update(); }
     };
   })();
 
@@ -2054,6 +2280,7 @@
         recBtn.title = !VideoGateway.ready() ? "動画を読み込むと使えます"
           : "動画を先頭から流し、各リズムグループの位置を記録します";
       }
+      TapPadView.update();   // 再生パッドの表示・一時停止アイコン・busy 状態を同期
     }
     function status(text){ statusText.textContent = text; }
     function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
@@ -2106,6 +2333,71 @@
       paintBeats, showPulse, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
       setRunning, startWaiting, clearWaiting, isWaiting, endWaiting, prerollTick, bind
     };
+  })();
+
+  /* ---------- TapPadView（再生モードの YouTube 風スクラブパッド：左＝戻し／右＝送り／中央＝一時停止） ----------
+     連打を TAP_WINDOW で合算し（ダブルタップ＝1ステップ、以降1打ごとに追加）、確定時に Transport.scrub を1回だけ呼ぶ。
+     実際のシーク＋メトロノーム吸着は Transport／VideoSync 側（既存 lead と同じ poll-until-target）。 */
+  const TapPadView = (() => {
+    const STEP = 5;                 // 1タップぶんの秒数
+    const TAP_WINDOW = 400;         // 連打の合算ウィンドウ（ms）。最後のタップからこの時間で確定
+    let acc = {dir:0, taps:0, timer:null};
+    let flashTimer = null;
+
+    function resetAcc(){ if(acc.timer) clearTimeout(acc.timer); acc = {dir:0, taps:0, timer:null}; }
+    function flash(text, back){
+      tapFlash.textContent = text;
+      tapFlash.classList.toggle("back", !!back);
+      tapFlash.classList.add("show");
+      if(flashTimer) clearTimeout(flashTimer);
+    }
+    function flashOut(delay){
+      if(flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(()=>{ tapFlash.classList.remove("show"); }, delay);
+    }
+    function label(dir, sec){ return (dir < 0 ? "−" : "＋") + sec + "秒"; }
+    function showPending(){                          // ダブルタップ成立（taps>=2）からオーバーレイ表示
+      if(acc.taps < 2) return;
+      flash(label(acc.dir, (acc.taps - 1) * STEP), acc.dir < 0);
+    }
+    function commit(){
+      const dir = acc.dir, taps = acc.taps;
+      resetAcc();
+      if(taps < 2){ flashOut(0); return; }           // 単発は無効（YouTube と同じくダブルタップから）
+      const sec = (taps - 1) * STEP;
+      flash(label(dir, sec), dir < 0); flashOut(700);
+      SoundGateway.ensure();
+      Transport.scrub(sec * dir);
+    }
+    function onTap(dir){
+      if(!Transport.running()) return;               // 再生中のみシーク（一時停止中・停止中は無効）
+      if(acc.dir !== dir) resetAcc();
+      acc.dir = dir; acc.taps++;
+      if(acc.timer) clearTimeout(acc.timer);
+      acc.timer = setTimeout(commit, TAP_WINDOW);
+      showPending();
+    }
+    function onCenter(){
+      SoundGateway.ensure();
+      resetAcc(); flashOut(0);
+      if(Transport.running() || Transport.paused()) Transport.pauseToggle();
+      else Transport.start("all");                   // 停止中は全体再生で開始
+    }
+    function update(){
+      const show = ViewMode.isPlay() && VideoGateway.ready();
+      tapPad.hidden = !show;
+      if(!show){ resetAcc(); flashOut(0); return; }
+      const paused = Transport.paused(), running = Transport.running();
+      tapPad.classList.toggle("is-paused", paused);
+      tapPad.classList.toggle("is-busy", !!Transport.armKind());
+      tapPauseIcon.textContent = (running && !paused) ? "⏸" : "▶";
+    }
+    function bind(){
+      tapLeft.addEventListener("pointerdown", e=>{ e.preventDefault(); onTap(-1); });
+      tapRight.addEventListener("pointerdown", e=>{ e.preventDefault(); onTap(1); });
+      tapPause.addEventListener("pointerdown", e=>{ e.preventDefault(); onCenter(); });
+    }
+    return { update, bind };
   })();
 
   /* ---------- IoView（保存／読込のメッセージ表示とバインド） ---------- */
@@ -2195,6 +2487,7 @@
         Transport.clearPending();
         ytUrl.value = ""; ytSay("", false);
         SequenceView.render();
+        TapPadView.update();
       });
     }
     return { ytSay, updateLock, syncEnabled, bind };
@@ -2219,7 +2512,8 @@
     highlight: TransportView.highlight,
     setBeatDot: TransportView.setBeatDot,
     readPreroll: TransportView.readPreroll,
-    stampCueView: GroupView.stampCueView
+    stampCueView: GroupView.stampCueView,
+    padUpdate: TapPadView.update
   };
   // Store の変更を meta フラグに応じて各ビューへ配る
   function dispatch(meta){
@@ -2242,7 +2536,7 @@
   });
   VideoGateway.init({
     onMsg: (text, bad) => VideoView.ytSay(text, bad),
-    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); },
+    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); TapPadView.update(); },
     onPlaying: () => Transport.onVideoPlaying(),
     onStopped: () => Transport.onVideoStopped(),
     syncEnabled: () => VideoView.syncEnabled()
@@ -2253,6 +2547,7 @@
   TempoView.bind();
   SequenceView.bind();
   TransportView.bind();
+  TapPadView.bind();
   IoView.bind();
   VideoView.bind();
 
@@ -2262,6 +2557,7 @@
   SequenceView.applyTitle();
   SequenceView.updateHistory();
   SequenceService.setTempo(120);
+  TapPadView.update();
 })();
 </script>
 </body>
