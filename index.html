@@ -326,6 +326,32 @@
 (function(){
   "use strict";
 
+  /* ============================================================================
+     アーキテクチャ（HTML 1ファイル・素の JS・ビルドなし。UI 文言は現状維持）
+
+     エンティティ階層（データ構造）:
+       Sequence      … 曲ひとつ分（name, tempo, preroll, video, groups）
+        └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern）
+            └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
+                └ Rhythm … 1拍子 例 7/8（num, den）。UI 表示は「拍子」
+
+     抽出済みの層（純粋 or 独立。上から下へ一方向依存）:
+       Domain  … エンティティ生成と拍子計算の唯一の真実。DOM も状態も持たない
+       Yaml    … このスキーマ用の最小エンコーダ／パーサ。DOM も状態も持たない
+       History … 汎用の undo/redo（記録内容は capture/apply に委譲）
+       Sound   … AudioContext のライフサイクルとクリック音合成
+       View    … 派生値の描画（拍ドット・パルス・サマリー・時刻整形）
+
+     まだ結合している対話コア（今回は分離しない。理由: この環境では自動検証
+     できず、動画同期の緻密なタイミングを壊しやすい。将来 issue #7 の実装や
+     実機テストと合わせて整理する）:
+       ・アプリ状態（groups / activeId / bpm / seqName / preroll / ytCurrent …）
+       ・renderGroups（編集UIの構築と描画のオーケストレーション）
+       ・scheduler / draw（先読みスケジューラと拍の描画・録画スタンプ）
+       ・Transport（再生ステートマシン: all/solo/lead・cue・全REC・動画頭出し）
+       ・Video（YouTube IFrame API アダプタ）
+     ============================================================================ */
+
   const DENOMS = [3,6,9,12,15,2,4,8,16,32];
   const MIN = 50, MAX = 250;
   const TERMS = [[50,65,"Largo"],[66,75,"Adagio"],[76,107,"Andante"],[108,119,"Moderato"],
