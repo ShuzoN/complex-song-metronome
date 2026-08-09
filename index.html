@@ -126,10 +126,11 @@
   .lead .unit{font-family:var(--mono);font-size:11px;color:var(--dim)}
   .lead-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
   .lead-sep{width:1px;height:20px;background:var(--rule);margin:0 2px}
-  .rec{height:28px;padding:0 10px;border:1px solid var(--ink);background:var(--panel);font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--signal)}
-  .rec:hover:not(:disabled){background:#F7ECEA}
-  .rec:disabled{opacity:.3;cursor:default;color:var(--dim)}
-  .rec.on{background:var(--signal);border-color:var(--signal);color:var(--panel)}
+  .rec{height:28px;padding:0 10px;border:1px solid var(--signal);background:#F6DCD7;font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--signal)}
+  .rec:hover:not(:disabled){background:#F0CBC4}
+  .rec:disabled{opacity:.32;cursor:default}
+  .rec.on{background:var(--signal);border-color:var(--signal);color:#FFF}
+  .rec.on:hover:not(:disabled){background:#A62A20;border-color:#A62A20}
   .g-at.hit{color:var(--signal)}
 
   /* rhythm groups */
@@ -181,6 +182,7 @@
   .g-cue .nudge{width:22px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--dim)}
   .g-cue .nudge:hover{border-color:var(--brass);color:var(--brass);background:#F7F3E9}
   .g-cue .nudge:active{transform:translateY(1px)}
+  .g-cue .nudge:disabled{opacity:.25;cursor:default}
   .g-at{font-family:var(--mono);font-size:11px;color:var(--brass);white-space:nowrap;letter-spacing:.02em;min-width:46px;text-align:right;font-variant-numeric:tabular-nums}
   .g-at.none{color:#A7ABA0}
 
@@ -677,6 +679,7 @@
     b.textContent = delta < 0 ? "−" : "＋";
     b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
     b.setAttribute("aria-label", b.title);
+    b.disabled = recording;                  // 全体レック中はタイムコード調整を止める
     b.addEventListener("click", e=>{
       e.stopPropagation();
       const now = Date.now();
@@ -694,7 +697,7 @@
     grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
     grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
     grab.setAttribute("aria-label", "動画の現在位置を記録");
-    grab.disabled = !ytReady;
+    grab.disabled = !ytReady || recording;   // 全体レック中は個別レックを止める
     grab.addEventListener("click", e=>{
       e.stopPropagation();
       if(!ytReady) return;
@@ -721,7 +724,7 @@
       box.appendChild(nudge(g, -0.05, at));
       box.appendChild(at);
       box.appendChild(nudge(g, 0.05, at));
-      const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
+      const clr = mini("✕", "動画位置を解除", recording, ()=>{ commit(); g.cue = null; renderGroups(); });
       clr.classList.add("kill");
       clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
       clr.addEventListener("click", e=>e.stopPropagation());
