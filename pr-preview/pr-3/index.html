@@ -556,9 +556,9 @@
         at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
         cueBox.appendChild(grab);
         if(g.cue != null){
-          cueBox.appendChild(nudge(g, -0.1, at));
+          cueBox.appendChild(nudge(g, -0.05, at));
           cueBox.appendChild(at);
-          cueBox.appendChild(nudge(g, 0.1, at));
+          cueBox.appendChild(nudge(g, 0.05, at));
         }else{
           cueBox.appendChild(at);
         }
@@ -690,7 +690,7 @@
     const b = document.createElement("button");
     b.type = "button"; b.className = "nudge";
     b.textContent = delta < 0 ? "−" : "＋";
-    b.title = (delta < 0 ? "0.1秒もどす" : "0.1秒すすめる");
+    b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
     b.setAttribute("aria-label", b.title);
     b.addEventListener("click", e=>{
       e.stopPropagation();
