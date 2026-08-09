@@ -201,7 +201,6 @@
   .addgroup:disabled{opacity:.3;cursor:default}
 
   .pulse{display:flex;align-items:baseline;gap:8px;padding:0 18px 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--dim)}
-  .pulse b{font-weight:500;color:var(--ink)}
   .pulse i{font-style:normal;color:var(--brass)}
   .beats{display:flex;flex-wrap:wrap;gap:7px;padding:0 18px 20px;min-height:13px}
   .beat{width:13px;height:13px;border:1px solid var(--ink);border-radius:50%;transition:background 60ms linear,transform 60ms linear}
@@ -1914,8 +1913,7 @@
       }
     }
     function showPulse(bar){
-      const rate = Math.round((60/Domain.rhythmSeconds(bar.den, state().bpm))*10)/10;
-      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span>';
     }
     function setBeatDot(beat){
       const dots = beatsEl.children;
