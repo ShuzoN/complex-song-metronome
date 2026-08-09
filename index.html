@@ -529,14 +529,32 @@
   addGroupBtn.addEventListener("click", addGroup);
 
   /* ---------- 描画 ---------- */
-  function fmtTime(sec){
-    if(sec == null) return "—";
-    const m = Math.floor(sec / 60), r = sec - m * 60;
-    return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
-  }
-  function timesText(g){
-    return "×" + g.reps;
-  }
+  /* ---------- View（派生値の描画：拍ドット・パルス表示・サマリー・時刻整形。表示の更新のみを担う） ---------- */
+  const View = {
+    fmtTime(sec){
+      if(sec == null) return "—";
+      const m = Math.floor(sec / 60), r = sec - m * 60;
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+    },
+    timesText(g){ return "×" + g.reps; },
+    summary(){
+      let total = 0;
+      for(const g of groups) total += g.pattern.rhythms.length * g.reps;
+      seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
+    },
+    paintBeats(n){
+      beatsEl.innerHTML = "";
+      for(let i=0;i<n;i++){
+        const d = document.createElement("span");
+        d.className = "beat" + (i===0 ? " first" : "");
+        beatsEl.appendChild(d);
+      }
+    },
+    showPulse(bar){
+      const rate = Math.round((60/beatSeconds(bar.den))*10)/10;
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+    }
+  };
 
   function renderGroups(){
     groupsEl.innerHTML = "";
@@ -620,7 +638,7 @@
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
         times.title = "再生回数";
-        times.textContent = timesText(g);
+        times.textContent = View.timesText(g);
         sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
         card.appendChild(sub);
       }
@@ -708,16 +726,10 @@
       if(el) el.focus();
       focusHandleId = null;
     }
-    updateSummary();
+    View.summary();
     updateTransport();
     updateHistoryUI();
     applyHighlight();
-  }
-
-  function updateSummary(){
-    let total = 0;
-    for(const g of groups) total += g.pattern.rhythms.length * g.reps;
-    seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
   }
 
   /* 動画位置の微調整。連打は1手の履歴にまとめる */
@@ -735,7 +747,7 @@
       if(!(nudgeId === g.id && now - nudgeAt < 2500)) commit();
       nudgeId = g.id; nudgeAt = now;
       g.cue = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
-      label.textContent = fmtTime(g.cue);      // 構造は変わらないので再描画しない
+      label.textContent = View.fmtTime(g.cue);      // 構造は変わらないので再描画しない
     });
     return b;
   }
@@ -767,7 +779,7 @@
     box.appendChild(cueGrabButton(g));
     const at = document.createElement("span");
     at.className = "g-at" + (g.cue == null ? " none" : "");
-    at.textContent = fmtTime(g.cue);
+    at.textContent = View.fmtTime(g.cue);
     at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
     if(g.cue != null){
       box.appendChild(nudge(g, -0.05, at));
@@ -1041,8 +1053,8 @@
           stampCue(e.gid, e.time);
         }
         cur = {gid:e.gid, bar:e.bar, rep:e.rep};
-        paintBeats(e.meter.num);
-        showPulse(e.meter);
+        View.paintBeats(e.meter.num);
+        View.showPulse(e.meter);
         applyHighlight();
       }
       const dots = beatsEl.children;
@@ -1062,29 +1074,17 @@
       });
       const t = card.querySelector('[data-role="times"]');
       if(t && g){
-        t.textContent = on ? (cur.rep+1) + " / " + g.reps : timesText(g);
+        t.textContent = on ? (cur.rep+1) + " / " + g.reps : View.timesText(g);
       }
     });
   }
 
-  function paintBeats(n){
-    beatsEl.innerHTML = "";
-    for(let i=0;i<n;i++){
-      const d = document.createElement("span");
-      d.className = "beat" + (i===0 ? " first" : "");
-      beatsEl.appendChild(d);
-    }
-  }
-  function showPulse(bar){
-    const rate = Math.round((60/beatSeconds(bar.den))*10)/10;
-    pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
-  }
   function syncIdle(){
     if(running) return;
     const gs = plan();
     const bar = gs.length ? gs[0].pattern.rhythms[0] : {num:pickNum, den:pickDen};
-    paintBeats(bar.num);
-    showPulse(bar);
+    View.paintBeats(bar.num);
+    View.showPulse(bar);
     updateTransport();
   }
 
@@ -1132,7 +1132,7 @@
     const card = groupsEl.querySelector('[data-id="' + gid + '"]');
     const at = card && card.querySelector(".g-at");
     if(at){                       // 再描画せず表示だけ差し替える
-      at.textContent = fmtTime(g.cue);
+      at.textContent = View.fmtTime(g.cue);
       at.classList.remove("none");
       at.classList.add("hit");
     }
