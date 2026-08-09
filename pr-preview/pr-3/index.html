@@ -168,8 +168,8 @@
   .mini.kill:hover:not(:disabled){background:var(--signal);color:var(--panel);border-color:var(--signal)}
 
   .g-cue{display:flex;align-items:center;gap:4px;flex:none}
-  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--ink)}
-  .g-cue .grab:hover:not(:disabled){border-color:var(--brass);color:var(--brass);background:#F7F3E9}
+  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--signal)}
+  .g-cue .grab:hover:not(:disabled){border-color:var(--signal);color:var(--signal);background:#F6EAE8}
   .g-cue .grab:disabled{opacity:.28;cursor:default}
   .g-cue .nudge{width:22px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--dim)}
   .g-cue .nudge:hover{border-color:var(--brass);color:var(--brass);background:#F7F3E9}
@@ -536,7 +536,7 @@
         const cueBox = document.createElement("span");
         cueBox.className = "g-cue";
         const grab = document.createElement("button");
-        grab.type = "button"; grab.className = "grab"; grab.textContent = "▶";
+        grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
         grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
         grab.setAttribute("aria-label", "動画の現在位置を記録");
         grab.disabled = !ytReady;
