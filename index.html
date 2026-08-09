@@ -151,7 +151,8 @@
   .g-times{font-family:var(--mono);font-size:11.5px;color:var(--brass);white-space:nowrap;letter-spacing:.04em}
   .group.playing .g-times{color:var(--signal)}
 
-  .g-sub{display:flex;flex-wrap:wrap;gap:5px;padding:0 9px 9px 41px}
+  .g-sub{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 9px 9px 41px}
+  .g-sub .g-times{margin-left:auto;font-size:12px}
   .chip{font-family:var(--mono);font-size:11px;border:1px solid var(--rule);padding:2px 6px;background:#FAF9F5;color:var(--dim)}
   .chip.now{background:var(--signal);border-color:var(--signal);color:var(--panel)}
   .chip.none{border-style:dashed}
@@ -474,7 +475,7 @@
     return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
   }
   function timesText(g){
-    return "× " + g.reps;
+    return "×" + g.reps;
   }
 
   function renderGroups(){
@@ -535,12 +536,8 @@
 
         const cueBox = document.createElement("span");
         cueBox.className = "g-cue";
-        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ残す
+        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
         head.appendChild(cueBox);
-        const times = document.createElement("span");
-        times.className = "g-times"; times.dataset.role = "times";
-        times.textContent = timesText(g);
-        head.appendChild(times);
       }
       card.appendChild(head);
 
@@ -560,6 +557,11 @@
             sub.appendChild(c);
           });
         }
+        const times = document.createElement("span");
+        times.className = "g-times"; times.dataset.role = "times";
+        times.title = "再生回数";
+        times.textContent = timesText(g);
+        sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
         card.appendChild(sub);
       }
 
