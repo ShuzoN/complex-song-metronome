@@ -152,7 +152,6 @@
   .group.playing .g-times{color:var(--signal)}
 
   .g-sub{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 9px 9px 41px}
-  .g-sub .g-times{margin-left:3px}
   .chip{font-family:var(--mono);font-size:11px;border:1px solid var(--rule);padding:2px 6px;background:#FAF9F5;color:var(--dim)}
   .chip.now{background:var(--signal);border-color:var(--signal);color:var(--panel)}
   .chip.none{border-style:dashed}
@@ -169,6 +168,8 @@
   .mini.kill:hover:not(:disabled){background:var(--signal);color:var(--panel);border-color:var(--signal)}
 
   .g-cue{display:flex;align-items:center;gap:4px;flex:none}
+  .g-cue.g-cue-col{flex-direction:column;gap:1px}
+  .g-cue.g-cue-col .g-times{font-size:11px}
   .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--signal)}
   .g-cue .grab:hover:not(:disabled){border-color:var(--signal);color:var(--signal);background:#F6EAE8}
   .g-cue .grab:disabled{opacity:.28;cursor:default}
@@ -475,7 +476,7 @@
     return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
   }
   function timesText(g){
-    return "× " + g.reps;
+    return String(g.reps);   // 数字だけ（REC の下に置く）
   }
 
   function renderGroups(){
@@ -535,8 +536,13 @@
         head.appendChild(title);
 
         const cueBox = document.createElement("span");
-        cueBox.className = "g-cue";
-        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ残す
+        cueBox.className = "g-cue g-cue-col";
+        cueBox.appendChild(cueGrabButton(g));   // REC(●)の下に回数の数字を置く
+        const times = document.createElement("span");
+        times.className = "g-times"; times.dataset.role = "times";
+        times.title = "再生回数";
+        times.textContent = timesText(g);
+        cueBox.appendChild(times);
         head.appendChild(cueBox);
       }
       card.appendChild(head);
@@ -557,10 +563,6 @@
             sub.appendChild(c);
           });
         }
-        const times = document.createElement("span");
-        times.className = "g-times"; times.dataset.role = "times";
-        times.textContent = timesText(g);
-        sub.appendChild(times);          // 回数(×N)は拍子チップの並びに置く
         card.appendChild(sub);
       }
 
