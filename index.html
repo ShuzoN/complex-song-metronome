@@ -214,8 +214,8 @@
 
   body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
-  .transport{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--ink)}
-  .start{height:60px;border:none;font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;padding:0 4px}
+  .transport{display:grid;grid-template-columns:1.1fr 1fr 1fr;border-top:1px solid var(--ink)}
+  .start{height:60px;border:none;font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:0 3px;line-height:1.35}
   .start.primary{background:var(--ink);color:var(--panel)}
   .start.secondary{background:var(--panel);color:var(--ink);border-left:1px solid var(--ink)}
   .start.on{background:var(--signal);color:var(--panel)}
@@ -318,6 +318,7 @@
   <div class="transport">
     <button class="start primary" id="startAllBtn" type="button">全体再生</button>
     <button class="start secondary" id="startSoloBtn" type="button">グループ再生</button>
+    <button class="start secondary" id="startLeadBtn" type="button">−5秒から再生</button>
   </div>
 </main>
 
@@ -335,7 +336,7 @@
   const $ = id => document.getElementById(id);
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
   const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
-  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), statusText=$("statusText"),
+  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
         prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
@@ -495,7 +496,7 @@
     addGroupBtn.disabled = running;
     seqNameEl.disabled = running;
     prerollInput.disabled = running;
-    leadEl.classList.toggle("na", running && mode === "solo");
+    leadEl.classList.toggle("na", running && isSoloMode(mode));
     updateVideoLock();
 
     groups.forEach((g, gi)=>{
@@ -845,7 +846,9 @@
   let nextTime=0, beatIdx=0, barIdx=0, repIdx=0, gIdx=0;
   const LOOKAHEAD=25, AHEAD=0.12, queue=[];
   let cur = {gid:null, bar:-1, rep:0};
-  let mode = "all", soloId = null;   // "all" = シーケンス全体 / "solo" = 選択中のグループのみ
+  let mode = "all", soloId = null;   // "all" = シーケンス全体 / "solo","lead" = 選択中のグループのみ
+  const LEAD_SEC = 5;                // −5秒から再生の助走
+  const isSoloMode = m => m === "solo" || m === "lead";
   let preroll = 0, firstBeatTime = 0;   // 開始までの空白（秒）と、最初の1打が鳴る時刻
 
   function readPreroll(){
@@ -856,11 +859,11 @@
     preroll = v;
     return v;
   }
-  const baseStatus = () => (mode === "solo") ? "グループ再生" : "再生中";
+  const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
   prerollInput.addEventListener("change", readPreroll);
 
   function plan(){
-    if(running && mode === "solo"){
+    if(running && isSoloMode(mode)){
       return groups.filter(g => g.id === soloId && g.bars.length);
     }
     return groups.filter(g => g.bars.length);
@@ -869,30 +872,38 @@
     const g = findGroup(activeId);
     return (g && g.bars.length) ? g : null;
   }
+  const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
   function updateTransport(){
+    const btns = {all:startAllBtn, solo:startSoloBtn, lead:startLeadBtn};
     if(running || armKind){
-      const solo = running ? (mode === "solo") : (armKind === "solo");
-      startAllBtn.disabled = solo;
-      startSoloBtn.disabled = !solo;
-      startAllBtn.textContent = solo ? "全体再生" : "停止";
-      startSoloBtn.textContent = solo ? "停止" : "グループ再生";
-      startAllBtn.classList.toggle("on", !solo);
-      startSoloBtn.classList.toggle("on", solo);
-      startAllBtn.title = ""; startSoloBtn.title = "";
+      const active = running ? mode : armKind;
+      Object.keys(btns).forEach(k=>{
+        const on = (k === active);
+        btns[k].textContent = on ? "停止" : LABELS[k];
+        btns[k].classList.toggle("on", on);
+        btns[k].disabled = !on;
+        btns[k].title = "";
+      });
       recBtn.classList.toggle("on", recording);
       recBtn.textContent = recording ? "■ レック中" : "● REC";
       recBtn.disabled = !recording;
     }else{
       const ready = plan().length > 0;
       const target = soloTarget();
+      const cued = target && target.cue != null && ytReady;
+      Object.keys(btns).forEach(k=>{
+        btns[k].textContent = LABELS[k];
+        btns[k].classList.remove("on");
+      });
       startAllBtn.disabled = !ready;
       startSoloBtn.disabled = !target;
-      startAllBtn.textContent = "全体再生";
-      startSoloBtn.textContent = "グループ再生";
-      startAllBtn.classList.remove("on");
-      startSoloBtn.classList.remove("on");
+      startLeadBtn.disabled = !cued;
       startAllBtn.title = ready ? "" : "拍子を1つ以上追加してください";
       startSoloBtn.title = target ? target.name + " だけを再生" : "再生したいリズムグループをタップして選んでください";
+      startLeadBtn.title = !target ? "再生したいリズムグループをタップして選んでください"
+        : !ytReady ? "動画を読み込むと使えます"
+        : target.cue == null ? "このグループに動画位置が記録されていません"
+        : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
       recBtn.classList.remove("on");
       recBtn.textContent = "● REC";
       recBtn.disabled = !ready || !ytReady;
@@ -908,8 +919,9 @@
     const osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = "square";
     osc.frequency.value = accent ? 1760 : 880;
-    gain.gain.setValueAtTime(0.0001, time);
-    gain.gain.exponentialRampToValueAtTime(accent ? 0.35 : 0.22, time + 0.002);
+    // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
+    // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
+    gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
     gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
     osc.connect(gain).connect(ctx.destination);
     osc.start(time); osc.stop(time + decay + 0.015);
@@ -1019,7 +1031,7 @@
   let cueWatch = null;
 
   function firstGroupFor(kind){
-    if(kind === "solo") return soloTarget();
+    if(kind !== "all") return soloTarget();
     return groups.filter(g => g.bars.length)[0] || null;
   }
   function cueOf(kind){
@@ -1096,11 +1108,13 @@
     requestAnimationFrame(pollTop);
   }
   function startAtCue(kind, cue){
+    const lead = (kind === "lead");
+    const from = lead ? Math.max(0, cue - LEAD_SEC) : cue;
     try{
-      ytPlayer.seekTo(cue, true);      // 指定された秒数そのものから始める
+      ytPlayer.seekTo(from, true);     // lead なら5秒手前、そうでなければ指定秒そのもの
       ytPlayer.playVideo();
     }catch(err){ armKind = null; beginPlayback(kind); return; }
-    cueWatch = {target: cue, kind, t0: performance.now()};
+    cueWatch = {target: cue, kind, lead, t0: performance.now(), limit: lead ? (LEAD_SEC + 8) * 1000 : 6000};
     statusText.textContent = "頭出し中";
     ytSay("頭出し中…", false);
     requestAnimationFrame(pollCue);
@@ -1109,8 +1123,32 @@
     if(!cueWatch) return;
     let st = -1, t = null;
     try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
-    // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
-    if(st === 1 && t != null && t >= cueWatch.target - 0.1){
+
+    if(cueWatch.lead){
+      // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
+      // seekTo 直後は getCurrentTime が「巻き戻る前の位置」を数フレーム返すため、
+      // 助走開始点(cue-5)まで実際に戻ったのを確認してから計測を始める
+      // （確認前だと、記録直後で cue 付近にいる位置を「到達」と誤認して即開始してしまう）
+      if(t != null && !isNaN(t)){
+        const from = Math.max(0, cueWatch.target - LEAD_SEC);
+        if(!cueWatch.seeked && t <= from + 0.5) cueWatch.seeked = true;   // 助走開始点まで戻った
+        if(cueWatch.seeked){
+          const remain = cueWatch.target - t;
+          if(remain <= 0){
+            const kind = cueWatch.kind;
+            const over = Math.min(-remain, 0.05);
+            cueWatch = null; armKind = null;
+            ytSay("", false);
+            beginPlayback(kind, {skipWait:true, adjust:-over});
+            return;
+          }
+          ytSay("あと " + remain.toFixed(1) + " 秒で開始", false);
+        }else{
+          ytSay("頭出し中…", false);   // まだ助走開始点に戻っていない
+        }
+      }
+    }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
+      // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
       const kind = cueWatch.kind;
       const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
       cueWatch = null; armKind = null;
@@ -1118,7 +1156,7 @@
       beginPlayback(kind, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
       return;
     }
-    if(performance.now() - cueWatch.t0 > 6000){
+    if(performance.now() - cueWatch.t0 > cueWatch.limit){
       const kind = cueWatch.kind;
       cueWatch = null; armKind = null;
       ytSay("動画の応答がないため、メトロノームだけ始めます", true);
@@ -1129,12 +1167,12 @@
   }
 
   function beginPlayback(kind, opts){
-    if(kind === "solo" && !soloTarget()) return;
-    if(kind !== "solo" && !plan().length) return;
+    if(kind !== "all" && !soloTarget()) return;
+    if(kind === "all" && !plan().length) return;
     if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if(ctx.state === "suspended") ctx.resume();
-    mode = (kind === "solo") ? "solo" : "all";
-    soloId = (mode === "solo") ? activeId : null;
+    mode = (kind === "all") ? "all" : kind;
+    soloId = (mode === "all") ? null : activeId;
     running = true; shown = "";
     resumeActiveId = activeId;
     activeId = null;               // 再生中は全グループを非アクティブにする
@@ -1188,15 +1226,22 @@
   }
   /* --- 再生の入口：動画があれば、動画が実際に鳴り出してから刻み始める --- */
   function start(kind){
-    if(kind === "solo" && !soloTarget()) return;
-    if(kind !== "solo" && !plan().length) return;
-    if(videoArmed() && kind !== "solo"){
+    if(kind !== "all" && !soloTarget()) return;
+    if(kind === "all" && !plan().length) return;
+    if(videoArmed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
       armKind = kind;
       updateTransport();
-      startFromTop(kind);                     // 全体再生は必ず動画を先頭に戻す
+      startFromTop(kind);
       return;
     }
     const cue = cueOf(kind);
+    if(kind === "lead"){                       // −5秒から再生は、動画と記録位置が揃っているときだけ
+      if(!videoArmed() || cue == null) return;
+      armKind = kind;
+      updateTransport();
+      startAtCue(kind, cue);
+      return;
+    }
     if(videoArmed() && cue != null){          // グループ再生は記録した位置から合わせる
       armKind = kind;
       updateTransport();
@@ -1224,6 +1269,7 @@
 
   startAllBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("all")));
   startSoloBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("solo")));
+  startLeadBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("lead")));
   document.addEventListener("keydown", e=>{
     const mod = e.metaKey || e.ctrlKey;
     if(mod && e.key.toLowerCase() === "z"){
