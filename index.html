@@ -176,9 +176,6 @@
   .mini.kill:hover:not(:disabled){background:var(--signal);color:var(--panel);border-color:var(--signal)}
 
   .g-cue{display:flex;align-items:center;gap:4px;flex:none}
-  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--signal)}
-  .g-cue .grab:hover:not(:disabled){border-color:var(--signal);color:var(--signal);background:#F6EAE8}
-  .g-cue .grab:disabled{opacity:.28;cursor:default}
   .g-cue .nudge{width:22px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--dim)}
   .g-cue .nudge:hover{border-color:var(--brass);color:var(--brass);background:#F7F3E9}
   .g-cue .nudge:active{transform:translateY(1px)}
@@ -1621,28 +1618,10 @@
       });
       return b;
     }
-    /* いまの動画位置をこのグループに記録する REC（●）ボタン */
-    function cueGrabButton(g){
-      const grab = document.createElement("button");
-      grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
-      grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
-      grab.setAttribute("aria-label", "動画の現在位置を記録");
-      grab.disabled = !VideoGateway.ready() || Transport.recording();   // 全体レック中は個別レックを止める
-      grab.addEventListener("click", e=>{
-        e.stopPropagation();
-        if(!VideoGateway.ready()) return;
-        let t = null;
-        try{ t = VideoGateway.time(); }catch(err){}
-        if(t == null || isNaN(t)) return;
-        GroupService.setCue(g.id, Math.round(t*100)/100);
-      });
-      return grab;
-    }
-    /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
+    /* アクティブ側の「動画位置」行：00:00 ＋ ± ＋ ✕（記録は全REC で自動取得） */
     function cueControls(g){
       const box = document.createElement("span");
       box.className = "g-cue";
-      box.appendChild(cueGrabButton(g));
       const at = document.createElement("span");
       at.className = "g-at" + (g.cue == null ? " none" : "");
       at.textContent = Fmt.time(g.cue);
@@ -1710,11 +1689,6 @@
         title.className = "g-title";
         title.textContent = g.name;
         head.appendChild(title);
-
-        const cueBox = document.createElement("span");
-        cueBox.className = "g-cue";
-        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
-        head.appendChild(cueBox);
       }
       card.appendChild(head);
 
