@@ -74,6 +74,7 @@
   .yt-row input{flex:1;min-width:0;height:36px;padding:0 8px;font-family:var(--mono);font-size:12px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
   .yt-row input:focus{outline:none;border-color:var(--signal)}
   .yt-row .step{height:36px;min-width:52px}
+  .yt-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
   .yt-stage{position:relative;width:100%;aspect-ratio:16/9;margin-top:10px;background:#0D0F0D;border:1px solid var(--ink)}
   .yt-stage > *{position:absolute;inset:0;width:100%;height:100%;border:0}
   .yt-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px}
@@ -112,6 +113,18 @@
   .io-msg{margin:6px 0 0;font-family:var(--mono);font-size:10.5px;line-height:1.6;color:var(--brass);white-space:pre-line}
   .io-msg.bad{color:var(--signal)}
   body.dropping .device{outline:3px dashed var(--signal);outline-offset:4px}
+
+  /* シーケンス先頭の空白（リード） */
+  .lead-wrap{padding:10px 14px 0}
+  .lead{position:relative;display:flex;align-items:center;gap:7px;padding:8px 9px;border:1px dashed var(--rule);background:#FFF}
+  .lead.counting{border-color:var(--brass);border-style:solid}
+  .lead.counting::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brass)}
+  .lead.na{opacity:.4}
+  .lead input{width:82px;height:32px;text-align:right;padding:0 8px;font-family:var(--mono);font-size:14px;color:var(--ink);background:#FFF;border:1px solid var(--rule);border-radius:0;font-variant-numeric:tabular-nums}
+  .lead input:focus{outline:none;border-color:var(--ink)}
+  .lead input:disabled{background:#EDECE6;color:#9A9E93}
+  .lead .unit{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .lead-count{margin-left:auto;font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
 
   /* rhythm groups */
   .groups{padding:10px 14px 4px;display:flex;flex-direction:column;gap:8px}
@@ -179,6 +192,8 @@
   .beat.first{border-color:var(--brass);box-shadow:inset 0 0 0 2px rgba(142,113,50,.28)}
   .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.35)}
   .beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
+
+  body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
   .transport{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--ink)}
   .start{height:60px;border:none;font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;padding:0 4px}
@@ -262,6 +277,16 @@
            placeholder="シーケンス名" aria-label="シーケンス名" maxlength="60">
     <p class="io-msg" id="ioMsg" role="status" hidden></p>
   </div>
+  <div class="lead-wrap">
+    <div class="lead" id="lead">
+      <span class="g-label">開始までの空白</span>
+      <input type="number" id="prerollInput" min="0" max="60" step="0.01" value="0.00"
+             inputmode="decimal" aria-label="開始までの空白（秒）" title="全体再生のときだけ効きます">
+      <span class="unit">秒</span>
+      <span class="lead-count" id="prerollCount" hidden></span>
+    </div>
+  </div>
+
   <section class="groups" id="groups"></section>
   <button class="addgroup" id="addGroupBtn" type="button">＋ リズムグループを追加</button>
 
@@ -288,7 +313,8 @@
   const $ = id => document.getElementById(id);
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
   const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
-  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), statusText=$("statusText");
+  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), statusText=$("statusText"),
+        prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead");
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
@@ -441,6 +467,8 @@
     groupsEl.classList.toggle("locked", running);
     addGroupBtn.disabled = running;
     seqNameEl.disabled = running;
+    prerollInput.disabled = running;
+    leadEl.classList.toggle("na", running && mode === "solo");
     updateVideoLock();
 
     groups.forEach((g, gi)=>{
@@ -715,6 +743,18 @@
   const LOOKAHEAD=25, AHEAD=0.12, queue=[];
   let cur = {gid:null, bar:-1, rep:0};
   let mode = "all", soloId = null;   // "all" = シーケンス全体 / "solo" = 選択中のグループのみ
+  let preroll = 0, firstBeatTime = 0;   // 開始までの空白（秒）と、最初の1打が鳴る時刻
+
+  function readPreroll(){
+    let v = Number(prerollInput.value);
+    if(isNaN(v)) v = 0;
+    v = Math.min(60, Math.max(0, Math.round(v * 100) / 100));
+    prerollInput.value = v.toFixed(2);
+    preroll = v;
+    return v;
+  }
+  const baseStatus = () => (mode === "solo") ? "グループ再生" : "再生中";
+  prerollInput.addEventListener("change", readPreroll);
 
   function plan(){
     if(running && mode === "solo"){
@@ -799,6 +839,14 @@
   let shown = "";
   function draw(){
     if(!running) return;
+    if(firstBeatTime && ctx.currentTime < firstBeatTime){
+      prerollCount.textContent = Math.max(0, firstBeatTime - ctx.currentTime).toFixed(2);
+    }else if(document.body.classList.contains("waiting")){
+      document.body.classList.remove("waiting");
+      leadEl.classList.remove("counting");
+      prerollCount.hidden = true;
+      statusText.textContent = baseStatus();
+    }
     while(queue.length && queue[0].time <= ctx.currentTime){
       const e = queue.shift();
       const key = e.gid + ":" + e.rep + ":" + e.bar;
@@ -865,11 +913,23 @@
     renderGroups();
     resetPointer();
     queue.length = 0;
-    nextTime = ctx.currentTime + 0.06;
+    // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
+    // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
+    const wait = (mode === "all") ? readPreroll() : 0;   // グループ再生には空白を入れない
+    nextTime = ctx.currentTime + 0.06 + wait;
+    firstBeatTime = wait > 0 ? nextTime : 0;
     timer = setInterval(scheduler, LOOKAHEAD);
     requestAnimationFrame(draw);
     document.body.classList.add("running");
-    statusText.textContent = (mode === "solo") ? "グループ再生" : "再生中";
+    if(wait > 0){
+      document.body.classList.add("waiting");
+      leadEl.classList.add("counting");
+      statusText.textContent = "待機中";
+      prerollCount.hidden = false;
+      prerollCount.textContent = wait.toFixed(2);
+    }else{
+      statusText.textContent = baseStatus();
+    }
     updateTransport();
   }
   function stop(completed, fromVideo){
@@ -883,6 +943,10 @@
     resumeActiveId = null;
     renderGroups();
     document.body.classList.remove("running");
+    document.body.classList.remove("waiting");
+    leadEl.classList.remove("counting");
+    prerollCount.hidden = true;
+    firstBeatTime = 0;
     mode = "all"; soloId = null;
     statusText.textContent = completed ? "完了" : "停止中";
     resetPointer();
@@ -1321,6 +1385,7 @@
 
   /* ---------- 初期化 ---------- */
   renderGroups();
+  readPreroll();
   applySeqName();
   updateHistoryUI();
   setTempo(120);

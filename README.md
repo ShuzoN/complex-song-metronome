@@ -84,6 +84,26 @@ groups:
 - 各バージョン（`v1`〜`v16` …）は聴き比べ・差し戻しのため、作者の手元 `versions/` に保持しています
   （`.gitignore` 済みで公開リポジトリには含みません）。新しい版は旧版を上書きせず番号を進めます。
 
+## 開発とプレビュー（メンテナ向け）
+
+変更は **すべてプルリクエスト経由** で行い、`main` へマージされたものが公開ページになります。
+
+- **本番配信**：`main` に push（PR マージ）されると `deploy.yml` が動き、サイトを `gh-pages`
+  ブランチのルートへ配信します。→ https://shuzon.github.io/complex-song-metronome/
+- **PR プレビュー**：PR を開く／更新するたびに `preview.yml` が動き、その時点のページを
+  `gh-pages` の `pr-preview/pr-<番号>/` へ配信し、PR にプレビュー URL を自動コメントします。
+  → `https://shuzon.github.io/complex-song-metronome/pr-preview/pr-<番号>/`
+  PR をクローズ／マージすると、そのプレビューは自動で削除されます。
+
+### 一度だけ必要な設定
+
+1. リポジトリを **Public** にする（無料の GitHub Pages に必須）。
+2. **Settings → Pages → Build and deployment → Source = Deploy from a branch**、
+   Branch = **`gh-pages`** / **`(root)`** を選んで保存。
+   （`gh-pages` ブランチは最初のワークフロー実行時に自動作成されます）
+3. もし Actions の push が権限エラーになる場合は、**Settings → Actions → General →
+   Workflow permissions** を **Read and write permissions** にする。
+
 ## ライセンス
 
 [MIT License](./LICENSE)
