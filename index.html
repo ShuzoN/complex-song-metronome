@@ -326,12 +326,84 @@
 (function(){
   "use strict";
 
+  /* ============================================================================
+     アーキテクチャ（HTML 1ファイル・素の JS・ビルドなし。UI 文言は現状維持）
+
+     エンティティ階層（データ構造）:
+       Sequence      … 曲ひとつ分（name, tempo, preroll, video, groups）
+        └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern）
+            └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
+                └ Rhythm … 1拍子 例 7/8（num, den）。UI 表示は「拍子」
+
+     抽出済みの層（純粋 or 独立。上から下へ一方向依存）:
+       Domain  … エンティティ生成と拍子計算の唯一の真実。DOM も状態も持たない
+       Yaml    … このスキーマ用の最小エンコーダ／パーサ。DOM も状態も持たない
+       History … 汎用の undo/redo（記録内容は capture/apply に委譲）
+       Sound   … AudioContext のライフサイクルとクリック音合成
+       View    … 派生値の描画（拍ドット・パルス・サマリー・時刻整形）
+
+     まだ結合している対話コア（今回は分離しない。理由: この環境では自動検証
+     できず、動画同期の緻密なタイミングを壊しやすい。将来 issue #7 の実装や
+     実機テストと合わせて整理する）:
+       ・アプリ状態（groups / activeId / bpm / seqName / preroll / ytCurrent …）
+       ・renderGroups（編集UIの構築と描画のオーケストレーション）
+       ・scheduler / draw（先読みスケジューラと拍の描画・録画スタンプ）
+       ・Transport（再生ステートマシン: all/solo/lead・cue・全REC・動画頭出し）
+       ・Video（YouTube IFrame API アダプタ）
+     ============================================================================ */
+
   const DENOMS = [3,6,9,12,15,2,4,8,16,32];
   const MIN = 50, MAX = 250;
   const TERMS = [[50,65,"Largo"],[66,75,"Adagio"],[76,107,"Andante"],[108,119,"Moderato"],
                  [120,167,"Allegro"],[168,200,"Presto"],[201,250,"Prestissimo"]];
   const NOTE_NAME = {2:"2分音符",4:"4分音符",8:"8分音符",16:"16分音符",32:"32分音符",
                      3:"2分3連",6:"4分3連",12:"8分3連",9:"全音符÷9",15:"全音符÷15"};
+
+  /* ---------- Domain（純粋：エンティティ生成と拍子計算の唯一の真実。DOM は参照しない） ----------
+     階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
+       Rhythm        {num, den}          … 1拍子（例 7/8）。den ∈ DENOMS, num は 1..den
+       RhythmPattern {rhythms:[Rhythm]}  … グループ内の拍子の並び（YAML の pattern に対応）
+       RhythmGroup   {id,name,reps,cue,pattern}
+     生成はすべてここを通し、reps/cue/name の正規化を1箇所に集約する。 */
+  const Domain = {
+    makeRhythm(num, den){ return {num: Number(num), den: Number(den)}; },
+    // 文字列 "7/8" または {meter} を検証しつつ Rhythm 化。不正なら null（読み込み時の取りこぼし数え上げ用）
+    parseRhythm(v){
+      if(v == null) return null;
+      const m = String(v).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+      if(!m) return null;
+      const num = Number(m[1]), den = Number(m[2]);
+      if(!DENOMS.includes(den)) return null;
+      if(num < 1 || num > den) return null;
+      return {num, den};
+    },
+    formatRhythm(r){ return r.num + "/" + r.den; },
+    rhythmSeconds(den, bpm){ return (60/bpm) * (4/den); },
+    noteName(den){ return NOTE_NAME[den]; },
+    termFor(v){ return (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2]; },
+    makePattern(rhythms){ return {rhythms: (rhythms||[]).map(r=>Domain.makeRhythm(r.num, r.den))}; },
+    makeGroup(spec){
+      spec = spec || {};
+      const rhythms = spec.rhythms || (spec.pattern && spec.pattern.rhythms) || [];
+      const cueRaw = Number(spec.cue);
+      return {
+        id: uid(),
+        name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
+        reps: clampInt(spec.reps, 1, 999, 1),
+        cue: (spec.cue == null || isNaN(cueRaw) || cueRaw < 0) ? null : Math.round(cueRaw*100)/100,
+        pattern: Domain.makePattern(rhythms)
+      };
+    },
+    cloneGroup(g){
+      return {
+        id: uid(),
+        name: g.name + " のコピー",
+        reps: g.reps,
+        cue: g.cue,
+        pattern: {rhythms: g.pattern.rhythms.map(r=>({num:r.num, den:r.den}))}
+      };
+    }
+  };
 
   const $ = id => document.getElementById(id);
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
@@ -352,7 +424,7 @@
   let pickNum = 4, pickDen = 4;          // 「拍子を追加」用のピッカー状態
   let seqName = "シーケンス1";
   let groupSeq = 1;
-  let groups = [{id:uid(), name:"リズムグループ1", bars:[{num:4,den:4}], reps:8, cue:null}];
+  let groups = [Domain.makeGroup({name:"リズムグループ1", rhythms:[{num:4,den:4}], reps:8})];
   let activeId = groups[0].id;
   let resumeActiveId = null;   // 再生前にアクティブだったグループ
   let focusHandleId = null;
@@ -361,17 +433,25 @@
   const findGroup = id => groups.find(g => g.id === id);
 
   /* ---------- 履歴（シーケンスの編集のみ・テンポは対象外） ---------- */
-  const HISTORY_MAX = 60;
-  let past = [], future = [];
+  /* ---------- History（汎用：past/future スタックと undo/redo。何を記録/復元するかは capture/apply に委譲） ----------
+     対象はシーケンスの編集のみ（テンポは対象外）。capture=snapshot・apply=restore で束ねる。 */
+  const History = (() => {
+    const MAX = 60;
+    let past = [], future = [];
+    let capture = () => "", apply = () => {}, onChange = () => {};
+    return {
+      init(o){ capture = o.capture; apply = o.apply; onChange = o.onChange || (()=>{}); },
+      commit(){ past.push(capture()); if(past.length > MAX) past.shift(); future.length = 0; onChange(); },
+      undo(){ if(!past.length) return; future.push(capture()); apply(past.pop()); onChange(); },
+      redo(){ if(!future.length) return; past.push(capture()); apply(future.pop()); onChange(); },
+      canUndo(){ return past.length > 0; },
+      canRedo(){ return future.length > 0; }
+    };
+  })();
+  const commit = () => History.commit();
 
   function snapshot(){
     return JSON.stringify({seqName, groups, activeId, groupSeq, pickNum, pickDen});
-  }
-  function commit(){
-    past.push(snapshot());
-    if(past.length > HISTORY_MAX) past.shift();
-    future.length = 0;
-    updateHistoryUI();
   }
   function restore(s){
     const d = JSON.parse(s);
@@ -381,16 +461,15 @@
     seqNameEl.value = seqName;
     applySeqName();
     if(activeId && !findGroup(activeId)) activeId = null;
-    renderGroups(); syncIdle(); updateHistoryUI();
+    renderGroups(); syncIdle();
   }
-  function undo(){ if(!past.length) return; future.push(snapshot()); restore(past.pop()); }
-  function redo(){ if(!future.length) return; past.push(snapshot()); restore(future.pop()); }
   function updateHistoryUI(){
-    undoBtn.disabled = !past.length || running;
-    redoBtn.disabled = !future.length || running;
+    undoBtn.disabled = !History.canUndo() || running;
+    redoBtn.disabled = !History.canRedo() || running;
   }
-  undoBtn.addEventListener("click", undo);
-  redoBtn.addEventListener("click", redo);
+  History.init({capture: snapshot, apply: restore, onChange: updateHistoryUI});
+  undoBtn.addEventListener("click", ()=>History.undo());
+  redoBtn.addEventListener("click", ()=>History.redo());
 
   /* ---------- シーケンス名 ---------- */
   function applySeqName(){
@@ -416,7 +495,7 @@
     el.className="tick"; el.style.left=((v-MIN)/(MAX-MIN)*100)+"%";
     el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
   });
-  const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
+  const termFor = v => Domain.termFor(v);
 
   function setTempo(v, from){
     v = Math.round(Number(v));
@@ -440,7 +519,7 @@
   function addGroup(){
     commit();
     groupSeq++;
-    const g = {id:uid(), name:"リズムグループ"+groupSeq, bars:[], reps:8, cue:null};
+    const g = Domain.makeGroup({name:"リズムグループ"+groupSeq, reps:8});
     groups.push(g);
     activeId = g.id;
     renderGroups();
@@ -448,12 +527,7 @@
   function duplicateGroup(id){
     commit();
     const i = groups.findIndex(g=>g.id===id);
-    const src = groups[i];
-    const copy = {
-      id:uid(), name:src.name+" のコピー",
-      bars:src.bars.map(b=>({num:b.num, den:b.den})),
-      reps:src.reps, cue:src.cue
-    };
+    const copy = Domain.cloneGroup(groups[i]);
     groups.splice(i+1, 0, copy);
     activeId = copy.id;
     renderGroups(); syncIdle();
@@ -481,14 +555,32 @@
   addGroupBtn.addEventListener("click", addGroup);
 
   /* ---------- 描画 ---------- */
-  function fmtTime(sec){
-    if(sec == null) return "—";
-    const m = Math.floor(sec / 60), r = sec - m * 60;
-    return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
-  }
-  function timesText(g){
-    return "×" + g.reps;
-  }
+  /* ---------- View（派生値の描画：拍ドット・パルス表示・サマリー・時刻整形。表示の更新のみを担う） ---------- */
+  const View = {
+    fmtTime(sec){
+      if(sec == null) return "—";
+      const m = Math.floor(sec / 60), r = sec - m * 60;
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+    },
+    timesText(g){ return "×" + g.reps; },
+    summary(){
+      let total = 0;
+      for(const g of groups) total += g.pattern.rhythms.length * g.reps;
+      seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
+    },
+    paintBeats(n){
+      beatsEl.innerHTML = "";
+      for(let i=0;i<n;i++){
+        const d = document.createElement("span");
+        d.className = "beat" + (i===0 ? " first" : "");
+        beatsEl.appendChild(d);
+      }
+    },
+    showPulse(bar){
+      const rate = Math.round((60/beatSeconds(bar.den))*10)/10;
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+    }
+  };
 
   function renderGroups(){
     groupsEl.innerHTML = "";
@@ -557,12 +649,12 @@
       if(g.id !== activeId){
         const sub = document.createElement("div");
         sub.className = "g-sub";
-        if(!g.bars.length){
+        if(!g.pattern.rhythms.length){
           const c = document.createElement("span");
           c.className = "chip none"; c.textContent = "拍子なし";
           sub.appendChild(c);
         }else{
-          g.bars.forEach((b,bi)=>{
+          g.pattern.rhythms.forEach((b,bi)=>{
             const c = document.createElement("span");
             c.className = "chip"; c.dataset.bi = bi;
             c.textContent = b.num + "/" + b.den;
@@ -572,7 +664,7 @@
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
         times.title = "再生回数";
-        times.textContent = timesText(g);
+        times.textContent = View.timesText(g);
         sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
         card.appendChild(sub);
       }
@@ -613,13 +705,13 @@
 
         const bars = document.createElement("div");
         bars.className = "bars";
-        if(!g.bars.length){
+        if(!g.pattern.rhythms.length){
           const p = document.createElement("p");
           p.className = "empty";
           p.textContent = "下の拍子を追加すると、この順に鳴らします。";
           bars.appendChild(p);
         }
-        g.bars.forEach((b,bi)=>{
+        g.pattern.rhythms.forEach((b,bi)=>{
           const rowb = document.createElement("div");
           rowb.className = "bar"; rowb.dataset.bi = bi;
           const sig = document.createElement("span");
@@ -628,7 +720,7 @@
           const ctl = document.createElement("span");
           ctl.className = "bar-ctl";
           ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>moveBar(g,bi,-1)));
-          ctl.appendChild(mini("↓","下へ移動", bi===g.bars.length-1, ()=>moveBar(g,bi,1)));
+          ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>moveBar(g,bi,1)));
           const k = mini("✕","削除", false, ()=>removeBar(g,bi));
           k.classList.add("kill");
           ctl.appendChild(k);
@@ -660,16 +752,10 @@
       if(el) el.focus();
       focusHandleId = null;
     }
-    updateSummary();
+    View.summary();
     updateTransport();
     updateHistoryUI();
     applyHighlight();
-  }
-
-  function updateSummary(){
-    let total = 0;
-    for(const g of groups) total += g.bars.length * g.reps;
-    seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
   }
 
   /* 動画位置の微調整。連打は1手の履歴にまとめる */
@@ -687,7 +773,7 @@
       if(!(nudgeId === g.id && now - nudgeAt < 2500)) commit();
       nudgeId = g.id; nudgeAt = now;
       g.cue = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
-      label.textContent = fmtTime(g.cue);      // 構造は変わらないので再描画しない
+      label.textContent = View.fmtTime(g.cue);      // 構造は変わらないので再描画しない
     });
     return b;
   }
@@ -719,7 +805,7 @@
     box.appendChild(cueGrabButton(g));
     const at = document.createElement("span");
     at.className = "g-at" + (g.cue == null ? " none" : "");
-    at.textContent = fmtTime(g.cue);
+    at.textContent = View.fmtTime(g.cue);
     at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
     if(g.cue != null){
       box.appendChild(nudge(g, -0.05, at));
@@ -775,7 +861,7 @@
     add.type="button"; add.className="step"; add.textContent="追加";
     add.addEventListener("click", ()=>{
       commit();
-      g.bars.push({num:pickNum, den:pickDen});
+      g.pattern.rhythms.push(Domain.makeRhythm(pickNum, pickDen));
       renderGroups(); syncIdle();
     });
     wrap.append(nSel, slash, dSel, add);
@@ -783,15 +869,16 @@
   }
 
   function moveBar(g, i, dir){
+    const rs = g.pattern.rhythms;
     const j = i + dir;
-    if(j < 0 || j >= g.bars.length) return;
+    if(j < 0 || j >= rs.length) return;
     commit();
-    [g.bars[i], g.bars[j]] = [g.bars[j], g.bars[i]];
+    [rs[i], rs[j]] = [rs[j], rs[i]];
     renderGroups();
   }
   function removeBar(g, i){
     commit();
-    g.bars.splice(i,1);
+    g.pattern.rhythms.splice(i,1);
     renderGroups(); syncIdle();
   }
 
@@ -841,8 +928,32 @@
     renderGroups();
   }
 
+  /* ---------- Sound（純粋：AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
+  const Sound = (() => {
+    let ctx = null;
+    function ensure(){
+      if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if(ctx.state === "suspended") ctx.resume();
+      return ctx;
+    }
+    function now(){ return ctx ? ctx.currentTime : 0; }
+    function click(accent, time, span){
+      const decay = Math.min(0.045, span * 0.55);
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = accent ? 1760 : 880;
+      // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
+      // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
+      gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(time); osc.stop(time + decay + 0.015);
+    }
+    return { ensure, now, click, get ready(){ return !!ctx; } };
+  })();
+
   /* ---------- 再生 ---------- */
-  let ctx=null, running=false, timer=null, finished=false, endTime=0;
+  let running=false, timer=null, finished=false, endTime=0;
   let nextTime=0, beatIdx=0, barIdx=0, repIdx=0, gIdx=0;
   const LOOKAHEAD=25, AHEAD=0.12, queue=[];
   let cur = {gid:null, bar:-1, rep:0};
@@ -864,13 +975,13 @@
 
   function plan(){
     if(running && isSoloMode(mode)){
-      return groups.filter(g => g.id === soloId && g.bars.length);
+      return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
     }
-    return groups.filter(g => g.bars.length);
+    return groups.filter(g => g.pattern.rhythms.length);
   }
   function soloTarget(){
     const g = findGroup(activeId);
-    return (g && g.bars.length) ? g : null;
+    return (g && g.pattern.rhythms.length) ? g : null;
   }
   const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
   function updateTransport(){
@@ -912,43 +1023,31 @@
     }
   }
   function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
-  function beatSeconds(d){ return (60/bpm) * (4/d); }
-
-  function click(accent, time, span){
-    const decay = Math.min(0.045, span * 0.55);
-    const osc = ctx.createOscillator(), gain = ctx.createGain();
-    osc.type = "square";
-    osc.frequency.value = accent ? 1760 : 880;
-    // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
-    // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
-    gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
-    gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(time); osc.stop(time + decay + 0.015);
-  }
+  const beatSeconds = d => Domain.rhythmSeconds(d, bpm);
 
   function scheduler(){
     // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
-    const limit = ctx.currentTime + (document.hidden ? 1.2 : AHEAD);
-    if(finished && ctx.currentTime >= endTime){ stop(true); return; }
+    const limit = Sound.now() + (document.hidden ? 1.2 : AHEAD);
+    if(finished && Sound.now() >= endTime){ stop(true); return; }
     while(!finished && nextTime < limit){
       const gs = plan();
       if(!gs.length){ finished = true; endTime = nextTime; break; }
       if(gIdx >= gs.length) gIdx = 0;
       const g = gs[gIdx];
-      if(barIdx >= g.bars.length) barIdx = 0;
-      const bar = g.bars[barIdx];
+      const rhythms = g.pattern.rhythms;
+      if(barIdx >= rhythms.length) barIdx = 0;
+      const bar = rhythms[barIdx];
       if(beatIdx >= bar.num) beatIdx = 0;
 
       const span = beatSeconds(bar.den);
-      click(beatIdx === 0, nextTime, span);
+      Sound.click(beatIdx === 0, nextTime, span);
       queue.push({time:nextTime, gid:g.id, rep:repIdx, bar:barIdx, beat:beatIdx, meter:bar});
       nextTime += span;
 
       beatIdx++;
       if(beatIdx >= bar.num){
         beatIdx = 0; barIdx++;
-        if(barIdx >= g.bars.length){
+        if(barIdx >= rhythms.length){
           barIdx = 0; repIdx++;
           if(repIdx >= g.reps){
             repIdx = 0; gIdx++;
@@ -962,15 +1061,15 @@
   let shown = "";
   function draw(){
     if(!running) return;
-    if(firstBeatTime && ctx.currentTime < firstBeatTime){
-      prerollCount.textContent = Math.max(0, firstBeatTime - ctx.currentTime).toFixed(2);
+    if(firstBeatTime && Sound.now() < firstBeatTime){
+      prerollCount.textContent = Math.max(0, firstBeatTime - Sound.now()).toFixed(2);
     }else if(document.body.classList.contains("waiting")){
       document.body.classList.remove("waiting");
       leadEl.classList.remove("counting");
       prerollCount.hidden = true;
       statusText.textContent = baseStatus();
     }
-    while(queue.length && queue[0].time <= ctx.currentTime){
+    while(queue.length && queue[0].time <= Sound.now()){
       const e = queue.shift();
       const key = e.gid + ":" + e.rep + ":" + e.bar;
       if(key !== shown){
@@ -980,14 +1079,14 @@
           stampCue(e.gid, e.time);
         }
         cur = {gid:e.gid, bar:e.bar, rep:e.rep};
-        paintBeats(e.meter.num);
-        showPulse(e.meter);
+        View.paintBeats(e.meter.num);
+        View.showPulse(e.meter);
         applyHighlight();
       }
       const dots = beatsEl.children;
       for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === e.beat);
     }
-    if(finished && ctx.currentTime >= endTime){ stop(true); return; }
+    if(finished && Sound.now() >= endTime){ stop(true); return; }
     requestAnimationFrame(draw);
   }
 
@@ -1001,29 +1100,17 @@
       });
       const t = card.querySelector('[data-role="times"]');
       if(t && g){
-        t.textContent = on ? (cur.rep+1) + " / " + g.reps : timesText(g);
+        t.textContent = on ? (cur.rep+1) + " / " + g.reps : View.timesText(g);
       }
     });
   }
 
-  function paintBeats(n){
-    beatsEl.innerHTML = "";
-    for(let i=0;i<n;i++){
-      const d = document.createElement("span");
-      d.className = "beat" + (i===0 ? " first" : "");
-      beatsEl.appendChild(d);
-    }
-  }
-  function showPulse(bar){
-    const rate = Math.round((60/beatSeconds(bar.den))*10)/10;
-    pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
-  }
   function syncIdle(){
     if(running) return;
     const gs = plan();
-    const bar = gs.length ? gs[0].bars[0] : {num:pickNum, den:pickDen};
-    paintBeats(bar.num);
-    showPulse(bar);
+    const bar = gs.length ? gs[0].pattern.rhythms[0] : {num:pickNum, den:pickDen};
+    View.paintBeats(bar.num);
+    View.showPulse(bar);
     updateTransport();
   }
 
@@ -1032,7 +1119,7 @@
 
   function firstGroupFor(kind){
     if(kind !== "all") return soloTarget();
-    return groups.filter(g => g.bars.length)[0] || null;
+    return groups.filter(g => g.pattern.rhythms.length)[0] || null;
   }
   function cueOf(kind){
     const g = firstGroupFor(kind);
@@ -1066,12 +1153,12 @@
     let t = null;
     try{ t = ytPlayer.getCurrentTime(); }catch(err){}
     if(t == null || isNaN(t)) return;
-    const late = Math.max(0, ctx.currentTime - evTime);   // 取りこぼしたフレームぶんを引く
+    const late = Math.max(0, Sound.now() - evTime);   // 取りこぼしたフレームぶんを引く
     g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
     const card = groupsEl.querySelector('[data-id="' + gid + '"]');
     const at = card && card.querySelector(".g-at");
     if(at){                       // 再描画せず表示だけ差し替える
-      at.textContent = fmtTime(g.cue);
+      at.textContent = View.fmtTime(g.cue);
       at.classList.remove("none");
       at.classList.add("hit");
     }
@@ -1169,8 +1256,7 @@
   function beginPlayback(kind, opts){
     if(kind !== "all" && !soloTarget()) return;
     if(kind === "all" && !plan().length) return;
-    if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if(ctx.state === "suspended") ctx.resume();
+    Sound.ensure();
     mode = (kind === "all") ? "all" : kind;
     soloId = (mode === "all") ? null : activeId;
     running = true; shown = "";
@@ -1185,7 +1271,7 @@
     const o = opts || {};
     const wait = (mode === "all" && !o.skipWait) ? readPreroll() : 0;
     const adjust = o.adjust || 0;
-    nextTime = Math.max(ctx.currentTime + 0.005, ctx.currentTime + 0.06 + wait + adjust);
+    nextTime = Math.max(Sound.now() + 0.005, Sound.now() + 0.06 + wait + adjust);
     firstBeatTime = wait > 0 ? nextTime : 0;
     timer = setInterval(scheduler, LOOKAHEAD);
     requestAnimationFrame(draw);
@@ -1263,7 +1349,7 @@
     beginPlayback(kind);
   }
 
-  document.addEventListener("visibilitychange", ()=>{ if(running && ctx) scheduler(); });
+  document.addEventListener("visibilitychange", ()=>{ if(running && Sound.ready) scheduler(); });
 
   recBtn.addEventListener("click", startRec);
 
@@ -1274,10 +1360,10 @@
     const mod = e.metaKey || e.ctrlKey;
     if(mod && e.key.toLowerCase() === "z"){
       e.preventDefault();
-      e.shiftKey ? redo() : undo();
+      e.shiftKey ? History.redo() : History.undo();
       return;
     }
-    if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); redo(); return; }
+    if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); History.redo(); return; }
     if(e.code !== "Space") return;
     const t = e.target.tagName;
     if(t==="INPUT" || t==="SELECT" || t==="BUTTON") return;
@@ -1287,24 +1373,112 @@
 
   /* ================= YAML 保存 / 読み込み ================= */
 
-  /* --- 書き出し --- */
-  function yamlScalar(v){
-    const t = String(v);
-    const needsQuote = t === "" || /^\s|\s$/.test(t) || /[:#\[\]{},&*!|>'"%@`]/.test(t)
-      || /^(true|false|null|yes|no|on|off|~|-|\d)/i.test(t);
-    return needsQuote ? '"' + t.replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"' : t;
-  }
+  /* ---------- Yaml（純粋：このスキーマ用の最小エンコーダ／パーサ。DOM もアプリ状態も参照しない） ----------
+     scalarStr … 値を必要なときだけクォートして書き出す
+     parse     … テキストを素の JS オブジェクト（map/list/scalar）へ。ドメインへの変換は applyDoc 側 */
+  const Yaml = (() => {
+    function scalarStr(v){
+      const t = String(v);
+      const needsQuote = t === "" || /^\s|\s$/.test(t) || /[:#\[\]{},&*!|>'"%@`]/.test(t)
+        || /^(true|false|null|yes|no|on|off|~|-|\d)/i.test(t);
+      return needsQuote ? '"' + t.replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"' : t;
+    }
+    function stripComment(line){
+      let q = null, out = "";
+      for(let i=0;i<line.length;i++){
+        const c = line[i];
+        if(q){ out += c; if(c === q) q = null; continue; }
+        if(c === '"' || c === "'"){ q = c; out += c; continue; }
+        if(c === "#" && (i === 0 || /\s/.test(line[i-1]))) break;
+        out += c;
+      }
+      return out.replace(/\s+$/, "");
+    }
+    function unquote(t){
+      if(/^".*"$/s.test(t)) return t.slice(1,-1).replace(/\\"/g,'"').replace(/\\\\/g,"\\");
+      if(/^'.*'$/s.test(t)) return t.slice(1,-1).replace(/''/g,"'");
+      return t;
+    }
+    function scalar(t){
+      t = t.trim();
+      if(t.startsWith("[") && t.endsWith("]")){
+        const inner = t.slice(1,-1).trim();
+        return inner === "" ? [] : inner.split(",").map(x=>scalar(x.trim()));
+      }
+      if(/^["']/.test(t)) return unquote(t);
+      if(t === "" || t === "~" || t === "null") return null;
+      if(t === "true") return true;
+      if(t === "false") return false;
+      if(/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+      return t;
+    }
+    function parse(text){
+      const lines = [];
+      text.replace(/\r\n?/g,"\n").split("\n").forEach((raw,idx)=>{
+        const line = stripComment(raw);
+        if(!line.trim() || /^(---|\.\.\.)\s*$/.test(line.trim())) return;
+        lines.push({indent: line.match(/^ */)[0].length, text: line.trim(), no: idx+1});
+      });
+      let i = 0;
+      const isItem = l => l.text === "-" || l.text.startsWith("- ");
+      const looksMap = t => /^[^\s].*?:(\s|$)/.test(t);
+
+      function block(indent){
+        if(i >= lines.length) return null;
+        return isItem(lines[i]) ? list(indent) : map(indent);
+      }
+      function map(indent){
+        const obj = {};
+        while(i < lines.length && lines[i].indent === indent && !isItem(lines[i])){
+          const l = lines[i];
+          const m = l.text.match(/^([^:]+):\s*(.*)$/);
+          if(!m) throw new Error(l.no + " 行目を解釈できません: " + l.text);
+          const key = m[1].trim(), rest = m[2].trim();
+          if(rest === ""){
+            i++;
+            obj[key] = (i < lines.length && lines[i].indent > indent) ? block(lines[i].indent) : null;
+          }else{
+            obj[key] = scalar(rest); i++;
+          }
+        }
+        return obj;
+      }
+      function list(indent){
+        const arr = [];
+        while(i < lines.length && lines[i].indent === indent && isItem(lines[i])){
+          const l = lines[i];
+          const off = l.text.match(/^-\s*/)[0].length;
+          const rest = l.text.slice(off).trim();
+          if(rest === ""){
+            i++;
+            arr.push(i < lines.length && lines[i].indent > indent ? block(lines[i].indent) : null);
+          }else if(looksMap(rest)){
+            const virt = l.indent + off;
+            lines[i] = {indent: virt, text: rest, no: l.no};
+            arr.push(map(virt));
+          }else{
+            arr.push(scalar(rest)); i++;
+          }
+        }
+        return arr;
+      }
+      return block(lines.length ? lines[0].indent : 0);
+    }
+    return { scalarStr, parse };
+  })();
+
+  /* --- 書き出し（アプリ状態を YAML 文字列にする） --- */
   function toYaml(){
     const L = ["version: 1", "kind: metronome.sequence", "",
-               "name: " + yamlScalar(seqName), "tempo: " + bpm];
+               "name: " + Yaml.scalarStr(seqName), "tempo: " + bpm];
     if(preroll > 0) L.push("preroll: " + preroll.toFixed(2));
-    if(ytCurrent) L.push("video: " + yamlScalar(videoUrl()));
+    if(ytCurrent) L.push("video: " + Yaml.scalarStr(videoUrl()));
     L.push("", "groups:");
     groups.forEach(g=>{
-      L.push("  - name: " + yamlScalar(g.name));
+      L.push("  - name: " + Yaml.scalarStr(g.name));
       L.push("    repeat: " + g.reps);
       if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
-      L.push("    pattern: [" + g.bars.map(b=>b.num+"/"+b.den).join(", ") + "]");
+      L.push("    pattern: [" + g.pattern.rhythms.map(Domain.formatRhythm).join(", ") + "]");
     });
     return L.join("\n") + "\n";
   }
@@ -1313,104 +1487,11 @@
     return base + ".metronome.yml";
   }
 
-  /* --- 最小YAMLパーサ（このスキーマ用） --- */
-  function stripComment(line){
-    let q = null, out = "";
-    for(let i=0;i<line.length;i++){
-      const c = line[i];
-      if(q){ out += c; if(c === q) q = null; continue; }
-      if(c === '"' || c === "'"){ q = c; out += c; continue; }
-      if(c === "#" && (i === 0 || /\s/.test(line[i-1]))) break;
-      out += c;
-    }
-    return out.replace(/\s+$/, "");
-  }
-  function unquote(t){
-    if(/^".*"$/s.test(t)) return t.slice(1,-1).replace(/\\"/g,'"').replace(/\\\\/g,"\\");
-    if(/^'.*'$/s.test(t)) return t.slice(1,-1).replace(/''/g,"'");
-    return t;
-  }
-  function scalar(t){
-    t = t.trim();
-    if(t.startsWith("[") && t.endsWith("]")){
-      const inner = t.slice(1,-1).trim();
-      return inner === "" ? [] : inner.split(",").map(x=>scalar(x.trim()));
-    }
-    if(/^["']/.test(t)) return unquote(t);
-    if(t === "" || t === "~" || t === "null") return null;
-    if(t === "true") return true;
-    if(t === "false") return false;
-    if(/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
-    return t;
-  }
-  function parseYaml(text){
-    const lines = [];
-    text.replace(/\r\n?/g,"\n").split("\n").forEach((raw,idx)=>{
-      const line = stripComment(raw);
-      if(!line.trim() || /^(---|\.\.\.)\s*$/.test(line.trim())) return;
-      lines.push({indent: line.match(/^ */)[0].length, text: line.trim(), no: idx+1});
-    });
-    let i = 0;
-    const isItem = l => l.text === "-" || l.text.startsWith("- ");
-    const looksMap = t => /^[^\s].*?:(\s|$)/.test(t);
-
-    function block(indent){
-      if(i >= lines.length) return null;
-      return isItem(lines[i]) ? list(indent) : map(indent);
-    }
-    function map(indent){
-      const obj = {};
-      while(i < lines.length && lines[i].indent === indent && !isItem(lines[i])){
-        const l = lines[i];
-        const m = l.text.match(/^([^:]+):\s*(.*)$/);
-        if(!m) throw new Error(l.no + " 行目を解釈できません: " + l.text);
-        const key = m[1].trim(), rest = m[2].trim();
-        if(rest === ""){
-          i++;
-          obj[key] = (i < lines.length && lines[i].indent > indent) ? block(lines[i].indent) : null;
-        }else{
-          obj[key] = scalar(rest); i++;
-        }
-      }
-      return obj;
-    }
-    function list(indent){
-      const arr = [];
-      while(i < lines.length && lines[i].indent === indent && isItem(lines[i])){
-        const l = lines[i];
-        const off = l.text.match(/^-\s*/)[0].length;
-        const rest = l.text.slice(off).trim();
-        if(rest === ""){
-          i++;
-          arr.push(i < lines.length && lines[i].indent > indent ? block(lines[i].indent) : null);
-        }else if(looksMap(rest)){
-          const virt = l.indent + off;
-          lines[i] = {indent: virt, text: rest, no: l.no};
-          arr.push(map(virt));
-        }else{
-          arr.push(scalar(rest)); i++;
-        }
-      }
-      return arr;
-    }
-    const doc = block(lines.length ? lines[0].indent : 0);
-    return doc;
-  }
-
   /* --- 取り込み --- */
   function clampInt(v, lo, hi, fallback){
     const n = Math.round(Number(v));
     if(isNaN(n)) return fallback;
     return Math.min(hi, Math.max(lo, n));
-  }
-  function parseMeter(v){
-    if(v == null) return null;
-    const m = String(v).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-    if(!m) return null;
-    const num = Number(m[1]), den = Number(m[2]);
-    if(!DENOMS.includes(den)) return null;
-    if(num < 1 || num > den) return null;
-    return {num, den};
   }
   function applyDoc(doc){
     if(!doc || typeof doc !== "object" || Array.isArray(doc)) throw new Error("シーケンスの形式ではありません");
@@ -1424,21 +1505,19 @@
       const g = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
       const pat = g.pattern;
       const items = Array.isArray(pat) ? pat : (pat == null ? [] : [pat]);
-      const bars = [];
+      const rhythms = [];
       items.forEach(it=>{
-        const b = parseMeter((it && typeof it === "object") ? it.meter : it);
-        if(b) bars.push(b); else dropped++;
+        const b = Domain.parseRhythm((it && typeof it === "object") ? it.meter : it);
+        if(b) rhythms.push(b); else dropped++;
       });
-      const cueRaw = Number(g.cue);
-      return {
-        id: uid(),
+      return Domain.makeGroup({
         name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
-        reps: clampInt(g.repeat, 1, 999, 1),
-        cue: (g.cue == null || isNaN(cueRaw) || cueRaw < 0) ? null : Math.round(cueRaw*100)/100,
-        bars
-      };
+        reps: g.repeat,
+        cue: g.cue,
+        rhythms
+      });
     });
-    if(!loaded.length) { loaded.push({id:uid(), name:"リズムグループ1", reps:1, bars:[]}); notes.push("グループが空だったので、空のグループを1つ作りました"); }
+    if(!loaded.length) { loaded.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
     if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + DENOMS.join(",") + "、分子は 1〜分母）");
 
     if(running) stop(false);
@@ -1460,7 +1539,7 @@
     renderGroups();
     syncIdle();
 
-    const bars = loaded.reduce((n,g)=>n+g.bars.length, 0);
+    const bars = loaded.reduce((n,g)=>n+g.pattern.rhythms.length, 0);
     return ["読み込みました：" + loaded.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
   }
 
@@ -1475,7 +1554,7 @@
   }
   function readText(text){
     try{
-      say(applyDoc(parseYaml(text)), false);
+      say(applyDoc(Yaml.parse(text)), false);
     }catch(err){
       say("読み込めませんでした：" + err.message, true);
     }
