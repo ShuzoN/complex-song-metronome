@@ -339,10 +339,13 @@
                    snapshot/restore の一定インタフェースで扱う（DOM も再生制御も持たない）
        infra     … ブラウザ API アダプタ。Yaml / SoundGateway / ClockGateway /
                    FileGateway / VideoGateway。結果は戻り値・例外・コールバックで返す
-       usecase   … 操作の集約と DTO⇔entity 変換。HistoryService / StoreService /
-                   SequenceMapper / SequenceIO / PlaybackScheduler / VideoSync / Transport
-       ui        … DOM のみ。操作は usecase を呼び、Store.subscribe と Transport の view
-                   コールバックを購読して再描画する
+       usecase   … 操作の集約と DTO⇔entity 変換。編集操作はエンティティ階層ごとに分割
+                   （SequenceService / GroupService / PatternService / RhythmService）。
+                   ほかに HistoryService / SequenceMapper / SequenceIO /
+                   PlaybackScheduler / VideoSync / Transport
+       ui        … DOM のみ。責務ごとに分割（RhythmView / PatternView / GroupView /
+                   SequenceView と TempoView / TransportView / IoView / VideoView）。
+                   操作は各サービスを呼び、Store.subscribe と Transport の view を購読して再描画
        bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画
 
      エンティティ階層（データ構造）:
@@ -808,7 +811,9 @@
      usecase … 操作インタフェースの集約と DTO⇔entity 変換。ui からはここだけを呼び、
      infra は内向き（コールバック／戻り値）で使う。DOM 反映は ui に委譲する。
        HistoryService … 汎用 undo/redo（capture/apply は Store.snapshot/restore に配線）
-       StoreService   … 編集操作の集約（各操作は commit＋Store.apply を束ねる）
+       編集操作サービス … エンティティ階層ごとに分割。SequenceService（全体設定＋グループ集合）/
+                     GroupService（名前・くり返し・cue）/ PatternService（拍子の並び）/
+                     RhythmService（追加ピッカー）。各操作は commit＋Store.apply を束ねる
        SequenceMapper … entity ⇔ 保存用 DTO（reps⇔repeat の対応もここ）
        SequenceIO     … 保存／読込のオーケストレーション（結果メッセージを戻り値で返す）
        PlaybackScheduler … 先読みスケジューラ（クリック予約とビートイベント列 queue）
@@ -831,12 +836,34 @@
     };
   })();
 
-  /* ---------- StoreService（編集操作の集約。UI はこれだけを呼ぶ。meta は UI への再描画ヒント） ----------
-     meta フラグ：render=グループ再描画 / idle=停止時プレビュー更新 / tempo=テンポ表示 /
-                  preroll=空白入力の整形 / seqName=名前入力＋タイトル / seqTitle=タイトルのみ /
-                  focusHandle=並び替え後にフォーカスするハンドルの id */
-  const StoreService = (() => {
+  /* ---------- 編集操作サービス（エンティティ階層ごとに責務を分割。UI はこれらを呼ぶ） ----------
+     Store.apply の meta フラグ（UI への再描画ヒント）：
+       render=グループ再描画 / idle=停止時プレビュー更新 / tempo=テンポ表示 /
+       preroll=空白入力の整形 / seqName=名前入力＋タイトル / seqTitle=タイトルのみ /
+       focusHandle=並び替え後にフォーカスするハンドルの id
+     各サービスは HistoryService.commit()（テンポ・名前入力中・微調整・ピッカーを除く）と
+     Store.apply() を束ね、DOM には触れない。 */
+
+  /* SequenceService … シーケンス全体：全体設定（名前/テンポ/空白）とグループ集合の操作 */
+  const SequenceService = (() => {
     return {
+      setName(name){
+        Store.apply(s => { s.seqName = name; }, {seqTitle:true});
+      },
+      setTempo(v, from){            // テンポは履歴対象外
+        const cur = Store.getState().bpm;
+        v = Math.round(Number(v));
+        if(isNaN(v)) v = cur;
+        const bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, v));
+        Store.apply({bpm}, {tempo:true, idle:true, from});
+      },
+      setPreroll(raw){              // 空白（秒）。0..60 に丸めて 2桁へ。meta で入力欄も整形
+        let v = Number(raw);
+        if(isNaN(v)) v = 0;
+        v = Math.min(60, Math.max(0, Math.round(v * 100) / 100));
+        Store.apply({preroll: v}, {preroll:true});
+        return v;
+      },
       addGroup(){
         HistoryService.commit();
         Store.apply(s => {
@@ -874,61 +901,6 @@
       toggleActive(id){
         Store.apply(s => { s.activeId = (s.activeId === id) ? null : id; }, {render:true});
       },
-      setReps(id, value){
-        HistoryService.commit();
-        Store.apply(s => {
-          const g = s.groups.find(x=>x.id===id);
-          let v = Math.round(Number(value));
-          if(isNaN(v)) v = 1;
-          g.reps = Math.min(999, Math.max(1, v));
-        }, {render:true});
-      },
-      setGroupName(id, name){
-        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.name = name; }, {});
-      },
-      addBar(id, num, den){
-        HistoryService.commit();
-        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
-      },
-      moveBar(id, i, dir){
-        const g = Store.findGroup(id);
-        const rs = g.pattern.rhythms;
-        const j = i + dir;
-        if(j < 0 || j >= rs.length) return;
-        HistoryService.commit();
-        Store.apply(() => { [rs[i], rs[j]] = [rs[j], rs[i]]; }, {render:true});
-      },
-      removeBar(id, i){
-        HistoryService.commit();
-        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
-      },
-      setCue(id, value){            // REC 記録・解除（commit＋再描画）
-        HistoryService.commit();
-        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {render:true});
-      },
-      nudgeCue(id, value){          // ± 微調整（commit は呼び出し側で連打をまとめる。再描画なし）
-        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {});
-      },
-      setTempo(v, from){            // テンポは履歴対象外
-        const cur = Store.getState().bpm;
-        v = Math.round(Number(v));
-        if(isNaN(v)) v = cur;
-        const bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, v));
-        Store.apply({bpm}, {tempo:true, idle:true, from});
-      },
-      setSeqName(name){
-        Store.apply(s => { s.seqName = name; }, {seqTitle:true});
-      },
-      setPreroll(raw){              // 空白（秒）。0..60 に丸めて 2桁へ。meta で入力欄も整形
-        let v = Number(raw);
-        if(isNaN(v)) v = 0;
-        v = Math.min(60, Math.max(0, Math.round(v * 100) / 100));
-        Store.apply({preroll: v}, {preroll:true});
-        return v;
-      },
-      setPicker(num, den){          // 「拍子を追加」ピッカー。再描画は呼び出し側で（syncIdle）
-        Store.apply(s => { if(num != null) s.pickNum = num; if(den != null) s.pickDen = den; }, {});
-      },
       // 読み込んだ Sequence でまるごと差し替える（applyDoc 相当の副作用オーケストレーション）
       replaceSequence(sequence, notes, rawVideo){
         if(Transport.running()) Transport.stop(false);
@@ -939,13 +911,69 @@
           s.groupSeq = sequence.groups.length;
           s.activeId = null;
         }, {seqName:true});
-        StoreService.setTempo(sequence.tempo);
-        StoreService.setPreroll(sequence.preroll);
+        SequenceService.setTempo(sequence.tempo);
+        SequenceService.setPreroll(sequence.preroll);
         if(rawVideo != null){
           const v = VideoGateway.parse(rawVideo);
           if(v) VideoGateway.mount(v); else notes.push("video のURLを読めませんでした");
         }
         Store.apply(null, {render:true, idle:true});
+      }
+    };
+  })();
+
+  /* GroupService … リズムグループ単体の属性：名前・くり返し・動画位置（cue） */
+  const GroupService = (() => {
+    return {
+      setName(id, name){
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.name = name; }, {});
+      },
+      setReps(id, value){
+        HistoryService.commit();
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          let v = Math.round(Number(value));
+          if(isNaN(v)) v = 1;
+          g.reps = Math.min(999, Math.max(1, v));
+        }, {render:true});
+      },
+      setCue(id, value){            // REC 記録・解除（commit＋再描画）
+        HistoryService.commit();
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {render:true});
+      },
+      nudgeCue(id, value){          // ± 微調整（commit は呼び出し側で連打をまとめる。再描画なし）
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {});
+      }
+    };
+  })();
+
+  /* PatternService … リズムパターン（グループ内の拍子の並び）の編集 */
+  const PatternService = (() => {
+    return {
+      addRhythm(id, num, den){
+        HistoryService.commit();
+        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
+      },
+      moveRhythm(id, i, dir){
+        const g = Store.findGroup(id);
+        const rs = g.pattern.rhythms;
+        const j = i + dir;
+        if(j < 0 || j >= rs.length) return;
+        HistoryService.commit();
+        Store.apply(() => { [rs[i], rs[j]] = [rs[j], rs[i]]; }, {render:true});
+      },
+      removeRhythm(id, i){
+        HistoryService.commit();
+        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
+      }
+    };
+  })();
+
+  /* RhythmService … 1拍子（リズム）を組むための「拍子を追加」ピッカー状態（再描画は呼び出し側で） */
+  const RhythmService = (() => {
+    return {
+      setPicker(num, den){
+        Store.apply(s => { if(num != null) s.pickNum = num; if(den != null) s.pickDen = den; }, {});
       }
     };
   })();
@@ -1030,7 +1058,7 @@
     // 生テキスト → 取り込み。成功メッセージ（注記込み）を返す。失敗は例外
     function importText(text){
       const { sequence, notes, rawVideo } = SequenceMapper.toEntity(Yaml.parse(text));
-      StoreService.replaceSequence(sequence, notes, rawVideo);   // video 読めなければ notes に注記が追加される
+      SequenceService.replaceSequence(sequence, notes, rawVideo);   // video 読めなければ notes に注記が追加される
       const bars = Domain.totalBars(sequence.groups);
       return ["読み込みました：" + sequence.groups.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
     }
@@ -1402,308 +1430,89 @@
 
 
   /* ========================================================================
-     ui … DOM のみ。操作は StoreService/Transport を呼び、状態変化は Store.subscribe と
-     Transport の view コールバックを購読して再描画する。ビジネスロジックは持たない。
+     ui … DOM のみ。責務ごとにビュー部品へ分割し、操作は各サービス／Transport を呼び、
+     状態変化は Store.subscribe と Transport の view コールバックを購読して再描画する。
+     ビジネスロジックは持たない。エンティティ階層に沿った分割：
+       RhythmView   … 1拍子（チップ／編集行）      ← Rhythm
+       PatternView  … 拍子の並び＋追加ピッカー      ← RhythmPattern
+       GroupView    … グループのカード＋動画位置     ← RhythmGroup
+       SequenceView … グループ一覧・サマリー・名前・履歴・並び替え ← Sequence
+     ほかは責務ごとに TempoView / TransportView / IoView / VideoView へ分割。
      ======================================================================== */
-  const Ui = (() => {
-    // ---- DOM 参照 ----
-    const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
-    const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
-    const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
-          prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
-    const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
-    const seqNameEl=$("seqName");
-    const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
-          ioFile=$("ioFile"), ioMsg=$("ioMsg");
-    const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytOpen=$("ytOpen"), ytMsg=$("ytMsg");
 
-    const state = () => Store.getState();
-    const findGroup = id => Store.findGroup(id);
-    let focusHandleId = null;
+  // ---- 共有の DOM 参照 ----
+  const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
+  const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
+  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
+        prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
+  const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
+  const seqNameEl=$("seqName");
+  const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
+        ioFile=$("ioFile"), ioMsg=$("ioMsg");
+  const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytOpen=$("ytOpen"), ytMsg=$("ytMsg");
 
-    /* ---------- View（派生値の描画：拍ドット・パルス表示・サマリー・時刻整形。表示の更新のみ） ---------- */
-    const View = {
-      fmtTime(sec){
-        if(sec == null) return "—";
-        const m = Math.floor(sec / 60), r = sec - m * 60;
-        return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
-      },
-      timesText(g){ return "×" + g.reps; },
-      summary(){
-        const c = Domain.summaryCounts(state().groups);
-        seqSum.textContent = c.groups + " グループ ・ 全 " + c.bars + " 小節";
-      },
-      paintBeats(n){
-        beatsEl.innerHTML = "";
-        for(let i=0;i<n;i++){
-          const d = document.createElement("span");
-          d.className = "beat" + (i===0 ? " first" : "");
-          beatsEl.appendChild(d);
-        }
-      },
-      showPulse(bar){
-        const rate = Math.round((60/Domain.rhythmSeconds(bar.den, state().bpm))*10)/10;
-        pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+  // ---- 共有ヘルパ ----
+  const state = () => Store.getState();
+  const findGroup = id => Store.findGroup(id);
+  let focusHandleId = null;                   // 並び替え後にフォーカスするハンドル
+  // 表示用の整形（純粋）
+  const Fmt = {
+    time(sec){
+      if(sec == null) return "—";
+      const m = Math.floor(sec / 60), r = sec - m * 60;
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+    },
+    times(g){ return "×" + g.reps; }
+  };
+  function mini(label, aria, disabled, fn){
+    const b=document.createElement("button");
+    b.type="button"; b.className="mini"; b.textContent=label;
+    b.setAttribute("aria-label",aria); b.disabled=disabled;
+    b.addEventListener("click", fn);
+    return b;
+  }
+
+  /* ---------- RhythmView（リズム：1拍子の描画） ---------- */
+  const RhythmView = {
+    chip(b, bi){                               // 折りたたみ時の拍子チップ
+      const c = document.createElement("span");
+      c.className = "chip"; c.dataset.bi = bi;
+      c.textContent = b.num + "/" + b.den;
+      return c;
+    },
+    barRow(g, b, bi){                          // 展開時の編集行（上下移動・削除つき）
+      const rowb = document.createElement("div");
+      rowb.className = "bar"; rowb.dataset.bi = bi;
+      const sig = document.createElement("span");
+      sig.className = "bar-sig";
+      sig.innerHTML = b.num + ' <em>/</em> ' + b.den;
+      const ctl = document.createElement("span");
+      ctl.className = "bar-ctl";
+      ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>PatternService.moveRhythm(g.id,bi,-1)));
+      ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>PatternService.moveRhythm(g.id,bi,1)));
+      const k = mini("✕","削除", false, ()=>PatternService.removeRhythm(g.id,bi));
+      k.classList.add("kill");
+      ctl.appendChild(k);
+      rowb.append(sig, ctl);
+      return rowb;
+    }
+  };
+
+  /* ---------- PatternView（リズムパターン：拍子の並びの編集 ＋ 追加ピッカー） ---------- */
+  const PatternView = {
+    bars(g){
+      const bars = document.createElement("div");
+      bars.className = "bars";
+      if(!g.pattern.rhythms.length){
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = "下の拍子を追加すると、この順に鳴らします。";
+        bars.appendChild(p);
       }
-    };
-
-    function applySeqName(){
-      document.title = (state().seqName.trim() || "無題のシーケンス") + " — メトロノーム";
-    }
-    function renderTempo(from){
-      const bpm = state().bpm;
-      bpmView.textContent = bpm;
-      termView.textContent = Domain.termFor(bpm);
-      if(from !== "range") range.value = bpm;
-      if(from !== "input") input.value = bpm;
-      range.style.setProperty("--p", ((bpm-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%");
-    }
-    function readPreroll(){ return StoreService.setPreroll(prerollInput.value); }
-
-    /* ---------- グループ描画 ---------- */
-    function renderGroups(){
-      const running = Transport.running();
-      const st = state();
-      groupsEl.innerHTML = "";
-      groupsEl.classList.toggle("locked", running);
-      addGroupBtn.disabled = running;
-      seqNameEl.disabled = running;
-      prerollInput.disabled = running;
-      leadEl.classList.toggle("na", running && Transport.isSolo());
-      updateVideoLock();
-
-      st.groups.forEach((g, gi)=>{
-        const card = document.createElement("article");
-        card.className = "group" + (g.id === st.activeId ? " active" : "");
-        card.dataset.id = g.id;
-        card.tabIndex = 0;
-
-        /* header */
-        const head = document.createElement("div");
-        head.className = "g-head";
-
-        const handle = document.createElement("button");
-        handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
-        handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
-        handle.disabled = running;
-        handle.addEventListener("pointerdown", e=>startDrag(e, gi, card));
-        handle.addEventListener("keydown", e=>{
-          if(e.key === "ArrowUp"){ e.preventDefault(); StoreService.moveGroup(gi, gi-1); }
-          if(e.key === "ArrowDown"){ e.preventDefault(); StoreService.moveGroup(gi, gi+1); }
-        });
-        head.appendChild(handle);
-
-        if(g.id === st.activeId){
-          const name = document.createElement("input");
-          name.className = "g-name"; name.type = "text"; name.value = g.name;
-          name.setAttribute("aria-label", "リズムグループ名");
-          let typing = false;
-          name.addEventListener("focus", ()=>{ typing = false; });
-          name.addEventListener("blur", ()=>{ typing = false; });
-          name.addEventListener("input", e=>{
-            if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1回分の履歴にまとめる
-            StoreService.setGroupName(g.id, e.target.value);
-          });
-          head.appendChild(name);
-
-          const acts = document.createElement("span");
-          acts.className = "g-actions";
-          acts.appendChild(mini("⧉","このリズムグループを複製", false, ()=>StoreService.duplicateGroup(g.id)));
-          const del = mini("✕","このリズムグループを削除", st.groups.length <= 1, ()=>StoreService.removeGroup(g.id));
-          del.classList.add("kill");
-          acts.appendChild(del);
-          head.appendChild(acts);
-        }else{
-          const title = document.createElement("span");
-          title.className = "g-title";
-          title.textContent = g.name;
-          head.appendChild(title);
-
-          const cueBox = document.createElement("span");
-          cueBox.className = "g-cue";
-          cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
-          head.appendChild(cueBox);
-        }
-        card.appendChild(head);
-
-        /* collapsed summary */
-        if(g.id !== st.activeId){
-          const sub = document.createElement("div");
-          sub.className = "g-sub";
-          if(!g.pattern.rhythms.length){
-            const c = document.createElement("span");
-            c.className = "chip none"; c.textContent = "拍子なし";
-            sub.appendChild(c);
-          }else{
-            g.pattern.rhythms.forEach((b,bi)=>{
-              const c = document.createElement("span");
-              c.className = "chip"; c.dataset.bi = bi;
-              c.textContent = b.num + "/" + b.den;
-              sub.appendChild(c);
-            });
-          }
-          const times = document.createElement("span");
-          times.className = "g-times"; times.dataset.role = "times";
-          times.title = "再生回数";
-          times.textContent = View.timesText(g);
-          sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
-          card.appendChild(sub);
-        }
-
-        /* active body */
-        if(g.id === st.activeId){
-          const body = document.createElement("div");
-          body.className = "g-body";
-
-          const crow = document.createElement("div");
-          crow.className = "g-row";
-          const clab = document.createElement("span");
-          clab.className = "g-label"; clab.textContent = "動画位置";
-          crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
-          body.appendChild(crow);
-
-          const row = document.createElement("div");
-          row.className = "g-row";
-          const lab = document.createElement("span");
-          lab.className = "g-label"; lab.textContent = "再生回数";
-          const reps = document.createElement("div");
-          reps.className = "g-reps";
-          const x = document.createElement("span"); x.className="x"; x.textContent="×";
-          const rin = document.createElement("input");
-          rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
-          rin.setAttribute("aria-label","再生回数");
-          rin.addEventListener("change", ()=>StoreService.setReps(g.id, rin.value));
-          reps.append(x, rin);
-          row.append(lab, reps);
-          body.appendChild(row);
-
-          const bars = document.createElement("div");
-          bars.className = "bars";
-          if(!g.pattern.rhythms.length){
-            const p = document.createElement("p");
-            p.className = "empty";
-            p.textContent = "下の拍子を追加すると、この順に鳴らします。";
-            bars.appendChild(p);
-          }
-          g.pattern.rhythms.forEach((b,bi)=>{
-            const rowb = document.createElement("div");
-            rowb.className = "bar"; rowb.dataset.bi = bi;
-            const sig = document.createElement("span");
-            sig.className = "bar-sig";
-            sig.innerHTML = b.num + ' <em>/</em> ' + b.den;
-            const ctl = document.createElement("span");
-            ctl.className = "bar-ctl";
-            ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>StoreService.moveBar(g.id,bi,-1)));
-            ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>StoreService.moveBar(g.id,bi,1)));
-            const k = mini("✕","削除", false, ()=>StoreService.removeBar(g.id,bi));
-            k.classList.add("kill");
-            ctl.appendChild(k);
-            rowb.append(sig, ctl);
-            bars.appendChild(rowb);
-          });
-          body.appendChild(bars);
-          body.appendChild(buildPicker(g));
-          card.appendChild(body);
-        }
-
-        card.addEventListener("click", e=>{
-          if(Transport.running()) return;                       // 再生中は編集に入らない
-          if(e.target.closest("input, select, button")) return;
-          StoreService.toggleActive(g.id);
-        });
-        card.addEventListener("keydown", e=>{
-          if(Transport.running()) return;
-          if(e.key === "Enter" && !e.target.closest("input, select, button")){
-            e.preventDefault(); StoreService.toggleActive(g.id);
-          }
-        });
-
-        groupsEl.appendChild(card);
-      });
-
-      if(focusHandleId){
-        const el = groupsEl.querySelector('[data-id="'+focusHandleId+'"] .handle');
-        if(el) el.focus();
-        focusHandleId = null;
-      }
-      View.summary();
-      updateTransport();
-      updateHistoryUI();
-      applyHighlight();
-    }
-
-    /* 動画位置の微調整。連打は1手の履歴にまとめる */
-    let nudgeId = null, nudgeAt = 0;
-    function nudge(g, delta, label){
-      const b = document.createElement("button");
-      b.type = "button"; b.className = "nudge";
-      b.textContent = delta < 0 ? "−" : "＋";
-      b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
-      b.setAttribute("aria-label", b.title);
-      b.disabled = Transport.recording();                  // 全体レック中はタイムコード調整を止める
-      b.addEventListener("click", e=>{
-        e.stopPropagation();
-        const now = Date.now();
-        if(!(nudgeId === g.id && now - nudgeAt < 2500)) HistoryService.commit();
-        nudgeId = g.id; nudgeAt = now;
-        const nv = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
-        StoreService.nudgeCue(g.id, nv);
-        label.textContent = View.fmtTime(nv);      // 構造は変わらないので再描画しない
-      });
-      return b;
-    }
-
-    /* いまの動画位置をこのグループに記録する REC（●）ボタン */
-    function cueGrabButton(g){
-      const grab = document.createElement("button");
-      grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
-      grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
-      grab.setAttribute("aria-label", "動画の現在位置を記録");
-      grab.disabled = !VideoGateway.ready() || Transport.recording();   // 全体レック中は個別レックを止める
-      grab.addEventListener("click", e=>{
-        e.stopPropagation();
-        if(!VideoGateway.ready()) return;
-        let t = null;
-        try{ t = VideoGateway.time(); }catch(err){}
-        if(t == null || isNaN(t)) return;
-        StoreService.setCue(g.id, Math.round(t*100)/100);
-      });
-      return grab;
-    }
-
-    /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
-    function cueControls(g){
-      const box = document.createElement("span");
-      box.className = "g-cue";
-      box.appendChild(cueGrabButton(g));
-      const at = document.createElement("span");
-      at.className = "g-at" + (g.cue == null ? " none" : "");
-      at.textContent = View.fmtTime(g.cue);
-      at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
-      if(g.cue != null){
-        box.appendChild(nudge(g, -0.05, at));
-        box.appendChild(at);
-        box.appendChild(nudge(g, 0.05, at));
-        const clr = mini("✕", "動画位置を解除", Transport.recording(), ()=>StoreService.setCue(g.id, null));
-        clr.classList.add("kill");
-        clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-        clr.addEventListener("click", e=>e.stopPropagation());
-        box.appendChild(clr);
-      }else{
-        box.appendChild(at);
-      }
-      return box;
-    }
-
-    function mini(label, aria, disabled, fn){
-      const b=document.createElement("button");
-      b.type="button"; b.className="mini"; b.textContent=label;
-      b.setAttribute("aria-label",aria); b.disabled=disabled;
-      b.addEventListener("click", fn);
-      return b;
-    }
-
-    function buildPicker(g){
+      g.pattern.rhythms.forEach((b,bi)=> bars.appendChild(RhythmView.barRow(g, b, bi)));
+      return bars;
+    },
+    picker(g){
       const wrap = document.createElement("div");
       wrap.className = "g-add";
       const nSel = document.createElement("select");
@@ -1722,24 +1531,224 @@
           const o=document.createElement("option"); o.value=i; o.textContent=i; nSel.appendChild(o);
         }
         const pn = Math.min(state().pickNum, pd);
-        StoreService.setPicker(pn, null);
+        RhythmService.setPicker(pn, null);
         nSel.value = String(pn);
       }
       fillNum();
 
-      dSel.addEventListener("change", ()=>{ StoreService.setPicker(null, Number(dSel.value)); fillNum(); syncIdle(); });
-      nSel.addEventListener("change", ()=>{ StoreService.setPicker(Number(nSel.value), null); syncIdle(); });
+      dSel.addEventListener("change", ()=>{ RhythmService.setPicker(null, Number(dSel.value)); fillNum(); TransportView.syncIdle(); });
+      nSel.addEventListener("change", ()=>{ RhythmService.setPicker(Number(nSel.value), null); TransportView.syncIdle(); });
 
       const slash = document.createElement("span");
       slash.className="slash"; slash.textContent="/";
       const add = document.createElement("button");
       add.type="button"; add.className="step"; add.textContent="追加";
-      add.addEventListener("click", ()=>StoreService.addBar(g.id, state().pickNum, state().pickDen));
+      add.addEventListener("click", ()=>PatternService.addRhythm(g.id, state().pickNum, state().pickDen));
       wrap.append(nSel, slash, dSel, add);
       return wrap;
     }
+  };
 
-    /* ---------- ドラッグ並び替え ---------- */
+  /* ---------- GroupView（リズムグループ：カード1枚 ＋ 動画位置コントロール） ---------- */
+  const GroupView = (() => {
+    let nudgeId = null, nudgeAt = 0;   // 微調整の連打を1手の履歴にまとめる
+
+    function nudge(g, delta, label){
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "nudge";
+      b.textContent = delta < 0 ? "−" : "＋";
+      b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
+      b.setAttribute("aria-label", b.title);
+      b.disabled = Transport.recording();                  // 全体レック中はタイムコード調整を止める
+      b.addEventListener("click", e=>{
+        e.stopPropagation();
+        const now = Date.now();
+        if(!(nudgeId === g.id && now - nudgeAt < 2500)) HistoryService.commit();
+        nudgeId = g.id; nudgeAt = now;
+        const nv = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
+        GroupService.nudgeCue(g.id, nv);
+        label.textContent = Fmt.time(nv);      // 構造は変わらないので再描画しない
+      });
+      return b;
+    }
+    /* いまの動画位置をこのグループに記録する REC（●）ボタン */
+    function cueGrabButton(g){
+      const grab = document.createElement("button");
+      grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
+      grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
+      grab.setAttribute("aria-label", "動画の現在位置を記録");
+      grab.disabled = !VideoGateway.ready() || Transport.recording();   // 全体レック中は個別レックを止める
+      grab.addEventListener("click", e=>{
+        e.stopPropagation();
+        if(!VideoGateway.ready()) return;
+        let t = null;
+        try{ t = VideoGateway.time(); }catch(err){}
+        if(t == null || isNaN(t)) return;
+        GroupService.setCue(g.id, Math.round(t*100)/100);
+      });
+      return grab;
+    }
+    /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
+    function cueControls(g){
+      const box = document.createElement("span");
+      box.className = "g-cue";
+      box.appendChild(cueGrabButton(g));
+      const at = document.createElement("span");
+      at.className = "g-at" + (g.cue == null ? " none" : "");
+      at.textContent = Fmt.time(g.cue);
+      at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
+      if(g.cue != null){
+        box.appendChild(nudge(g, -0.05, at));
+        box.appendChild(at);
+        box.appendChild(nudge(g, 0.05, at));
+        const clr = mini("✕", "動画位置を解除", Transport.recording(), ()=>GroupService.setCue(g.id, null));
+        clr.classList.add("kill");
+        clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+        clr.addEventListener("click", e=>e.stopPropagation());
+        box.appendChild(clr);
+      }else{
+        box.appendChild(at);
+      }
+      return box;
+    }
+
+    function card(g, gi){
+      const st = state();
+      const running = Transport.running();
+      const card = document.createElement("article");
+      card.className = "group" + (g.id === st.activeId ? " active" : "");
+      card.dataset.id = g.id;
+      card.tabIndex = 0;
+
+      /* header */
+      const head = document.createElement("div");
+      head.className = "g-head";
+
+      const handle = document.createElement("button");
+      handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
+      handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
+      handle.disabled = running;
+      handle.addEventListener("pointerdown", e=>SequenceView.startDrag(e, gi, card));
+      handle.addEventListener("keydown", e=>{
+        if(e.key === "ArrowUp"){ e.preventDefault(); SequenceService.moveGroup(gi, gi-1); }
+        if(e.key === "ArrowDown"){ e.preventDefault(); SequenceService.moveGroup(gi, gi+1); }
+      });
+      head.appendChild(handle);
+
+      if(g.id === st.activeId){
+        const name = document.createElement("input");
+        name.className = "g-name"; name.type = "text"; name.value = g.name;
+        name.setAttribute("aria-label", "リズムグループ名");
+        let typing = false;
+        name.addEventListener("focus", ()=>{ typing = false; });
+        name.addEventListener("blur", ()=>{ typing = false; });
+        name.addEventListener("input", e=>{
+          if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1回分の履歴にまとめる
+          GroupService.setName(g.id, e.target.value);
+        });
+        head.appendChild(name);
+
+        const acts = document.createElement("span");
+        acts.className = "g-actions";
+        acts.appendChild(mini("⧉","このリズムグループを複製", false, ()=>SequenceService.duplicateGroup(g.id)));
+        const del = mini("✕","このリズムグループを削除", st.groups.length <= 1, ()=>SequenceService.removeGroup(g.id));
+        del.classList.add("kill");
+        acts.appendChild(del);
+        head.appendChild(acts);
+      }else{
+        const title = document.createElement("span");
+        title.className = "g-title";
+        title.textContent = g.name;
+        head.appendChild(title);
+
+        const cueBox = document.createElement("span");
+        cueBox.className = "g-cue";
+        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
+        head.appendChild(cueBox);
+      }
+      card.appendChild(head);
+
+      /* collapsed summary */
+      if(g.id !== st.activeId){
+        const sub = document.createElement("div");
+        sub.className = "g-sub";
+        if(!g.pattern.rhythms.length){
+          const c = document.createElement("span");
+          c.className = "chip none"; c.textContent = "拍子なし";
+          sub.appendChild(c);
+        }else{
+          g.pattern.rhythms.forEach((b,bi)=> sub.appendChild(RhythmView.chip(b, bi)));
+        }
+        const times = document.createElement("span");
+        times.className = "g-times"; times.dataset.role = "times";
+        times.title = "再生回数";
+        times.textContent = Fmt.times(g);
+        sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
+        card.appendChild(sub);
+      }
+
+      /* active body */
+      if(g.id === st.activeId){
+        const body = document.createElement("div");
+        body.className = "g-body";
+
+        const crow = document.createElement("div");
+        crow.className = "g-row";
+        const clab = document.createElement("span");
+        clab.className = "g-label"; clab.textContent = "動画位置";
+        crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
+        body.appendChild(crow);
+
+        const row = document.createElement("div");
+        row.className = "g-row";
+        const lab = document.createElement("span");
+        lab.className = "g-label"; lab.textContent = "再生回数";
+        const reps = document.createElement("div");
+        reps.className = "g-reps";
+        const x = document.createElement("span"); x.className="x"; x.textContent="×";
+        const rin = document.createElement("input");
+        rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
+        rin.setAttribute("aria-label","再生回数");
+        rin.addEventListener("change", ()=>GroupService.setReps(g.id, rin.value));
+        reps.append(x, rin);
+        row.append(lab, reps);
+        body.appendChild(row);
+
+        body.appendChild(PatternView.bars(g));
+        body.appendChild(PatternView.picker(g));
+        card.appendChild(body);
+      }
+
+      card.addEventListener("click", e=>{
+        if(Transport.running()) return;                       // 再生中は編集に入らない
+        if(e.target.closest("input, select, button")) return;
+        SequenceService.toggleActive(g.id);
+      });
+      card.addEventListener("keydown", e=>{
+        if(Transport.running()) return;
+        if(e.key === "Enter" && !e.target.closest("input, select, button")){
+          e.preventDefault(); SequenceService.toggleActive(g.id);
+        }
+      });
+      return card;
+    }
+
+    /* 全体レックで書き込んだ cue を、再描画せず表示だけ差し替える */
+    function stampCueView(gid, cue){
+      const el = groupsEl.querySelector('[data-id="' + gid + '"]');
+      const at = el && el.querySelector(".g-at");
+      if(at){
+        at.textContent = Fmt.time(cue);
+        at.classList.remove("none");
+        at.classList.add("hit");
+      }
+    }
+    return { card, stampCueView };
+  })();
+
+  /* ---------- SequenceView（シーケンス：グループ一覧・サマリー・名前・履歴・並び替え） ---------- */
+  const SequenceView = (() => {
+    /* ドラッグ並び替え */
     let drag = null;
     function startDrag(e, index, card){
       if(Transport.running() || state().groups.length < 2) return;
@@ -1781,12 +1790,121 @@
       drag.card.classList.remove("dragging");
       const from = drag.index, to = drag.target;
       drag = null;
-      StoreService.moveGroup(from, to);
-      renderGroups();
+      SequenceService.moveGroup(from, to);
+      render();
     }
 
-    /* ---------- 再生まわりの表示 ---------- */
-    function applyHighlight(){
+    function summary(){
+      const c = Domain.summaryCounts(state().groups);
+      seqSum.textContent = c.groups + " グループ ・ 全 " + c.bars + " 小節";
+    }
+    function applyTitle(){
+      document.title = (state().seqName.trim() || "無題のシーケンス") + " — メトロノーム";
+    }
+    function updateHistory(){
+      undoBtn.disabled = !HistoryService.canUndo() || Transport.running();
+      redoBtn.disabled = !HistoryService.canRedo() || Transport.running();
+    }
+
+    function render(){
+      const running = Transport.running();
+      const st = state();
+      groupsEl.innerHTML = "";
+      groupsEl.classList.toggle("locked", running);
+      addGroupBtn.disabled = running;
+      seqNameEl.disabled = running;
+      prerollInput.disabled = running;
+      leadEl.classList.toggle("na", running && Transport.isSolo());
+      VideoView.updateLock();
+
+      st.groups.forEach((g, gi)=> groupsEl.appendChild(GroupView.card(g, gi)));
+
+      if(focusHandleId){
+        const el = groupsEl.querySelector('[data-id="'+focusHandleId+'"] .handle');
+        if(el) el.focus();
+        focusHandleId = null;
+      }
+      summary();
+      TransportView.update();
+      updateHistory();
+      TransportView.highlight();
+    }
+
+    function afterRestore(){      // undo/redo 後の再同期
+      seqNameEl.value = state().seqName;
+      applyTitle();
+      render();
+      TransportView.syncIdle();
+    }
+
+    function bind(){
+      let typing = false;
+      seqNameEl.addEventListener("focus", ()=>{ typing = false; });
+      seqNameEl.addEventListener("blur", ()=>{
+        typing = false;
+        if(!seqNameEl.value.trim()){ SequenceService.setName("無題のシーケンス"); seqNameEl.value = "無題のシーケンス"; }
+      });
+      seqNameEl.addEventListener("input", e=>{
+        if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1手にまとめる
+        SequenceService.setName(e.target.value);
+      });
+      addGroupBtn.addEventListener("click", ()=>SequenceService.addGroup());
+      undoBtn.addEventListener("click", ()=>HistoryService.undo());
+      redoBtn.addEventListener("click", ()=>HistoryService.redo());
+    }
+
+    return { startDrag, render, summary, applyTitle, updateHistory, afterRestore, bind };
+  })();
+
+  /* ---------- TempoView（テンポ表示と操作） ---------- */
+  const TempoView = (() => {
+    function render(from){
+      const bpm = state().bpm;
+      bpmView.textContent = bpm;
+      termView.textContent = Domain.termFor(bpm);
+      if(from !== "range") range.value = bpm;
+      if(from !== "input") input.value = bpm;
+      range.style.setProperty("--p", ((bpm-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%");
+    }
+    function bind(){
+      [50,100,150,200,250].forEach(v=>{
+        const el=document.createElement("div");
+        el.className="tick"; el.style.left=((v-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%";
+        el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
+      });
+      range.addEventListener("input", e=>SequenceService.setTempo(e.target.value,"range"));
+      input.addEventListener("change", e=>SequenceService.setTempo(e.target.value,"input"));
+      $("tempoForm").addEventListener("submit", e=>{e.preventDefault();SequenceService.setTempo(input.value,"input");input.blur();});
+      document.querySelectorAll(".steps .step").forEach(b=>{
+        b.addEventListener("click", ()=>SequenceService.setTempo(state().bpm+Number(b.dataset.delta)));
+      });
+    }
+    return { render, bind };
+  })();
+
+  /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
+  const TransportView = (() => {
+    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
+
+    function paintBeats(n){
+      beatsEl.innerHTML = "";
+      for(let i=0;i<n;i++){
+        const d = document.createElement("span");
+        d.className = "beat" + (i===0 ? " first" : "");
+        beatsEl.appendChild(d);
+      }
+    }
+    function showPulse(bar){
+      const rate = Math.round((60/Domain.rhythmSeconds(bar.den, state().bpm))*10)/10;
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+    }
+    function setBeatDot(beat){
+      const dots = beatsEl.children;
+      for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === beat);
+    }
+    function clearBeats(){ [...beatsEl.children].forEach(d=>d.classList.remove("on")); }
+
+    function highlight(){
       const running = Transport.running(), cur = Transport.cur();
       [...groupsEl.children].forEach(card=>{
         const g = findGroup(card.dataset.id);
@@ -1797,22 +1915,19 @@
         });
         const t = card.querySelector('[data-role="times"]');
         if(t && g){
-          t.textContent = on ? (cur.rep+1) + " / " + g.reps : View.timesText(g);
+          t.textContent = on ? (cur.rep+1) + " / " + g.reps : Fmt.times(g);
         }
       });
     }
-
     function syncIdle(){
       if(Transport.running()) return;
       const gs = PlaybackScheduler.plan();
       const bar = gs.length ? gs[0].pattern.rhythms[0] : {num: state().pickNum, den: state().pickDen};
-      View.paintBeats(bar.num);
-      View.showPulse(bar);
-      updateTransport();
+      paintBeats(bar.num);
+      showPulse(bar);
+      update();
     }
-
-    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
-    function updateTransport(){
+    function update(){
       const btns = {all:startAllBtn, solo:startSoloBtn, lead:startLeadBtn};
       const running = Transport.running(), armKind = Transport.armKind(), recording = Transport.recording();
       if(running || armKind){
@@ -1851,140 +1966,37 @@
           : "動画を先頭から流し、各リズムグループの位置を記録します";
       }
     }
-    function updateHistoryUI(){
-      undoBtn.disabled = !HistoryService.canUndo() || Transport.running();
-      redoBtn.disabled = !HistoryService.canRedo() || Transport.running();
+    function status(text){ statusText.textContent = text; }
+    function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
+    // 空白（preroll）待機の表示
+    function setRunning(on){ document.body.classList.toggle("running", on); }
+    function startWaiting(str){
+      document.body.classList.add("waiting");
+      leadEl.classList.add("counting");
+      statusText.textContent = "待機中";
+      prerollCount.hidden = false;
+      prerollCount.textContent = str;
     }
-    function updateVideoLock(){
-      const running = Transport.running();
-      ytOpen.disabled = false;
-      ytUrl.disabled = running;
-      ytLoad.disabled = running;
-      ytClear.disabled = running;
-      ytSync.disabled = running;
+    function clearWaiting(){
+      document.body.classList.remove("waiting");
+      leadEl.classList.remove("counting");
+      prerollCount.hidden = true;
     }
-    function stampCueView(gid, cue){
-      const card = groupsEl.querySelector('[data-id="' + gid + '"]');
-      const at = card && card.querySelector(".g-at");
-      if(at){                       // 再描画せず表示だけ差し替える
-        at.textContent = View.fmtTime(cue);
-        at.classList.remove("none");
-        at.classList.add("hit");
-      }
+    function isWaiting(){ return document.body.classList.contains("waiting"); }
+    function endWaiting(base){
+      document.body.classList.remove("waiting");
+      leadEl.classList.remove("counting");
+      prerollCount.hidden = true;
+      statusText.textContent = base;
     }
+    function prerollTick(str){ prerollCount.textContent = str; }
 
-    /* ---------- IO メッセージ ---------- */
-    let msgTimer = null;
-    function say(text, bad){
-      ioMsg.textContent = text;
-      ioMsg.classList.toggle("bad", !!bad);
-      ioMsg.hidden = false;
-      clearTimeout(msgTimer);
-      msgTimer = setTimeout(()=>{ ioMsg.hidden = true; }, bad ? 9000 : 5000);
-    }
-    function ytSay(text, bad){
-      ytMsg.textContent = text;
-      ytMsg.classList.toggle("bad", !!bad);
-      ytMsg.hidden = !text;
-    }
-    function importAndSay(text){
-      try{ say(SequenceIO.importText(text), false); }
-      catch(err){ say("読み込めませんでした：" + err.message, true); }
-    }
-
-    /* ---------- 復元後の再同期（undo/redo） ---------- */
-    function afterRestore(){
-      seqNameEl.value = state().seqName;
-      applySeqName();
-      renderGroups();
-      syncIdle();
-    }
-
-    /* ---------- Store の購読：meta フラグに応じて再描画する ---------- */
-    function dispatch(meta){
-      meta = meta || {};
-      if(meta.seqName){ seqNameEl.value = state().seqName; applySeqName(); }
-      if(meta.seqTitle){ applySeqName(); }
-      if(meta.tempo){ renderTempo(meta.from); }
-      if(meta.preroll){ prerollInput.value = state().preroll.toFixed(2); }
-      if(meta.render){ if(meta.focusHandle != null) focusHandleId = meta.focusHandle; renderGroups(); }
-      if(meta.idle){ syncIdle(); }
-    }
-
-    /* ---------- Transport への view（DOM 反映）インタフェース ---------- */
-    const view = {
-      render: renderGroups,
-      syncIdle: syncIdle,
-      updateTransport: updateTransport,
-      status: text => { statusText.textContent = text; },
-      videoMsg: ytSay,
-      setRunning: on => { document.body.classList.toggle("running", on); },
-      startWaiting: str => {
-        document.body.classList.add("waiting");
-        leadEl.classList.add("counting");
-        statusText.textContent = "待機中";
-        prerollCount.hidden = false;
-        prerollCount.textContent = str;
-      },
-      clearWaiting: () => {
-        document.body.classList.remove("waiting");
-        leadEl.classList.remove("counting");
-        prerollCount.hidden = true;
-      },
-      isWaiting: () => document.body.classList.contains("waiting"),
-      endWaiting: baseStatus => {
-        document.body.classList.remove("waiting");
-        leadEl.classList.remove("counting");
-        prerollCount.hidden = true;
-        statusText.textContent = baseStatus;
-      },
-      prerollTick: str => { prerollCount.textContent = str; },
-      clearBeats: () => { [...beatsEl.children].forEach(d=>d.classList.remove("on")); },
-      paintBeats: n => View.paintBeats(n),
-      showPulse: bar => View.showPulse(bar),
-      highlight: applyHighlight,
-      setBeatDot: beat => { const dots = beatsEl.children; for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === beat); },
-      readPreroll: readPreroll,
-      stampCueView: stampCueView
-    };
-
-    /* ---------- 静的バインド（1回だけ） ---------- */
-    function bindEvents(){
-      // テンポの目盛り
-      [50,100,150,200,250].forEach(v=>{
-        const el=document.createElement("div");
-        el.className="tick"; el.style.left=((v-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%";
-        el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
-      });
-      range.addEventListener("input", e=>StoreService.setTempo(e.target.value,"range"));
-      input.addEventListener("change", e=>StoreService.setTempo(e.target.value,"input"));
-      $("tempoForm").addEventListener("submit", e=>{e.preventDefault();StoreService.setTempo(input.value,"input");input.blur();});
-      document.querySelectorAll(".steps .step").forEach(b=>{
-        b.addEventListener("click", ()=>StoreService.setTempo(state().bpm+Number(b.dataset.delta)));
-      });
-
-      // シーケンス名
-      let typing = false;
-      seqNameEl.addEventListener("focus", ()=>{ typing = false; });
-      seqNameEl.addEventListener("blur", ()=>{
-        typing = false;
-        if(!seqNameEl.value.trim()){ StoreService.setSeqName("無題のシーケンス"); seqNameEl.value = "無題のシーケンス"; }
-      });
-      seqNameEl.addEventListener("input", e=>{
-        if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1手にまとめる
-        StoreService.setSeqName(e.target.value);
-      });
-
-      addGroupBtn.addEventListener("click", ()=>StoreService.addGroup());
-      undoBtn.addEventListener("click", ()=>HistoryService.undo());
-      redoBtn.addEventListener("click", ()=>HistoryService.redo());
-      prerollInput.addEventListener("change", ()=>StoreService.setPreroll(prerollInput.value));
+    function bind(){
       recBtn.addEventListener("click", ()=>Transport.startRec());
-
+      prerollInput.addEventListener("change", ()=>SequenceService.setPreroll(prerollInput.value));
       startAllBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("all")));
       startSoloBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
       startLeadBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
-
       document.addEventListener("keydown", e=>{
         const mod = e.metaKey || e.ctrlKey;
         if(mod && e.key.toLowerCase() === "z"){
@@ -1999,10 +2011,29 @@
         e.preventDefault();
         Transport.running() ? Transport.stop(false) : Transport.start("all");
       });
-
       document.addEventListener("visibilitychange", ()=>Transport.wake());
+    }
+    return {
+      paintBeats, showPulse, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
+      setRunning, startWaiting, clearWaiting, isWaiting, endWaiting, prerollTick, bind
+    };
+  })();
 
-      // 保存 / 読み込み
+  /* ---------- IoView（保存／読込のメッセージ表示とバインド） ---------- */
+  const IoView = (() => {
+    let msgTimer = null;
+    function say(text, bad){
+      ioMsg.textContent = text;
+      ioMsg.classList.toggle("bad", !!bad);
+      ioMsg.hidden = false;
+      clearTimeout(msgTimer);
+      msgTimer = setTimeout(()=>{ ioMsg.hidden = true; }, bad ? 9000 : 5000);
+    }
+    function importAndSay(text){
+      try{ say(SequenceIO.importText(text), false); }
+      catch(err){ say("読み込めませんでした：" + err.message, true); }
+    }
+    function bind(){
       saveBtn.addEventListener("click", async ()=>{
         const r = await SequenceIO.save();
         if(r) say(r.message, r.bad);
@@ -2024,7 +2055,6 @@
         loadBtn.hidden = false;
         ioFileLabel.hidden = true;
       }
-
       // ドラッグ＆ドロップ
       let dragDepth = 0;
       document.addEventListener("dragenter", e=>{
@@ -2042,8 +2072,27 @@
         const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
         if(file) FileGateway.readFile(file).then(importAndSay).catch(()=>say("ファイルを読めませんでした", true));
       });
+    }
+    return { say, bind };
+  })();
 
-      // YouTube
+  /* ---------- VideoView（YouTube のメッセージ・ロック・操作） ---------- */
+  const VideoView = (() => {
+    function ytSay(text, bad){
+      ytMsg.textContent = text;
+      ytMsg.classList.toggle("bad", !!bad);
+      ytMsg.hidden = !text;
+    }
+    function updateLock(){
+      const running = Transport.running();
+      ytOpen.disabled = false;
+      ytUrl.disabled = running;
+      ytLoad.disabled = running;
+      ytClear.disabled = running;
+      ytSync.disabled = running;
+    }
+    function syncEnabled(){ return ytSync.checked; }
+    function bind(){
       function applyUrl(){
         const v = VideoGateway.parse(ytUrl.value);
         if(!v){ ytSay("YouTube のURLとして読めませんでした", true); return; }
@@ -2064,43 +2113,74 @@
         VideoGateway.clear();
         Transport.clearPending();
         ytUrl.value = ""; ytSay("", false);
-        renderGroups();
+        SequenceView.render();
       });
     }
-
-    return {
-      view, dispatch, bindEvents, renderGroups, syncIdle, applySeqName,
-      updateHistoryUI, afterRestore, readPreroll, ytSay,
-      syncEnabled: () => ytSync.checked
-    };
+    return { ytSay, updateLock, syncEnabled, bind };
   })();
+
+  /* ---------- 連携：Transport への view（DOM 反映）と Store の購読ディスパッチ ---------- */
+  const view = {
+    render: SequenceView.render,
+    syncIdle: TransportView.syncIdle,
+    updateTransport: TransportView.update,
+    status: TransportView.status,
+    videoMsg: VideoView.ytSay,
+    setRunning: TransportView.setRunning,
+    startWaiting: TransportView.startWaiting,
+    clearWaiting: TransportView.clearWaiting,
+    isWaiting: TransportView.isWaiting,
+    endWaiting: TransportView.endWaiting,
+    prerollTick: TransportView.prerollTick,
+    clearBeats: TransportView.clearBeats,
+    paintBeats: TransportView.paintBeats,
+    showPulse: TransportView.showPulse,
+    highlight: TransportView.highlight,
+    setBeatDot: TransportView.setBeatDot,
+    readPreroll: TransportView.readPreroll,
+    stampCueView: GroupView.stampCueView
+  };
+  // Store の変更を meta フラグに応じて各ビューへ配る
+  function dispatch(meta){
+    meta = meta || {};
+    if(meta.seqName){ seqNameEl.value = state().seqName; SequenceView.applyTitle(); }
+    if(meta.seqTitle){ SequenceView.applyTitle(); }
+    if(meta.tempo){ TempoView.render(meta.from); }
+    if(meta.preroll){ prerollInput.value = state().preroll.toFixed(2); }
+    if(meta.render){ if(meta.focusHandle != null) focusHandleId = meta.focusHandle; SequenceView.render(); }
+    if(meta.idle){ TransportView.syncIdle(); }
+  }
 
   /* ========================================================================
      bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画する。
      ======================================================================== */
   HistoryService.init({
     capture: () => Store.snapshot(),
-    apply: s => { Store.restore(s); Ui.afterRestore(); },
-    onChange: () => Ui.updateHistoryUI()
+    apply: s => { Store.restore(s); SequenceView.afterRestore(); },
+    onChange: () => SequenceView.updateHistory()
   });
   VideoGateway.init({
-    onMsg: (text, bad) => Ui.ytSay(text, bad),
-    onReady: () => { Ui.ytSay("", false); Ui.renderGroups(); },
+    onMsg: (text, bad) => VideoView.ytSay(text, bad),
+    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); },
     onPlaying: () => Transport.onVideoPlaying(),
     onStopped: () => Transport.onVideoStopped(),
-    syncEnabled: () => Ui.syncEnabled()
+    syncEnabled: () => VideoView.syncEnabled()
   });
-  Transport.init({ view: Ui.view });
-  VideoSync.init({ view: Ui.view });
-  Store.subscribe(Ui.dispatch);
-  Ui.bindEvents();
+  Transport.init({ view });
+  VideoSync.init({ view });
+  Store.subscribe(dispatch);
+  TempoView.bind();
+  SequenceView.bind();
+  TransportView.bind();
+  IoView.bind();
+  VideoView.bind();
 
   /* ---------- 初期化 ---------- */
-  Ui.renderGroups();
-  Ui.readPreroll();
-  Ui.applySeqName();
-  Ui.updateHistoryUI();
-  StoreService.setTempo(120);
+  SequenceView.render();
+  TransportView.readPreroll();
+  SequenceView.applyTitle();
+  SequenceView.updateHistory();
+  SequenceService.setTempo(120);
 })();
 </script>
 </body>
