@@ -269,7 +269,6 @@
     <div class="yt-foot" id="ytFoot" hidden>
       <label class="yt-sync"><input type="checkbox" id="ytSync" checked><span>メトロノームと同時に再生</span></label>
       <span class="yt-acts">
-        <button class="step yt-clear" id="ytOpen" type="button" hidden>別タブで開いて同時に開始</button>
         <button class="step yt-clear" id="ytClear" type="button">動画を外す</button>
       </span>
     </div>
@@ -700,12 +699,11 @@
   const VideoGateway = (() => {
     let ytPlayer = null, ytReady = false, apiTimer = null, ytCurrent = null;
     let deps = { onMsg(){}, onReady(){}, onPlaying(){}, onStopped(){}, syncEnabled(){ return false; } };
-    const stage = $("ytStage"), foot = $("ytFoot"), openBtn = $("ytOpen");
+    const stage = $("ytStage"), foot = $("ytFoot");
     // file:// や content:// で開くと Referer が付かず、埋め込みが 153 で弾かれる
     const embedBlocked = !/^https?:$/.test(location.protocol);
     const LOCAL_NOTE = "このHTMLをローカルファイルとして開いているため、YouTubeの埋め込みは再生できません（エラー153）。\n"
-      + "Webサーバー経由で開くと動きます（例：置いたフォルダで python3 -m http.server → http://localhost:8000/…）。\n"
-      + "このままでも「別タブで開いて同時に開始」は使えます。";
+      + "Webサーバー経由で開くと動きます（例：置いたフォルダで python3 -m http.server → http://localhost:8000/…）。";
     const ERROR_NOTE = {
       2:   "URLが正しくないようです",
       5:   "この動画はプレイヤーで再生できません",
@@ -757,7 +755,6 @@
       ytCurrent = v;
       stage.hidden = false;
       foot.hidden = false;
-      openBtn.hidden = false;
       if(embedBlocked){ deps.onMsg(LOCAL_NOTE, true); }
       else{ deps.onMsg("読み込み中…", false); }
       withApi(()=>{
@@ -784,7 +781,7 @@
       const holder = document.createElement("div");
       holder.id = "ytFrame";
       stage.innerHTML = ""; stage.appendChild(holder);
-      stage.hidden = true; foot.hidden = true; openBtn.hidden = true;
+      stage.hidden = true; foot.hidden = true;
       ytCurrent = null;
     }
     function url(){
@@ -803,8 +800,7 @@
       init(o){ deps = Object.assign(deps, o); },
       parse, mount, clear, url, armed, pause, seekTo, play, time, stateCode,
       syncOn: () => deps.syncEnabled(),
-      ready: () => ytReady,
-      current: () => ytCurrent
+      ready: () => ytReady
     };
   })();
 
@@ -1497,7 +1493,7 @@
   const seqNameEl=$("seqName");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
         ioFile=$("ioFile"), ioMsg=$("ioMsg");
-  const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytOpen=$("ytOpen"), ytMsg=$("ytMsg");
+  const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytMsg=$("ytMsg");
 
   // ---- 共有ヘルパ ----
   const state = () => Store.getState();
@@ -2110,7 +2106,6 @@
     }
     function updateLock(){
       const running = Transport.running();
-      ytOpen.disabled = false;
       ytUrl.disabled = running;
       ytLoad.disabled = running;
       ytClear.disabled = running;
@@ -2126,13 +2121,6 @@
       ytLoad.addEventListener("click", applyUrl);
       ytUrl.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); applyUrl(); } });
       ytUrl.addEventListener("paste", ()=>setTimeout(applyUrl, 0));
-      ytOpen.addEventListener("click", ()=>{
-        const cur = VideoGateway.current();
-        if(!cur) return;
-        const url = "https://www.youtube.com/watch?v=" + cur.id + (cur.start ? "&t=" + cur.start : "");
-        if(!Transport.running()) Transport.start("all");          // 先にメトロノームを走らせてから動画を開く
-        window.open(url, "_blank", "noopener");
-      });
       ytClear.addEventListener("click", ()=>{
         if(Transport.running()) Transport.stop(false);
         VideoGateway.clear();
