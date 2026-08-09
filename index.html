@@ -329,27 +329,29 @@
   /* ============================================================================
      アーキテクチャ（HTML 1ファイル・素の JS・ビルドなし。UI 文言は現状維持）
 
+     レイヤード構成。1つの IIFE の中を宣言順で上から下へ並べ、依存方向は
+     「宣言順＋規約」で内向き（ui → usecase → domain）に保つ。infra は usecase が
+     定義するインタフェースを実装し、やり取りはプリミティブ／DTO／コールバックで行う。
+
+       domain    … 純粋。エンティティ生成・拍子計算・定数・ID/クランプ・派生計算の唯一の真実
+                   Sequence › RhythmGroup › RhythmPattern › Rhythm（DOM も状態も持たない）
+       store     … 状態コンテナ。domain entity と編集付随状態を getState/apply/subscribe/
+                   snapshot/restore の一定インタフェースで扱う（DOM も再生制御も持たない）
+       infra     … ブラウザ API アダプタ。Yaml / SoundGateway / ClockGateway /
+                   FileGateway / VideoGateway。結果は戻り値・例外・コールバックで返す
+       usecase   … 操作の集約と DTO⇔entity 変換。HistoryService / StoreService /
+                   SequenceMapper / SequenceIO / PlaybackScheduler / VideoSync / Transport
+       ui        … DOM のみ。操作は usecase を呼び、Store.subscribe と Transport の view
+                   コールバックを購読して再描画する
+       bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画
+
      エンティティ階層（データ構造）:
        Sequence      … 曲ひとつ分（name, tempo, preroll, video, groups）
         └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern）
             └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
                 └ Rhythm … 1拍子 例 7/8（num, den）。UI 表示は「拍子」
 
-     抽出済みの層（純粋 or 独立。上から下へ一方向依存）:
-       Domain  … エンティティ生成と拍子計算の唯一の真実。DOM も状態も持たない
-       Yaml    … このスキーマ用の最小エンコーダ／パーサ。DOM も状態も持たない
-       History … 汎用の undo/redo（記録内容は capture/apply に委譲）
-       Sound   … AudioContext のライフサイクルとクリック音合成
-       View    … 派生値の描画（拍ドット・パルス・サマリー・時刻整形）
-
-     まだ結合している対話コア（今回は分離しない。理由: この環境では自動検証
-     できず、動画同期の緻密なタイミングを壊しやすい。将来 issue #7 の実装や
-     実機テストと合わせて整理する）:
-       ・アプリ状態（groups / activeId / bpm / seqName / preroll / ytCurrent …）
-       ・renderGroups（編集UIの構築と描画のオーケストレーション）
-       ・scheduler / draw（先読みスケジューラと拍の描画・録画スタンプ）
-       ・Transport（再生ステートマシン: all/solo/lead・cue・全REC・動画頭出し）
-       ・Video（YouTube IFrame API アダプタ）
+     再生タイミングの定数は不変（LOOKAHEAD=25 / AHEAD=0.12 / LEAD_SEC=5 ほか）。
      ============================================================================ */
 
   /* ========================================================================
@@ -440,976 +442,68 @@
     };
   })();
 
+
   const $ = id => document.getElementById(id);
-  const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
-  const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
-  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
-        prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
-  const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
-  const seqNameEl=$("seqName");
-  const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
-        ioFile=$("ioFile"), ioMsg=$("ioMsg");
-  const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytStage=$("ytStage"), ytFoot=$("ytFoot"),
-        ytSync=$("ytSync"), ytClear=$("ytClear"), ytOpen=$("ytOpen"), ytMsg=$("ytMsg");
-  const canSavePicker = typeof window.showSaveFilePicker === "function";
-  const canOpenPicker = typeof window.showOpenFilePicker === "function";
-  const FILE_TYPES = [{description:"メトロノーム シーケンス", accept:{"text/yaml":[".yml",".yaml"]}}];
 
-  let bpm = 120;
-  let pickNum = 4, pickDen = 4;          // 「拍子を追加」用のピッカー状態
-  let seqName = "シーケンス1";
-  let groupSeq = 1;
-  let groups = [Domain.makeGroup({name:"リズムグループ1", rhythms:[{num:4,den:4}], reps:8})];
-  let activeId = groups[0].id;
-  let resumeActiveId = null;   // 再生前にアクティブだったグループ
-  let focusHandleId = null;
-
-  const findGroup = id => groups.find(g => g.id === id);
-
-  /* ---------- 履歴（シーケンスの編集のみ・テンポは対象外） ---------- */
-  /* ---------- History（汎用：past/future スタックと undo/redo。何を記録/復元するかは capture/apply に委譲） ----------
-     対象はシーケンスの編集のみ（テンポは対象外）。capture=snapshot・apply=restore で束ねる。 */
-  const History = (() => {
-    const MAX = 60;
-    let past = [], future = [];
-    let capture = () => "", apply = () => {}, onChange = () => {};
+  /* ========================================================================
+     store … 状態コンテナ。domain entity（RhythmGroup 群）と編集用の付随状態を
+     一定インタフェース（getState/select/apply/subscribe/snapshot/restore）で扱う。
+     DOM も再生時制御（running/mode…）も持たない（それらは usecase/transport 側）。
+     ======================================================================== */
+  const Store = (() => {
+    const state = {
+      bpm: 120,
+      pickNum: 4, pickDen: 4,          // 「拍子を追加」用のピッカー状態
+      seqName: "シーケンス1",
+      groupSeq: 1,
+      groups: [Domain.makeGroup({name:"リズムグループ1", rhythms:[{num:4,den:4}], reps:8})],
+      activeId: null,
+      preroll: 0
+    };
+    state.activeId = state.groups[0].id;
+    const listeners = [];
+    const emit = meta => { for(const fn of listeners) fn(meta || {}); };
     return {
-      init(o){ capture = o.capture; apply = o.apply; onChange = o.onChange || (()=>{}); },
-      commit(){ past.push(capture()); if(past.length > MAX) past.shift(); future.length = 0; onChange(); },
-      undo(){ if(!past.length) return; future.push(capture()); apply(past.pop()); onChange(); },
-      redo(){ if(!future.length) return; past.push(capture()); apply(future.pop()); onChange(); },
-      canUndo(){ return past.length > 0; },
-      canRedo(){ return future.length > 0; }
+      getState: () => state,
+      select: fn => fn(state),
+      // patch は部分オブジェクト、または state を直接いじる updater 関数。meta は UI への変更ヒント
+      apply(patch, meta){
+        if(typeof patch === "function") patch(state);
+        else if(patch) Object.assign(state, patch);
+        emit(meta);
+      },
+      subscribe(fn){ listeners.push(fn); },
+      findGroup: id => state.groups.find(g => g.id === id),
+      // 履歴に載せる編集状態のみを直列化（テンポ・preroll は対象外）
+      snapshot(){
+        return JSON.stringify({
+          seqName: state.seqName, groups: state.groups, activeId: state.activeId,
+          groupSeq: state.groupSeq, pickNum: state.pickNum, pickDen: state.pickDen
+        });
+      },
+      restore(s){
+        const d = JSON.parse(s);
+        state.groups = d.groups; state.activeId = d.activeId; state.groupSeq = d.groupSeq;
+        state.pickNum = d.pickNum; state.pickDen = d.pickDen; state.seqName = d.seqName;
+        if(state.activeId && !state.groups.some(g=>g.id===state.activeId)) state.activeId = null;
+      }
     };
   })();
-  const commit = () => History.commit();
 
-  function snapshot(){
-    return JSON.stringify({seqName, groups, activeId, groupSeq, pickNum, pickDen});
-  }
-  function restore(s){
-    const d = JSON.parse(s);
-    groups = d.groups; activeId = d.activeId; groupSeq = d.groupSeq;
-    pickNum = d.pickNum; pickDen = d.pickDen;
-    seqName = d.seqName;
-    seqNameEl.value = seqName;
-    applySeqName();
-    if(activeId && !findGroup(activeId)) activeId = null;
-    renderGroups(); syncIdle();
-  }
-  function updateHistoryUI(){
-    undoBtn.disabled = !History.canUndo() || running;
-    redoBtn.disabled = !History.canRedo() || running;
-  }
-  History.init({capture: snapshot, apply: restore, onChange: updateHistoryUI});
-  undoBtn.addEventListener("click", ()=>History.undo());
-  redoBtn.addEventListener("click", ()=>History.redo());
-
-  /* ---------- シーケンス名 ---------- */
-  function applySeqName(){
-    document.title = (seqName.trim() || "無題のシーケンス") + " — メトロノーム";
-  }
-  (function bindSeqName(){
-    let typing = false;
-    seqNameEl.addEventListener("focus", ()=>{ typing = false; });
-    seqNameEl.addEventListener("blur", ()=>{
-      typing = false;
-      if(!seqNameEl.value.trim()){ seqName = "無題のシーケンス"; seqNameEl.value = seqName; applySeqName(); }
-    });
-    seqNameEl.addEventListener("input", e=>{
-      if(!typing){ commit(); typing = true; }   // 連続入力は1手にまとめる
-      seqName = e.target.value;
-      applySeqName();
-    });
-  })();
-
-  /* ---------- テンポ ---------- */
-  [50,100,150,200,250].forEach(v=>{
-    const el=document.createElement("div");
-    el.className="tick"; el.style.left=((v-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%";
-    el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
-  });
-  const termFor = v => Domain.termFor(v);
-
-  function setTempo(v, from){
-    v = Math.round(Number(v));
-    if(isNaN(v)) v = bpm;
-    bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, v));
-    bpmView.textContent = bpm;
-    termView.textContent = termFor(bpm);
-    if(from !== "range") range.value = bpm;
-    if(from !== "input") input.value = bpm;
-    range.style.setProperty("--p", ((bpm-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%");
-    syncIdle();
-  }
-  range.addEventListener("input", e=>setTempo(e.target.value,"range"));
-  input.addEventListener("change", e=>setTempo(e.target.value,"input"));
-  $("tempoForm").addEventListener("submit", e=>{e.preventDefault();setTempo(input.value,"input");input.blur();});
-  document.querySelectorAll(".steps .step").forEach(b=>{
-    b.addEventListener("click", ()=>setTempo(bpm+Number(b.dataset.delta)));
-  });
-
-  /* ---------- グループ操作 ---------- */
-  function addGroup(){
-    commit();
-    groupSeq++;
-    const g = Domain.makeGroup({name:"リズムグループ"+groupSeq, reps:8});
-    groups.push(g);
-    activeId = g.id;
-    renderGroups();
-  }
-  function duplicateGroup(id){
-    commit();
-    const i = groups.findIndex(g=>g.id===id);
-    const copy = Domain.cloneGroup(groups[i]);
-    groups.splice(i+1, 0, copy);
-    activeId = copy.id;
-    renderGroups(); syncIdle();
-  }
-  function removeGroup(id){
-    if(groups.length <= 1) return;
-    commit();
-    const i = groups.findIndex(g=>g.id===id);
-    groups.splice(i,1);
-    if(activeId === id) activeId = null;
-    renderGroups(); syncIdle();
-  }
-  function moveGroup(from, to){
-    if(to < 0 || to >= groups.length || from === to) return;
-    commit();
-    const [g] = groups.splice(from,1);
-    groups.splice(to,0,g);
-    focusHandleId = g.id;
-    renderGroups();
-  }
-  function toggleActive(id){
-    activeId = (activeId === id) ? null : id;
-    renderGroups();
-  }
-  addGroupBtn.addEventListener("click", addGroup);
-
-  /* ---------- 描画 ---------- */
-  /* ---------- View（派生値の描画：拍ドット・パルス表示・サマリー・時刻整形。表示の更新のみを担う） ---------- */
-  const View = {
-    fmtTime(sec){
-      if(sec == null) return "—";
-      const m = Math.floor(sec / 60), r = sec - m * 60;
-      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
-    },
-    timesText(g){ return "×" + g.reps; },
-    summary(){
-      let total = 0;
-      for(const g of groups) total += g.pattern.rhythms.length * g.reps;
-      seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
-    },
-    paintBeats(n){
-      beatsEl.innerHTML = "";
-      for(let i=0;i<n;i++){
-        const d = document.createElement("span");
-        d.className = "beat" + (i===0 ? " first" : "");
-        beatsEl.appendChild(d);
-      }
-    },
-    showPulse(bar){
-      const rate = Math.round((60/beatSeconds(bar.den))*10)/10;
-      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
-    }
-  };
-
-  function renderGroups(){
-    groupsEl.innerHTML = "";
-    groupsEl.classList.toggle("locked", running);
-    addGroupBtn.disabled = running;
-    seqNameEl.disabled = running;
-    prerollInput.disabled = running;
-    leadEl.classList.toggle("na", running && isSoloMode(mode));
-    updateVideoLock();
-
-    groups.forEach((g, gi)=>{
-      const card = document.createElement("article");
-      card.className = "group" + (g.id === activeId ? " active" : "");
-      card.dataset.id = g.id;
-      card.tabIndex = 0;
-
-      /* header */
-      const head = document.createElement("div");
-      head.className = "g-head";
-
-      const handle = document.createElement("button");
-      handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
-      handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
-      handle.disabled = running;
-      handle.addEventListener("pointerdown", e=>startDrag(e, gi, card));
-      handle.addEventListener("keydown", e=>{
-        if(e.key === "ArrowUp"){ e.preventDefault(); moveGroup(gi, gi-1); }
-        if(e.key === "ArrowDown"){ e.preventDefault(); moveGroup(gi, gi+1); }
-      });
-      head.appendChild(handle);
-
-      if(g.id === activeId){
-        const name = document.createElement("input");
-        name.className = "g-name"; name.type = "text"; name.value = g.name;
-        name.setAttribute("aria-label", "リズムグループ名");
-        let typing = false;
-        name.addEventListener("focus", ()=>{ typing = false; });
-        name.addEventListener("blur", ()=>{ typing = false; });
-        name.addEventListener("input", e=>{
-          if(!typing){ commit(); typing = true; }   // 連続入力は1回分の履歴にまとめる
-          g.name = e.target.value;
-        });
-        head.appendChild(name);
-
-        const acts = document.createElement("span");
-        acts.className = "g-actions";
-        acts.appendChild(mini("⧉","このリズムグループを複製", false, ()=>duplicateGroup(g.id)));
-        const del = mini("✕","このリズムグループを削除", groups.length <= 1, ()=>removeGroup(g.id));
-        del.classList.add("kill");
-        acts.appendChild(del);
-        head.appendChild(acts);
-      }else{
-        const title = document.createElement("span");
-        title.className = "g-title";
-        title.textContent = g.name;
-        head.appendChild(title);
-
-        const cueBox = document.createElement("span");
-        cueBox.className = "g-cue";
-        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
-        head.appendChild(cueBox);
-      }
-      card.appendChild(head);
-
-      /* collapsed summary */
-      if(g.id !== activeId){
-        const sub = document.createElement("div");
-        sub.className = "g-sub";
-        if(!g.pattern.rhythms.length){
-          const c = document.createElement("span");
-          c.className = "chip none"; c.textContent = "拍子なし";
-          sub.appendChild(c);
-        }else{
-          g.pattern.rhythms.forEach((b,bi)=>{
-            const c = document.createElement("span");
-            c.className = "chip"; c.dataset.bi = bi;
-            c.textContent = b.num + "/" + b.den;
-            sub.appendChild(c);
-          });
-        }
-        const times = document.createElement("span");
-        times.className = "g-times"; times.dataset.role = "times";
-        times.title = "再生回数";
-        times.textContent = View.timesText(g);
-        sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
-        card.appendChild(sub);
-      }
-
-      /* active body */
-      if(g.id === activeId){
-        const body = document.createElement("div");
-        body.className = "g-body";
-
-        const crow = document.createElement("div");
-        crow.className = "g-row";
-        const clab = document.createElement("span");
-        clab.className = "g-label"; clab.textContent = "動画位置";
-        crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
-        body.appendChild(crow);
-
-        const row = document.createElement("div");
-        row.className = "g-row";
-        const lab = document.createElement("span");
-        lab.className = "g-label"; lab.textContent = "再生回数";
-        const reps = document.createElement("div");
-        reps.className = "g-reps";
-        const x = document.createElement("span"); x.className="x"; x.textContent="×";
-        const rin = document.createElement("input");
-        rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
-        rin.setAttribute("aria-label","再生回数");
-        rin.addEventListener("change", ()=>{
-          commit();
-          let v = Math.round(Number(rin.value));
-          if(isNaN(v)) v = 1;
-          g.reps = Math.min(999, Math.max(1, v));
-          rin.value = g.reps;
-          renderGroups();
-        });
-        reps.append(x, rin);
-        row.append(lab, reps);
-        body.appendChild(row);
-
-        const bars = document.createElement("div");
-        bars.className = "bars";
-        if(!g.pattern.rhythms.length){
-          const p = document.createElement("p");
-          p.className = "empty";
-          p.textContent = "下の拍子を追加すると、この順に鳴らします。";
-          bars.appendChild(p);
-        }
-        g.pattern.rhythms.forEach((b,bi)=>{
-          const rowb = document.createElement("div");
-          rowb.className = "bar"; rowb.dataset.bi = bi;
-          const sig = document.createElement("span");
-          sig.className = "bar-sig";
-          sig.innerHTML = b.num + ' <em>/</em> ' + b.den;
-          const ctl = document.createElement("span");
-          ctl.className = "bar-ctl";
-          ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>moveBar(g,bi,-1)));
-          ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>moveBar(g,bi,1)));
-          const k = mini("✕","削除", false, ()=>removeBar(g,bi));
-          k.classList.add("kill");
-          ctl.appendChild(k);
-          rowb.append(sig, ctl);
-          bars.appendChild(rowb);
-        });
-        body.appendChild(bars);
-        body.appendChild(buildPicker(g));
-        card.appendChild(body);
-      }
-
-      card.addEventListener("click", e=>{
-        if(running) return;                       // 再生中は編集に入らない
-        if(e.target.closest("input, select, button")) return;
-        toggleActive(g.id);
-      });
-      card.addEventListener("keydown", e=>{
-        if(running) return;
-        if(e.key === "Enter" && !e.target.closest("input, select, button")){
-          e.preventDefault(); toggleActive(g.id);
-        }
-      });
-
-      groupsEl.appendChild(card);
-    });
-
-    if(focusHandleId){
-      const el = groupsEl.querySelector('[data-id="'+focusHandleId+'"] .handle');
-      if(el) el.focus();
-      focusHandleId = null;
-    }
-    View.summary();
-    updateTransport();
-    updateHistoryUI();
-    applyHighlight();
-  }
-
-  /* 動画位置の微調整。連打は1手の履歴にまとめる */
-  let nudgeId = null, nudgeAt = 0;
-  function nudge(g, delta, label){
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "nudge";
-    b.textContent = delta < 0 ? "−" : "＋";
-    b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
-    b.setAttribute("aria-label", b.title);
-    b.disabled = recording;                  // 全体レック中はタイムコード調整を止める
-    b.addEventListener("click", e=>{
-      e.stopPropagation();
-      const now = Date.now();
-      if(!(nudgeId === g.id && now - nudgeAt < 2500)) commit();
-      nudgeId = g.id; nudgeAt = now;
-      g.cue = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
-      label.textContent = View.fmtTime(g.cue);      // 構造は変わらないので再描画しない
-    });
-    return b;
-  }
-
-  /* いまの動画位置をこのグループに記録する REC（●）ボタン */
-  function cueGrabButton(g){
-    const grab = document.createElement("button");
-    grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
-    grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
-    grab.setAttribute("aria-label", "動画の現在位置を記録");
-    grab.disabled = !ytReady || recording;   // 全体レック中は個別レックを止める
-    grab.addEventListener("click", e=>{
-      e.stopPropagation();
-      if(!ytReady) return;
-      let t = null;
-      try{ t = ytPlayer.getCurrentTime(); }catch(err){}
-      if(t == null || isNaN(t)) return;
-      commit();
-      g.cue = Math.round(t*100)/100;
-      renderGroups();
-    });
-    return grab;
-  }
-
-  /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
-  function cueControls(g){
-    const box = document.createElement("span");
-    box.className = "g-cue";
-    box.appendChild(cueGrabButton(g));
-    const at = document.createElement("span");
-    at.className = "g-at" + (g.cue == null ? " none" : "");
-    at.textContent = View.fmtTime(g.cue);
-    at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
-    if(g.cue != null){
-      box.appendChild(nudge(g, -0.05, at));
-      box.appendChild(at);
-      box.appendChild(nudge(g, 0.05, at));
-      const clr = mini("✕", "動画位置を解除", recording, ()=>{ commit(); g.cue = null; renderGroups(); });
-      clr.classList.add("kill");
-      clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-      clr.addEventListener("click", e=>e.stopPropagation());
-      box.appendChild(clr);
-    }else{
-      box.appendChild(at);
-    }
-    return box;
-  }
-
-  function mini(label, aria, disabled, fn){
-    const b=document.createElement("button");
-    b.type="button"; b.className="mini"; b.textContent=label;
-    b.setAttribute("aria-label",aria); b.disabled=disabled;
-    b.addEventListener("click", fn);
-    return b;
-  }
-
-  function buildPicker(g){
-    const wrap = document.createElement("div");
-    wrap.className = "g-add";
-    const nSel = document.createElement("select");
-    nSel.setAttribute("aria-label","分子");
-    const dSel = document.createElement("select");
-    dSel.setAttribute("aria-label","分母");
-    Domain.DENOMS.forEach(d=>{
-      const o=document.createElement("option"); o.value=d; o.textContent=d; dSel.appendChild(o);
-    });
-    dSel.value = String(pickDen);
-
-    function fillNum(){
-      nSel.innerHTML = "";
-      for(let i=1;i<=pickDen;i++){
-        const o=document.createElement("option"); o.value=i; o.textContent=i; nSel.appendChild(o);
-      }
-      pickNum = Math.min(pickNum, pickDen);
-      nSel.value = String(pickNum);
-    }
-    fillNum();
-
-    dSel.addEventListener("change", ()=>{ pickDen = Number(dSel.value); fillNum(); syncIdle(); });
-    nSel.addEventListener("change", ()=>{ pickNum = Number(nSel.value); syncIdle(); });
-
-    const slash = document.createElement("span");
-    slash.className="slash"; slash.textContent="/";
-    const add = document.createElement("button");
-    add.type="button"; add.className="step"; add.textContent="追加";
-    add.addEventListener("click", ()=>{
-      commit();
-      g.pattern.rhythms.push(Domain.makeRhythm(pickNum, pickDen));
-      renderGroups(); syncIdle();
-    });
-    wrap.append(nSel, slash, dSel, add);
-    return wrap;
-  }
-
-  function moveBar(g, i, dir){
-    const rs = g.pattern.rhythms;
-    const j = i + dir;
-    if(j < 0 || j >= rs.length) return;
-    commit();
-    [rs[i], rs[j]] = [rs[j], rs[i]];
-    renderGroups();
-  }
-  function removeBar(g, i){
-    commit();
-    g.pattern.rhythms.splice(i,1);
-    renderGroups(); syncIdle();
-  }
-
-  /* ---------- ドラッグ並び替え ---------- */
-  let drag = null;
-  function startDrag(e, index, card){
-    if(running || groups.length < 2) return;
-    e.preventDefault();
-    const cards = [...groupsEl.children];
-    drag = {
-      index, card, target:index, startY:e.clientY,
-      rects: cards.map(c=>c.getBoundingClientRect()),
-      pid: e.pointerId
-    };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    card.classList.add("dragging");
-    e.currentTarget.addEventListener("pointermove", onDragMove);
-    e.currentTarget.addEventListener("pointerup", endDrag);
-    e.currentTarget.addEventListener("pointercancel", endDrag);
-  }
-  function onDragMove(e){
-    if(!drag) return;
-    drag.card.style.transform = "translateY(" + (e.clientY - drag.startY) + "px)";
-    let t = 0;
-    drag.rects.forEach((r,i)=>{
-      if(i !== drag.index && e.clientY > r.top + r.height/2) t++;
-    });
-    drag.target = t;
-    const cards = [...groupsEl.children].filter((c,i)=>i !== drag.index);
-    cards.forEach(c=>c.classList.remove("drop-before","drop-after"));
-    if(cards.length){
-      if(t < cards.length) cards[t].classList.add("drop-before");
-      else cards[cards.length-1].classList.add("drop-after");
-    }
-  }
-  function endDrag(e){
-    if(!drag) return;
-    const el = e.currentTarget;
-    el.removeEventListener("pointermove", onDragMove);
-    el.removeEventListener("pointerup", endDrag);
-    el.removeEventListener("pointercancel", endDrag);
-    drag.card.style.transform = "";
-    drag.card.classList.remove("dragging");
-    const from = drag.index, to = drag.target;
-    drag = null;
-    moveGroup(from, to);
-    renderGroups();
-  }
-
-  /* ---------- Sound（純粋：AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
-  const Sound = (() => {
-    let ctx = null;
-    function ensure(){
-      if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if(ctx.state === "suspended") ctx.resume();
-      return ctx;
-    }
-    function now(){ return ctx ? ctx.currentTime : 0; }
-    function click(accent, time, span){
-      const decay = Math.min(0.045, span * 0.55);
-      const osc = ctx.createOscillator(), gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.value = accent ? 1760 : 880;
-      // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
-      // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
-      gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start(time); osc.stop(time + decay + 0.015);
-    }
-    return { ensure, now, click, get ready(){ return !!ctx; } };
-  })();
-
-  /* ---------- 再生 ---------- */
-  let running=false, timer=null, finished=false, endTime=0;
-  let nextTime=0, beatIdx=0, barIdx=0, repIdx=0, gIdx=0;
-  const LOOKAHEAD=25, AHEAD=0.12, queue=[];
-  let cur = {gid:null, bar:-1, rep:0};
-  let mode = "all", soloId = null;   // "all" = シーケンス全体 / "solo","lead" = 選択中のグループのみ
-  const LEAD_SEC = 5;                // −5秒から再生の助走
-  const isSoloMode = m => m === "solo" || m === "lead";
-  let preroll = 0, firstBeatTime = 0;   // 開始までの空白（秒）と、最初の1打が鳴る時刻
-
-  function readPreroll(){
-    let v = Number(prerollInput.value);
-    if(isNaN(v)) v = 0;
-    v = Math.min(60, Math.max(0, Math.round(v * 100) / 100));
-    prerollInput.value = v.toFixed(2);
-    preroll = v;
-    return v;
-  }
-  const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
-  prerollInput.addEventListener("change", readPreroll);
-
-  function plan(){
-    if(running && isSoloMode(mode)){
-      return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
-    }
-    return groups.filter(g => g.pattern.rhythms.length);
-  }
-  function soloTarget(){
-    const g = findGroup(activeId);
-    return (g && g.pattern.rhythms.length) ? g : null;
-  }
-  const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
-  function updateTransport(){
-    const btns = {all:startAllBtn, solo:startSoloBtn, lead:startLeadBtn};
-    if(running || armKind){
-      const active = running ? mode : armKind;
-      Object.keys(btns).forEach(k=>{
-        const on = (k === active);
-        btns[k].textContent = on ? "停止" : LABELS[k];
-        btns[k].classList.toggle("on", on);
-        btns[k].disabled = !on;
-        btns[k].title = "";
-      });
-      recBtn.classList.toggle("on", recording);
-      recBtn.textContent = recording ? "■ レック中" : "● REC";
-      recBtn.disabled = !recording;
-    }else{
-      const ready = plan().length > 0;
-      const target = soloTarget();
-      const cued = target && target.cue != null && ytReady;
-      Object.keys(btns).forEach(k=>{
-        btns[k].textContent = LABELS[k];
-        btns[k].classList.remove("on");
-      });
-      startAllBtn.disabled = !ready;
-      startSoloBtn.disabled = !target;
-      startLeadBtn.disabled = !cued;
-      startAllBtn.title = ready ? "" : "拍子を1つ以上追加してください";
-      startSoloBtn.title = target ? target.name + " だけを再生" : "再生したいリズムグループをタップして選んでください";
-      startLeadBtn.title = !target ? "再生したいリズムグループをタップして選んでください"
-        : !ytReady ? "動画を読み込むと使えます"
-        : target.cue == null ? "このグループに動画位置が記録されていません"
-        : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
-      recBtn.classList.remove("on");
-      recBtn.textContent = "● REC";
-      recBtn.disabled = !ready || !ytReady;
-      recBtn.title = !ytReady ? "動画を読み込むと使えます"
-        : "動画を先頭から流し、各リズムグループの位置を記録します";
-    }
-  }
-  function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
-  const beatSeconds = d => Domain.rhythmSeconds(d, bpm);
-
-  function scheduler(){
-    // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
-    const limit = Sound.now() + (document.hidden ? 1.2 : AHEAD);
-    if(finished && Sound.now() >= endTime){ stop(true); return; }
-    while(!finished && nextTime < limit){
-      const gs = plan();
-      if(!gs.length){ finished = true; endTime = nextTime; break; }
-      if(gIdx >= gs.length) gIdx = 0;
-      const g = gs[gIdx];
-      const rhythms = g.pattern.rhythms;
-      if(barIdx >= rhythms.length) barIdx = 0;
-      const bar = rhythms[barIdx];
-      if(beatIdx >= bar.num) beatIdx = 0;
-
-      const span = beatSeconds(bar.den);
-      Sound.click(beatIdx === 0, nextTime, span);
-      queue.push({time:nextTime, gid:g.id, rep:repIdx, bar:barIdx, beat:beatIdx, meter:bar});
-      nextTime += span;
-
-      beatIdx++;
-      if(beatIdx >= bar.num){
-        beatIdx = 0; barIdx++;
-        if(barIdx >= rhythms.length){
-          barIdx = 0; repIdx++;
-          if(repIdx >= g.reps){
-            repIdx = 0; gIdx++;
-            if(gIdx >= gs.length){ finished = true; endTime = nextTime; }
-          }
-        }
-      }
-    }
-  }
-
-  let shown = "";
-  function draw(){
-    if(!running) return;
-    if(firstBeatTime && Sound.now() < firstBeatTime){
-      prerollCount.textContent = Math.max(0, firstBeatTime - Sound.now()).toFixed(2);
-    }else if(document.body.classList.contains("waiting")){
-      document.body.classList.remove("waiting");
-      leadEl.classList.remove("counting");
-      prerollCount.hidden = true;
-      statusText.textContent = baseStatus();
-    }
-    while(queue.length && queue[0].time <= Sound.now()){
-      const e = queue.shift();
-      const key = e.gid + ":" + e.rep + ":" + e.bar;
-      if(key !== shown){
-        shown = key;
-        if(recording && e.gid !== recGid){    // グループが切り替わった最初の1打で記録
-          recGid = e.gid;
-          stampCue(e.gid, e.time);
-        }
-        cur = {gid:e.gid, bar:e.bar, rep:e.rep};
-        View.paintBeats(e.meter.num);
-        View.showPulse(e.meter);
-        applyHighlight();
-      }
-      const dots = beatsEl.children;
-      for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === e.beat);
-    }
-    if(finished && Sound.now() >= endTime){ stop(true); return; }
-    requestAnimationFrame(draw);
-  }
-
-  function applyHighlight(){
-    [...groupsEl.children].forEach(card=>{
-      const g = findGroup(card.dataset.id);
-      const on = running && cur.gid === card.dataset.id;
-      card.classList.toggle("playing", on);
-      card.querySelectorAll("[data-bi]").forEach(n=>{
-        n.classList.toggle("now", on && Number(n.dataset.bi) === cur.bar);
-      });
-      const t = card.querySelector('[data-role="times"]');
-      if(t && g){
-        t.textContent = on ? (cur.rep+1) + " / " + g.reps : View.timesText(g);
-      }
-    });
-  }
-
-  function syncIdle(){
-    if(running) return;
-    const gs = plan();
-    const bar = gs.length ? gs[0].pattern.rhythms[0] : {num:pickNum, den:pickDen};
-    View.paintBeats(bar.num);
-    View.showPulse(bar);
-    updateTransport();
-  }
-
-  let armKind = null;         // 準備中（動画の頭出し／再生待ち）のモード
-  let cueWatch = null;
-
-  function firstGroupFor(kind){
-    if(kind !== "all") return soloTarget();
-    return groups.filter(g => g.pattern.rhythms.length)[0] || null;
-  }
-  function cueOf(kind){
-    const g = firstGroupFor(kind);
-    return (g && typeof g.cue === "number") ? g.cue : null;
-  }
-  function armCancel(){
-    armKind = null; cueWatch = null; topWatch = null; pendingKind = null;
-    recording = false; recGid = null;
-    clearTimeout(waitTimer);
-    videoPause();
-    ytSay("", false);
-    statusText.textContent = "停止中";
-    updateTransport();
-  }
-  let topWatch = null;
-  let recording = false, recGid = null;    // 全体レック
-
-  function startRec(){
-    if(running || armKind){ stop(false); return; }       // レック中はトグルで停止
-    if(!ytReady){ ytSay("動画を読み込むと全体レックが使えます", true); return; }
-    if(!plan().length) return;
-    commit();                    // レック1回ぶんをまとめて1手の履歴にする
-    recording = true; recGid = null;
-    start("all");                // 全体レックは常に全体再生・動画は先頭から
-  }
-
-  /* いま鳴り始めたグループに、そのときの動画位置を書き込む */
-  function stampCue(gid, evTime){
-    const g = findGroup(gid);
-    if(!g || !ytReady) return;
-    let t = null;
-    try{ t = ytPlayer.getCurrentTime(); }catch(err){}
-    if(t == null || isNaN(t)) return;
-    const late = Math.max(0, Sound.now() - evTime);   // 取りこぼしたフレームぶんを引く
-    g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
-    const card = groupsEl.querySelector('[data-id="' + gid + '"]');
-    const at = card && card.querySelector(".g-at");
-    if(at){                       // 再描画せず表示だけ差し替える
-      at.textContent = View.fmtTime(g.cue);
-      at.classList.remove("none");
-      at.classList.add("hit");
-    }
-  }
-  function startFromTop(kind){
-    try{
-      ytPlayer.seekTo(0, true);
-      ytPlayer.playVideo();
-    }catch(err){ armKind = null; beginPlayback(kind); return; }
-    topWatch = {kind, t0: performance.now()};
-    statusText.textContent = "頭出し中";
-    ytSay("先頭に戻しています…", false);
-    requestAnimationFrame(pollTop);
-  }
-  function pollTop(){
-    if(!topWatch) return;
-    let st = -1, t = null;
-    try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
-    // 先頭から実際に動き出したことを確認してから刻み始める（ここで空白が効く）
-    if(st === 1 && t != null && t > 0.02 && t < 2){
-      const kind = topWatch.kind;
-      topWatch = null; armKind = null;
-      ytSay("", false);
-      beginPlayback(kind);
-      return;
-    }
-    if(performance.now() - topWatch.t0 > 6000){
-      const kind = topWatch.kind;
-      topWatch = null; armKind = null;
-      ytSay("動画の応答がないため、メトロノームだけ始めます", true);
-      beginPlayback(kind);
-      return;
-    }
-    requestAnimationFrame(pollTop);
-  }
-  function startAtCue(kind, cue){
-    const lead = (kind === "lead");
-    const from = lead ? Math.max(0, cue - LEAD_SEC) : cue;
-    try{
-      ytPlayer.seekTo(from, true);     // lead なら5秒手前、そうでなければ指定秒そのもの
-      ytPlayer.playVideo();
-    }catch(err){ armKind = null; beginPlayback(kind); return; }
-    cueWatch = {target: cue, kind, lead, t0: performance.now(), limit: lead ? (LEAD_SEC + 8) * 1000 : 6000};
-    statusText.textContent = "頭出し中";
-    ytSay("頭出し中…", false);
-    requestAnimationFrame(pollCue);
-  }
-  function pollCue(){
-    if(!cueWatch) return;
-    let st = -1, t = null;
-    try{ st = ytPlayer.getPlayerState(); t = ytPlayer.getCurrentTime(); }catch(err){}
-
-    if(cueWatch.lead){
-      // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
-      // seekTo 直後は getCurrentTime が「巻き戻る前の位置」を数フレーム返すため、
-      // 助走開始点(cue-5)まで実際に戻ったのを確認してから計測を始める
-      // （確認前だと、記録直後で cue 付近にいる位置を「到達」と誤認して即開始してしまう）
-      if(t != null && !isNaN(t)){
-        const from = Math.max(0, cueWatch.target - LEAD_SEC);
-        if(!cueWatch.seeked && t <= from + 0.5) cueWatch.seeked = true;   // 助走開始点まで戻った
-        if(cueWatch.seeked){
-          const remain = cueWatch.target - t;
-          if(remain <= 0){
-            const kind = cueWatch.kind;
-            const over = Math.min(-remain, 0.05);
-            cueWatch = null; armKind = null;
-            ytSay("", false);
-            beginPlayback(kind, {skipWait:true, adjust:-over});
-            return;
-          }
-          ytSay("あと " + remain.toFixed(1) + " 秒で開始", false);
-        }else{
-          ytSay("頭出し中…", false);   // まだ助走開始点に戻っていない
-        }
-      }
-    }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
-      // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
-      const kind = cueWatch.kind;
-      const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
-      cueWatch = null; armKind = null;
-      ytSay("", false);
-      beginPlayback(kind, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
-      return;
-    }
-    if(performance.now() - cueWatch.t0 > cueWatch.limit){
-      const kind = cueWatch.kind;
-      cueWatch = null; armKind = null;
-      ytSay("動画の応答がないため、メトロノームだけ始めます", true);
-      beginPlayback(kind, {skipWait:true});
-      return;
-    }
-    requestAnimationFrame(pollCue);
-  }
-
-  function beginPlayback(kind, opts){
-    if(kind !== "all" && !soloTarget()) return;
-    if(kind === "all" && !plan().length) return;
-    Sound.ensure();
-    mode = (kind === "all") ? "all" : kind;
-    soloId = (mode === "all") ? null : activeId;
-    running = true; shown = "";
-    resumeActiveId = activeId;
-    activeId = null;               // 再生中は全グループを非アクティブにする
-    renderGroups();
-    resetPointer();
-    queue.length = 0;
-    // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
-    // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
-    // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる
-    const o = opts || {};
-    const wait = (mode === "all" && !o.skipWait) ? readPreroll() : 0;
-    const adjust = o.adjust || 0;
-    nextTime = Math.max(Sound.now() + 0.005, Sound.now() + 0.06 + wait + adjust);
-    firstBeatTime = wait > 0 ? nextTime : 0;
-    timer = setInterval(scheduler, LOOKAHEAD);
-    requestAnimationFrame(draw);
-    document.body.classList.add("running");
-    if(wait > 0){
-      document.body.classList.add("waiting");
-      leadEl.classList.add("counting");
-      statusText.textContent = "待機中";
-      prerollCount.hidden = false;
-      prerollCount.textContent = wait.toFixed(2);
-    }else{
-      statusText.textContent = baseStatus();
-    }
-    updateTransport();
-  }
-  function stop(completed, fromVideo){
-    running = false;
-    armKind = null; cueWatch = null; topWatch = null;
-    recording = false; recGid = null;
-    if(!fromVideo) videoPause();
-    clearInterval(timer);
-    queue.length = 0;
-    [...beatsEl.children].forEach(d=>d.classList.remove("on"));
-    cur = {gid:null, bar:-1, rep:0};
-    activeId = resumeActiveId;     // 再生前に開いていたグループへ戻す
-    resumeActiveId = null;
-    renderGroups();
-    document.body.classList.remove("running");
-    document.body.classList.remove("waiting");
-    leadEl.classList.remove("counting");
-    prerollCount.hidden = true;
-    firstBeatTime = 0;
-    mode = "all"; soloId = null;
-    statusText.textContent = completed ? "完了" : "停止中";
-    resetPointer();
-    syncIdle();
-    updateTransport();
-  }
-  /* --- 再生の入口：動画があれば、動画が実際に鳴り出してから刻み始める --- */
-  function start(kind){
-    if(kind !== "all" && !soloTarget()) return;
-    if(kind === "all" && !plan().length) return;
-    if(videoArmed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
-      armKind = kind;
-      updateTransport();
-      startFromTop(kind);
-      return;
-    }
-    const cue = cueOf(kind);
-    if(kind === "lead"){                       // −5秒から再生は、動画と記録位置が揃っているときだけ
-      if(!videoArmed() || cue == null) return;
-      armKind = kind;
-      updateTransport();
-      startAtCue(kind, cue);
-      return;
-    }
-    if(videoArmed() && cue != null){          // グループ再生は記録した位置から合わせる
-      armKind = kind;
-      updateTransport();
-      startAtCue(kind, cue);
-      return;
-    }
-    if(videoArmed()){
-      armKind = kind;
-      updateTransport();
-      pendingKind = kind;
-      ytSay("動画の再生を待っています…", false);
-      try{ ytPlayer.playVideo(); }catch(err){ pendingKind = null; armKind = null; beginPlayback(kind); return; }
-      clearTimeout(waitTimer);
-      waitTimer = setTimeout(()=>{                 // 反応がなければ単体で始める
-        if(pendingKind){ const k = pendingKind; pendingKind = null; armKind = null; ytSay("動画の応答がないため、メトロノームだけ始めます", true); beginPlayback(k); }
-      }, 4000);
-      return;
-    }
-    beginPlayback(kind);
-  }
-
-  document.addEventListener("visibilitychange", ()=>{ if(running && Sound.ready) scheduler(); });
-
-  recBtn.addEventListener("click", startRec);
-
-  startAllBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("all")));
-  startSoloBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("solo")));
-  startLeadBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("lead")));
-  document.addEventListener("keydown", e=>{
-    const mod = e.metaKey || e.ctrlKey;
-    if(mod && e.key.toLowerCase() === "z"){
-      e.preventDefault();
-      e.shiftKey ? History.redo() : History.undo();
-      return;
-    }
-    if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); History.redo(); return; }
-    if(e.code !== "Space") return;
-    const t = e.target.tagName;
-    if(t==="INPUT" || t==="SELECT" || t==="BUTTON") return;
-    e.preventDefault();
-    running ? stop(false) : start("all");
-  });
-
-  /* ================= YAML 保存 / 読み込み ================= */
+  /* ========================================================================
+     infra … ブラウザ API アダプタ層。usecase からはプリミティブ／DTO で呼ばれ、
+     結果は戻り値・例外・コールバックで返す（DOM の say などは呼ばない）。
+       Yaml         … このスキーマ用の最小エンコーダ／パーサ（純粋）
+       SoundGateway … AudioContext のライフサイクルとクリック音合成
+       ClockGateway … タイミング源（AudioContext 時刻・setInterval・rAF・背面判定）
+       FileGateway  … 保存／読込（File System Access API と Blob/input フォールバック）
+       VideoGateway … YouTube IFrame API アダプタ
+     ======================================================================== */
 
   /* ---------- Yaml（純粋：このスキーマ用の最小エンコーダ／パーサ。DOM もアプリ状態も参照しない） ----------
      scalarStr … 値を必要なときだけクォートして書き出す
-     parse     … テキストを素の JS オブジェクト（map/list/scalar）へ。ドメインへの変換は applyDoc 側 */
+     stringify … 保存用 DTO（version/kind/name/tempo/preroll/video/groups）を YAML 文字列へ
+     parse     … テキストを素の JS オブジェクト（map/list/scalar）へ。ドメインへの変換は Mapper 側 */
   const Yaml = (() => {
     function scalarStr(v){
       const t = String(v);
@@ -1498,319 +592,1515 @@
       }
       return block(lines.length ? lines[0].indent : 0);
     }
-    return { scalarStr, parse };
+    // 保存用 DTO → YAML（version/kind/name/tempo/[preroll]/[video]/groups[{name,repeat,[cue],pattern}]）
+    function stringify(dto){
+      const L = ["version: " + dto.version, "kind: " + dto.kind, "",
+                 "name: " + scalarStr(dto.name), "tempo: " + dto.tempo];
+      if(dto.preroll != null) L.push("preroll: " + dto.preroll.toFixed(2));
+      if(dto.video) L.push("video: " + scalarStr(dto.video));
+      L.push("", "groups:");
+      dto.groups.forEach(g=>{
+        L.push("  - name: " + scalarStr(g.name));
+        L.push("    repeat: " + g.repeat);
+        if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
+        L.push("    pattern: [" + g.pattern.join(", ") + "]");
+      });
+      return L.join("\n") + "\n";
+    }
+    return { scalarStr, parse, stringify };
   })();
 
-  /* --- 書き出し（アプリ状態を YAML 文字列にする） --- */
-  function toYaml(){
-    const L = ["version: 1", "kind: metronome.sequence", "",
-               "name: " + Yaml.scalarStr(seqName), "tempo: " + bpm];
-    if(preroll > 0) L.push("preroll: " + preroll.toFixed(2));
-    if(ytCurrent) L.push("video: " + Yaml.scalarStr(videoUrl()));
-    L.push("", "groups:");
-    groups.forEach(g=>{
-      L.push("  - name: " + Yaml.scalarStr(g.name));
-      L.push("    repeat: " + g.reps);
-      if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
-      L.push("    pattern: [" + g.pattern.rhythms.map(Domain.formatRhythm).join(", ") + "]");
-    });
-    return L.join("\n") + "\n";
-  }
-  function fileName(){
-    const base = (seqName.trim() || "sequence").replace(/[\\/:*?"<>|\n\r\t]/g, "_").slice(0,60);
-    return base + ".metronome.yml";
-  }
-
-  /* --- 取り込み --- */
-  function applyDoc(doc){
-    if(!doc || typeof doc !== "object" || Array.isArray(doc)) throw new Error("シーケンスの形式ではありません");
-    if(!Array.isArray(doc.groups)) throw new Error("groups が見つかりません");
-
-    const notes = [];
-    if(doc.version != null && Number(doc.version) !== 1) notes.push("version " + doc.version + " は未知のため v1 として読み込みました");
-
-    let dropped = 0;
-    const loaded = doc.groups.map((raw, idx)=>{
-      const g = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
-      const pat = g.pattern;
-      const items = Array.isArray(pat) ? pat : (pat == null ? [] : [pat]);
-      const rhythms = [];
-      items.forEach(it=>{
-        const b = Domain.parseRhythm((it && typeof it === "object") ? it.meter : it);
-        if(b) rhythms.push(b); else dropped++;
-      });
-      return Domain.makeGroup({
-        name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
-        reps: g.repeat,
-        cue: g.cue,
-        rhythms
-      });
-    });
-    if(!loaded.length) { loaded.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
-    if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + Domain.DENOMS.join(",") + "、分子は 1〜分母）");
-
-    if(running) stop(false);
-    commit();                                  // 読み込みも Undo で戻せる
-    seqName = (doc.name == null || String(doc.name) === "") ? "無題のシーケンス" : String(doc.name);
-    seqNameEl.value = seqName;
-    applySeqName();
-    groups = loaded;
-    groupSeq = loaded.length;
-    activeId = null;
-    setTempo(Domain.clampInt(doc.tempo, Domain.MIN, Domain.MAX, 120));
-    const pre = Number(doc.preroll);
-    prerollInput.value = (isNaN(pre) ? 0 : Math.min(60, Math.max(0, pre))).toFixed(2);
-    readPreroll();
-    if(doc.video != null){
-      const v = parseYouTube(doc.video);
-      if(v) mountVideo(v); else notes.push("video のURLを読めませんでした");
+  /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
+  const SoundGateway = (() => {
+    let ctx = null;
+    function ensure(){
+      if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if(ctx.state === "suspended") ctx.resume();
+      return ctx;
     }
-    renderGroups();
-    syncIdle();
-
-    const bars = loaded.reduce((n,g)=>n+g.pattern.rhythms.length, 0);
-    return ["読み込みました：" + loaded.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
-  }
-
-  /* --- 実行（保存・読み込みは1クリックで完了する） --- */
-  let msgTimer = null;
-  function say(text, bad){
-    ioMsg.textContent = text;
-    ioMsg.classList.toggle("bad", !!bad);
-    ioMsg.hidden = false;
-    clearTimeout(msgTimer);
-    msgTimer = setTimeout(()=>{ ioMsg.hidden = true; }, bad ? 9000 : 5000);
-  }
-  function readText(text){
-    try{
-      say(applyDoc(Yaml.parse(text)), false);
-    }catch(err){
-      say("読み込めませんでした：" + err.message, true);
+    function now(){ return ctx ? ctx.currentTime : 0; }
+    function click(accent, time, span){
+      const decay = Math.min(0.045, span * 0.55);
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = accent ? 1760 : 880;
+      // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
+      // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
+      gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
+      gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(time); osc.stop(time + decay + 0.015);
     }
-  }
-  function readFile(file){
-    if(!file) return;
-    const r = new FileReader();
-    r.onload = ()=>readText(String(r.result));
-    r.onerror = ()=>say("ファイルを読めませんでした", true);
-    r.readAsText(file);
-  }
+    return { ensure, now, click, get ready(){ return !!ctx; } };
+  })();
 
-  saveBtn.addEventListener("click", async ()=>{
-    const name = fileName(), text = toYaml();
-    if(canSavePicker){
-      try{
-        const handle = await window.showSaveFilePicker({suggestedName:name, types:FILE_TYPES});
-        const w = await handle.createWritable();
-        await w.write(text);
-        await w.close();
-        say(handle.name + " に保存しました", false);
-        return;
-      }catch(err){
-        if(err && err.name === "AbortError") return;      // キャンセルは黙って戻る
-      }
-    }
-    try{
-      const blob = new Blob([text], {type:"text/yaml;charset=utf-8"});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(url), 1000);
-      say(name + " を保存しました", false);
-    }catch(err){
-      say("この環境ではファイルに書き出せません", true);
-    }
-  });
-
-  loadBtn.addEventListener("click", async ()=>{
-    try{
-      const [handle] = await window.showOpenFilePicker({multiple:false, types:FILE_TYPES});
-      const file = await handle.getFile();
-      readText(await file.text());
-    }catch(err){
-      if(err && err.name === "AbortError") return;
-      say("ファイルを開けませんでした", true);
-    }
-  });
-
-  ioFile.addEventListener("change", ()=>{
-    readFile(ioFile.files && ioFile.files[0]);
-    ioFile.value = "";
-  });
-
-  /* ダイアログが使える環境ではボタン、使えない環境では input[type=file] を出す */
-  if(canOpenPicker){
-    loadBtn.hidden = false;
-    ioFileLabel.hidden = true;
-  }
-
-  /* --- ドラッグ＆ドロップ --- */
-  let dragDepth = 0;
-  document.addEventListener("dragenter", e=>{
-    if(!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
-    dragDepth++; document.body.classList.add("dropping");
-  });
-  document.addEventListener("dragover", e=>{ e.preventDefault(); });
-  document.addEventListener("dragleave", ()=>{
-    dragDepth = Math.max(0, dragDepth-1);
-    if(!dragDepth) document.body.classList.remove("dropping");
-  });
-  document.addEventListener("drop", e=>{
-    e.preventDefault();
-    dragDepth = 0; document.body.classList.remove("dropping");
-    readFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
-  });
-
-  /* ================= YouTube 同時再生 ================= */
-  let ytPlayer = null, ytReady = false, pendingKind = null, waitTimer = null, apiTimer = null;
-  let ytCurrent = null;
-  // file:// や content:// で開くと Referer が付かず、埋め込みが 153 で弾かれる
-  const embedBlocked = !/^https?:$/.test(location.protocol);
-  const LOCAL_NOTE = "このHTMLをローカルファイルとして開いているため、YouTubeの埋め込みは再生できません（エラー153）。\n"
-    + "Webサーバー経由で開くと動きます（例：置いたフォルダで python3 -m http.server → http://localhost:8000/…）。\n"
-    + "このままでも「別タブで開いて同時に開始」は使えます。";
-  const ERROR_NOTE = {
-    2:   "URLが正しくないようです",
-    5:   "この動画はプレイヤーで再生できません",
-    100: "動画が見つかりません（削除／非公開）",
-    101: "この動画は埋め込み再生が許可されていません",
-    150: "この動画は埋め込み再生が許可されていません",
-    153: LOCAL_NOTE
+  /* ---------- ClockGateway（タイミング源。刻みは AudioContext 時刻、UI 更新は rAF、先読みは setInterval） ---------- */
+  const ClockGateway = {
+    now(){ return SoundGateway.now(); },   // AudioContext 時刻（刻みの基準）
+    perf(){ return performance.now(); },   // 経過時間の計測（頭出しのタイムアウト用）
+    hidden(){ return document.hidden; },   // 背面タブ判定（先読み延長用）
+    every(ms, fn){ const id = setInterval(fn, ms); return () => clearInterval(id); },
+    frame(fn){ return requestAnimationFrame(fn); }
   };
 
-  function ytSay(text, bad){
-    ytMsg.textContent = text;
-    ytMsg.classList.toggle("bad", !!bad);
-    ytMsg.hidden = !text;
-  }
-  const videoArmed = () => ytReady && ytSync.checked && !!ytPlayer && !embedBlocked;
-  function videoUrl(){
-    if(!ytCurrent) return "";
-    return "https://www.youtube.com/watch?v=" + ytCurrent.id + (ytCurrent.start ? "&t=" + ytCurrent.start : "");
-  }
-  function videoPause(){
-    if(ytReady && ytPlayer && ytSync.checked){
-      try{ ytPlayer.pauseVideo(); }catch(err){}
-    }
-  }
-
-  function parseYouTube(raw){
-    const text = String(raw || "").trim();
-    if(!text) return null;
-    const m = text.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/)
-           || text.match(/^([A-Za-z0-9_-]{11})$/);
-    if(!m) return null;
-    let start = 0;
-    const t = text.match(/[?&](?:t|start)=([^&#]+)/);
-    if(t){
-      const v = t[1];
-      if(/^\d+s?$/.test(v)) start = parseInt(v, 10);
-      else{
-        const hms = v.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
-        if(hms) start = (+(hms[1]||0))*3600 + (+(hms[2]||0))*60 + (+(hms[3]||0));
+  /* ---------- FileGateway（保存／読込のブラウザ境界。文字列とやり取りし、DOM メッセージは呼ばない） ---------- */
+  const FileGateway = (() => {
+    const canSavePicker = typeof window.showSaveFilePicker === "function";
+    const canOpenPicker = typeof window.showOpenFilePicker === "function";
+    const FILE_TYPES = [{description:"メトロノーム シーケンス", accept:{"text/yaml":[".yml",".yaml"]}}];
+    // 保存：ダイアログ→（不可／失敗なら）Blob ダウンロード。{name,via} / {cancelled} を返し、書けなければ例外
+    async function save(name, text){
+      if(canSavePicker){
+        try{
+          const handle = await window.showSaveFilePicker({suggestedName:name, types:FILE_TYPES});
+          const w = await handle.createWritable();
+          await w.write(text);
+          await w.close();
+          return {name: handle.name, via: "picker"};
+        }catch(err){
+          if(err && err.name === "AbortError") return {cancelled: true};   // キャンセルは黙って戻る
+          // それ以外は Blob フォールバックへ
+        }
+      }
+      try{
+        const blob = new Blob([text], {type:"text/yaml;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url), 1000);
+        return {name, via: "blob"};
+      }catch(err){
+        throw new Error("write-unavailable");
       }
     }
-    return {id:m[1], start};
-  }
+    async function open(){
+      const [handle] = await window.showOpenFilePicker({multiple:false, types:FILE_TYPES});
+      const file = await handle.getFile();
+      return await file.text();
+    }
+    function readFile(file){
+      return new Promise((resolve, reject)=>{
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("read-failed"));
+        r.readAsText(file);
+      });
+    }
+    return { canSavePicker, canOpenPicker, save, open, readFile };
+  })();
 
-  function withApi(cb){
-    if(window.YT && window.YT.Player) return cb();
-    const prev = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = function(){
-      if(typeof prev === "function") prev();
-      clearTimeout(apiTimer);
-      cb();
+  /* ---------- VideoGateway（YouTube IFrame API アダプタ。usecase へは秒数／状態などプリミティブで返す） ----------
+     再生位置・状態はメソッドで、頭出し中の状態変化はコールバック（onReady/onPlaying/onStopped/onMsg）で通知する。 */
+  const VideoGateway = (() => {
+    let ytPlayer = null, ytReady = false, apiTimer = null, ytCurrent = null;
+    let deps = { onMsg(){}, onReady(){}, onPlaying(){}, onStopped(){}, syncEnabled(){ return false; } };
+    const stage = $("ytStage"), foot = $("ytFoot"), openBtn = $("ytOpen");
+    // file:// や content:// で開くと Referer が付かず、埋め込みが 153 で弾かれる
+    const embedBlocked = !/^https?:$/.test(location.protocol);
+    const LOCAL_NOTE = "このHTMLをローカルファイルとして開いているため、YouTubeの埋め込みは再生できません（エラー153）。\n"
+      + "Webサーバー経由で開くと動きます（例：置いたフォルダで python3 -m http.server → http://localhost:8000/…）。\n"
+      + "このままでも「別タブで開いて同時に開始」は使えます。";
+    const ERROR_NOTE = {
+      2:   "URLが正しくないようです",
+      5:   "この動画はプレイヤーで再生できません",
+      100: "動画が見つかりません（削除／非公開）",
+      101: "この動画は埋め込み再生が許可されていません",
+      150: "この動画は埋め込み再生が許可されていません",
+      153: LOCAL_NOTE
     };
-    if(!document.getElementById("yt-api")){
-      const tag = document.createElement("script");
-      tag.id = "yt-api";
-      tag.src = "https://www.youtube.com/iframe_api";
-      tag.onerror = ()=>ytSay("YouTube を読み込めませんでした（オフライン、または通信が遮断されています）", true);
-      document.head.appendChild(tag);
-    }
-    clearTimeout(apiTimer);
-    apiTimer = setTimeout(()=>{
-      if(!(window.YT && window.YT.Player)) ytSay("YouTube を読み込めませんでした（オフライン、または通信が遮断されています）", true);
-    }, 8000);
-  }
 
-  function mountVideo(v){
-    ytCurrent = v;
-    ytStage.hidden = false;
-    ytFoot.hidden = false;
-    ytOpen.hidden = false;
-    if(embedBlocked){ ytSay(LOCAL_NOTE, true); }
-    else{ ytSay("読み込み中…", false); }
-    withApi(()=>{
-      if(ytPlayer && ytReady){
-        try{ ytPlayer.cueVideoById({videoId:v.id, startSeconds:v.start}); ytSay("", false); return; }catch(err){}
+    function parse(raw){
+      const text = String(raw || "").trim();
+      if(!text) return null;
+      const m = text.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/)
+             || text.match(/^([A-Za-z0-9_-]{11})$/);
+      if(!m) return null;
+      let start = 0;
+      const t = text.match(/[?&](?:t|start)=([^&#]+)/);
+      if(t){
+        const v = t[1];
+        if(/^\d+s?$/.test(v)) start = parseInt(v, 10);
+        else{
+          const hms = v.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+          if(hms) start = (+(hms[1]||0))*3600 + (+(hms[2]||0))*60 + (+(hms[3]||0));
+        }
       }
-      ytPlayer = new YT.Player("ytFrame", {
-        videoId: v.id,
-        playerVars: {playsinline:1, rel:0, modestbranding:1, start:v.start},
-        events: {
-          onReady: ()=>{ ytReady = true; ytSay("", false); renderGroups(); },
-          onError: e=>ytSay(ERROR_NOTE[e.data] || ("再生できません（エラー " + e.data + "）"), true),
-          onStateChange: e=>{
-            if(e.data === YT.PlayerState.PLAYING){
-              if(pendingKind){
-                const k = pendingKind; pendingKind = null; armKind = null;
-                clearTimeout(waitTimer);
-                ytSay("", false);
-                beginPlayback(k);                    // 動画が鳴り出した瞬間に刻み始める
-              }
-            }else if(e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED){
-              clearTimeout(waitTimer); pendingKind = null;
-              if(running && ytSync.checked) stop(false, true);   // 動画を止めたら刻みも止まる
+      return {id:m[1], start};
+    }
+    function withApi(cb){
+      if(window.YT && window.YT.Player) return cb();
+      const prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function(){
+        if(typeof prev === "function") prev();
+        clearTimeout(apiTimer);
+        cb();
+      };
+      if(!document.getElementById("yt-api")){
+        const tag = document.createElement("script");
+        tag.id = "yt-api";
+        tag.src = "https://www.youtube.com/iframe_api";
+        tag.onerror = ()=>deps.onMsg("YouTube を読み込めませんでした（オフライン、または通信が遮断されています）", true);
+        document.head.appendChild(tag);
+      }
+      clearTimeout(apiTimer);
+      apiTimer = setTimeout(()=>{
+        if(!(window.YT && window.YT.Player)) deps.onMsg("YouTube を読み込めませんでした（オフライン、または通信が遮断されています）", true);
+      }, 8000);
+    }
+    function mount(v){
+      ytCurrent = v;
+      stage.hidden = false;
+      foot.hidden = false;
+      openBtn.hidden = false;
+      if(embedBlocked){ deps.onMsg(LOCAL_NOTE, true); }
+      else{ deps.onMsg("読み込み中…", false); }
+      withApi(()=>{
+        if(ytPlayer && ytReady){
+          try{ ytPlayer.cueVideoById({videoId:v.id, startSeconds:v.start}); deps.onMsg("", false); return; }catch(err){}
+        }
+        ytPlayer = new YT.Player("ytFrame", {
+          videoId: v.id,
+          playerVars: {playsinline:1, rel:0, modestbranding:1, start:v.start},
+          events: {
+            onReady: ()=>{ ytReady = true; deps.onReady(); },
+            onError: e=>deps.onMsg(ERROR_NOTE[e.data] || ("再生できません（エラー " + e.data + "）"), true),
+            onStateChange: e=>{
+              if(e.data === YT.PlayerState.PLAYING){ deps.onPlaying(); }
+              else if(e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED){ deps.onStopped(); }
+            }
+          }
+        });
+      });
+    }
+    function clear(){
+      try{ ytPlayer && ytPlayer.destroy(); }catch(err){}
+      ytPlayer = null; ytReady = false;
+      const holder = document.createElement("div");
+      holder.id = "ytFrame";
+      stage.innerHTML = ""; stage.appendChild(holder);
+      stage.hidden = true; foot.hidden = true; openBtn.hidden = true;
+      ytCurrent = null;
+    }
+    function url(){
+      if(!ytCurrent) return "";
+      return "https://www.youtube.com/watch?v=" + ytCurrent.id + (ytCurrent.start ? "&t=" + ytCurrent.start : "");
+    }
+    function armed(){ return ytReady && deps.syncEnabled() && !!ytPlayer && !embedBlocked; }
+    function pause(){ if(ytReady && ytPlayer && deps.syncEnabled()){ try{ ytPlayer.pauseVideo(); }catch(err){} } }
+    // プレイヤ操作（例外は呼び出し側で握る＝原実装と同じ挙動）
+    function seekTo(sec, allow){ ytPlayer.seekTo(sec, allow); }
+    function play(){ ytPlayer.playVideo(); }
+    function time(){ return ytPlayer.getCurrentTime(); }
+    function stateCode(){ return ytPlayer.getPlayerState(); }
+
+    return {
+      init(o){ deps = Object.assign(deps, o); },
+      parse, mount, clear, url, armed, pause, seekTo, play, time, stateCode,
+      syncOn: () => deps.syncEnabled(),
+      ready: () => ytReady,
+      current: () => ytCurrent
+    };
+  })();
+
+
+  /* ========================================================================
+     usecase … 操作インタフェースの集約と DTO⇔entity 変換。ui からはここだけを呼び、
+     infra は内向き（コールバック／戻り値）で使う。DOM 反映は ui に委譲する。
+       HistoryService … 汎用 undo/redo（capture/apply は Store.snapshot/restore に配線）
+       StoreService   … 編集操作の集約（各操作は commit＋Store.apply を束ねる）
+       SequenceMapper … entity ⇔ 保存用 DTO（reps⇔repeat の対応もここ）
+       SequenceIO     … 保存／読込のオーケストレーション（結果メッセージを戻り値で返す）
+       PlaybackScheduler … 先読みスケジューラ（クリック予約とビートイベント列 queue）
+       VideoSync      … 動画の頭出し／助走／cue 記録（VideoGateway を駆動）
+       Transport      … 再生ステートマシン（all/solo/lead・preroll・全REC・動画同期の統括）
+     ======================================================================== */
+
+  /* ---------- HistoryService（汎用：past/future スタックと undo/redo。記録/復元は capture/apply に委譲） ---------- */
+  const HistoryService = (() => {
+    const MAX = 60;
+    let past = [], future = [];
+    let capture = () => "", apply = () => {}, onChange = () => {};
+    return {
+      init(o){ capture = o.capture; apply = o.apply; onChange = o.onChange || (()=>{}); },
+      commit(){ past.push(capture()); if(past.length > MAX) past.shift(); future.length = 0; onChange(); },
+      undo(){ if(!past.length) return; future.push(capture()); apply(past.pop()); onChange(); },
+      redo(){ if(!future.length) return; past.push(capture()); apply(future.pop()); onChange(); },
+      canUndo(){ return past.length > 0; },
+      canRedo(){ return future.length > 0; }
+    };
+  })();
+
+  /* ---------- StoreService（編集操作の集約。UI はこれだけを呼ぶ。meta は UI への再描画ヒント） ----------
+     meta フラグ：render=グループ再描画 / idle=停止時プレビュー更新 / tempo=テンポ表示 /
+                  preroll=空白入力の整形 / seqName=名前入力＋タイトル / seqTitle=タイトルのみ /
+                  focusHandle=並び替え後にフォーカスするハンドルの id */
+  const StoreService = (() => {
+    return {
+      addGroup(){
+        HistoryService.commit();
+        Store.apply(s => {
+          s.groupSeq++;
+          const g = Domain.makeGroup({name:"リズムグループ"+s.groupSeq, reps:8});
+          s.groups.push(g);
+          s.activeId = g.id;
+        }, {render:true});
+      },
+      duplicateGroup(id){
+        HistoryService.commit();
+        Store.apply(s => {
+          const i = s.groups.findIndex(g=>g.id===id);
+          const copy = Domain.cloneGroup(s.groups[i]);
+          s.groups.splice(i+1, 0, copy);
+          s.activeId = copy.id;
+        }, {render:true, idle:true});
+      },
+      removeGroup(id){
+        if(Store.getState().groups.length <= 1) return;
+        HistoryService.commit();
+        Store.apply(s => {
+          const i = s.groups.findIndex(g=>g.id===id);
+          s.groups.splice(i,1);
+          if(s.activeId === id) s.activeId = null;
+        }, {render:true, idle:true});
+      },
+      moveGroup(from, to){
+        const s = Store.getState();
+        if(to < 0 || to >= s.groups.length || from === to) return;
+        HistoryService.commit();
+        const id = s.groups[from].id;
+        Store.apply(st => { const [g] = st.groups.splice(from,1); st.groups.splice(to,0,g); }, {render:true, focusHandle:id});
+      },
+      toggleActive(id){
+        Store.apply(s => { s.activeId = (s.activeId === id) ? null : id; }, {render:true});
+      },
+      setReps(id, value){
+        HistoryService.commit();
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          let v = Math.round(Number(value));
+          if(isNaN(v)) v = 1;
+          g.reps = Math.min(999, Math.max(1, v));
+        }, {render:true});
+      },
+      setGroupName(id, name){
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.name = name; }, {});
+      },
+      addBar(id, num, den){
+        HistoryService.commit();
+        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
+      },
+      moveBar(id, i, dir){
+        const g = Store.findGroup(id);
+        const rs = g.pattern.rhythms;
+        const j = i + dir;
+        if(j < 0 || j >= rs.length) return;
+        HistoryService.commit();
+        Store.apply(() => { [rs[i], rs[j]] = [rs[j], rs[i]]; }, {render:true});
+      },
+      removeBar(id, i){
+        HistoryService.commit();
+        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
+      },
+      setCue(id, value){            // REC 記録・解除（commit＋再描画）
+        HistoryService.commit();
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {render:true});
+      },
+      nudgeCue(id, value){          // ± 微調整（commit は呼び出し側で連打をまとめる。再描画なし）
+        Store.apply(s => { const g = s.groups.find(x=>x.id===id); if(g) g.cue = value; }, {});
+      },
+      setTempo(v, from){            // テンポは履歴対象外
+        const cur = Store.getState().bpm;
+        v = Math.round(Number(v));
+        if(isNaN(v)) v = cur;
+        const bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, v));
+        Store.apply({bpm}, {tempo:true, idle:true, from});
+      },
+      setSeqName(name){
+        Store.apply(s => { s.seqName = name; }, {seqTitle:true});
+      },
+      setPreroll(raw){              // 空白（秒）。0..60 に丸めて 2桁へ。meta で入力欄も整形
+        let v = Number(raw);
+        if(isNaN(v)) v = 0;
+        v = Math.min(60, Math.max(0, Math.round(v * 100) / 100));
+        Store.apply({preroll: v}, {preroll:true});
+        return v;
+      },
+      setPicker(num, den){          // 「拍子を追加」ピッカー。再描画は呼び出し側で（syncIdle）
+        Store.apply(s => { if(num != null) s.pickNum = num; if(den != null) s.pickDen = den; }, {});
+      },
+      // 読み込んだ Sequence でまるごと差し替える（applyDoc 相当の副作用オーケストレーション）
+      replaceSequence(sequence, notes, rawVideo){
+        if(Transport.running()) Transport.stop(false);
+        HistoryService.commit();                            // 読み込みも Undo で戻せる
+        Store.apply(s => {
+          s.seqName = sequence.name;
+          s.groups = sequence.groups;
+          s.groupSeq = sequence.groups.length;
+          s.activeId = null;
+        }, {seqName:true});
+        StoreService.setTempo(sequence.tempo);
+        StoreService.setPreroll(sequence.preroll);
+        if(rawVideo != null){
+          const v = VideoGateway.parse(rawVideo);
+          if(v) VideoGateway.mount(v); else notes.push("video のURLを読めませんでした");
+        }
+        Store.apply(null, {render:true, idle:true});
+      }
+    };
+  })();
+
+  /* ---------- SequenceMapper（entity ⇔ 保存用 DTO。書き側 repeat⇔実行時 reps の対応もここ） ---------- */
+  const SequenceMapper = (() => {
+    function toDto(seq){
+      return {
+        version: 1,
+        kind: "metronome.sequence",
+        name: seq.name,
+        tempo: seq.tempo,
+        preroll: (seq.preroll > 0) ? seq.preroll : null,
+        video: seq.video || null,
+        groups: seq.groups.map(g => ({
+          name: g.name,
+          repeat: g.reps,
+          cue: (g.cue != null) ? g.cue : null,
+          pattern: g.pattern.rhythms.map(Domain.formatRhythm)
+        }))
+      };
+    }
+    // 取り込み（Yaml.parse の生オブジェクト → entity）。寛容側：不正な拍子だけ落として数え上げる
+    function toEntity(doc){
+      if(!doc || typeof doc !== "object" || Array.isArray(doc)) throw new Error("シーケンスの形式ではありません");
+      if(!Array.isArray(doc.groups)) throw new Error("groups が見つかりません");
+
+      const notes = [];
+      if(doc.version != null && Number(doc.version) !== 1) notes.push("version " + doc.version + " は未知のため v1 として読み込みました");
+
+      let dropped = 0;
+      const groups = doc.groups.map((raw, idx)=>{
+        const g = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+        const pat = g.pattern;
+        const items = Array.isArray(pat) ? pat : (pat == null ? [] : [pat]);
+        const rhythms = [];
+        items.forEach(it=>{
+          const b = Domain.parseRhythm((it && typeof it === "object") ? it.meter : it);
+          if(b) rhythms.push(b); else dropped++;
+        });
+        return Domain.makeGroup({
+          name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
+          reps: g.repeat,
+          cue: g.cue,
+          rhythms
+        });
+      });
+      if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
+      if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + Domain.DENOMS.join(",") + "、分子は 1〜分母）");
+
+      const sequence = Domain.makeSequence({ name: doc.name, tempo: doc.tempo, preroll: doc.preroll, video: doc.video, groups });
+      return { sequence, notes, rawVideo: doc.video };
+    }
+    return { toDto, toEntity };
+  })();
+
+  /* ---------- SequenceIO（保存／読込のオーケストレーション。DOM の say は呼ばず結果を戻り値で返す） ---------- */
+  const SequenceIO = (() => {
+    function fileName(name){
+      const base = (name.trim() || "sequence").replace(/[\\/:*?"<>|\n\r\t]/g, "_").slice(0,60);
+      return base + ".metronome.yml";
+    }
+    // 現在の状態から Sequence entity を組む（tempo=bpm、video=読み込み中の URL）
+    function currentSequence(){
+      const s = Store.getState();
+      return Domain.makeSequence({
+        name: s.seqName, tempo: s.bpm, preroll: s.preroll,
+        video: VideoGateway.url() || null, groups: s.groups
+      });
+    }
+    async function save(){
+      const seq = currentSequence();
+      const dto = SequenceMapper.toDto(seq);
+      const text = Yaml.stringify(dto);
+      const name = fileName(seq.name);
+      let r;
+      try{ r = await FileGateway.save(name, text); }
+      catch(err){ return { message: "この環境ではファイルに書き出せません", bad: true }; }
+      if(r.cancelled) return null;                       // キャンセルは黙って戻る
+      return { message: r.name + (r.via === "picker" ? " に保存しました" : " を保存しました"), bad: false };
+    }
+    // 生テキスト → 取り込み。成功メッセージ（注記込み）を返す。失敗は例外
+    function importText(text){
+      const { sequence, notes, rawVideo } = SequenceMapper.toEntity(Yaml.parse(text));
+      StoreService.replaceSequence(sequence, notes, rawVideo);   // video 読めなければ notes に注記が追加される
+      const bars = Domain.totalBars(sequence.groups);
+      return ["読み込みました：" + sequence.groups.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
+    }
+    return { fileName, save, importText };
+  })();
+
+  /* ---------- PlaybackScheduler（先読みスケジューラ。クリックを予約し、描画用の queue を積むだけ） ----------
+     ドット描画／REC 判定など DOM 由来は含めない。plan() は現在のモードに応じた再生対象グループ列。 */
+  const PlaybackScheduler = (() => {
+    const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
+    let nextTime = 0, beatIdx = 0, barIdx = 0, repIdx = 0, gIdx = 0, finished = false, endTime = 0;
+    const beatSeconds = d => Domain.rhythmSeconds(d, Store.getState().bpm);
+    function plan(){
+      const groups = Store.getState().groups;
+      if(Transport.running() && Transport.isSolo()){
+        return groups.filter(g => g.id === Transport.soloId() && g.pattern.rhythms.length);
+      }
+      return groups.filter(g => g.pattern.rhythms.length);
+    }
+    function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
+    function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
+    function pump(limit){
+      while(!finished && nextTime < limit){
+        const gs = plan();
+        if(!gs.length){ finished = true; endTime = nextTime; break; }
+        if(gIdx >= gs.length) gIdx = 0;
+        const g = gs[gIdx];
+        const rhythms = g.pattern.rhythms;
+        if(barIdx >= rhythms.length) barIdx = 0;
+        const bar = rhythms[barIdx];
+        if(beatIdx >= bar.num) beatIdx = 0;
+
+        const span = beatSeconds(bar.den);
+        SoundGateway.click(beatIdx === 0, nextTime, span);
+        queue.push({time:nextTime, gid:g.id, rep:repIdx, bar:barIdx, beat:beatIdx, meter:bar});
+        nextTime += span;
+
+        beatIdx++;
+        if(beatIdx >= bar.num){
+          beatIdx = 0; barIdx++;
+          if(barIdx >= rhythms.length){
+            barIdx = 0; repIdx++;
+            if(repIdx >= g.reps){
+              repIdx = 0; gIdx++;
+              if(gIdx >= gs.length){ finished = true; endTime = nextTime; }
             }
           }
         }
+      }
+    }
+    return {
+      LOOKAHEAD, AHEAD, queue, plan, resetPointer, prime, pump,
+      finished: () => finished, endTime: () => endTime
+    };
+  })();
+
+  /* ---------- VideoSync（動画の頭出し／助走／cue 記録。VideoGateway を駆動し、頭出し完了で Transport へ戻す） ---------- */
+  const VideoSync = (() => {
+    let topWatch = null, cueWatch = null;
+    let view = {};
+    function cancel(){ topWatch = null; cueWatch = null; }
+
+    function startFromTop(kind){
+      try{
+        VideoGateway.seekTo(0, true);
+        VideoGateway.play();
+      }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
+      topWatch = {kind, t0: ClockGateway.perf()};
+      view.status("頭出し中");
+      view.videoMsg("先頭に戻しています…", false);
+      ClockGateway.frame(pollTop);
+    }
+    function pollTop(){
+      if(!topWatch) return;
+      let st = -1, t = null;
+      try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
+      // 先頭から実際に動き出したことを確認してから刻み始める（ここで空白が効く）
+      if(st === 1 && t != null && t > 0.02 && t < 2){
+        const kind = topWatch.kind;
+        topWatch = null; Transport.clearArm();
+        view.videoMsg("", false);
+        Transport.beginPlayback(kind);
+        return;
+      }
+      if(ClockGateway.perf() - topWatch.t0 > 6000){
+        const kind = topWatch.kind;
+        topWatch = null; Transport.clearArm();
+        view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
+        Transport.beginPlayback(kind);
+        return;
+      }
+      ClockGateway.frame(pollTop);
+    }
+    function startAtCue(kind, cue){
+      const lead = (kind === "lead");
+      const from = lead ? Math.max(0, cue - Transport.LEAD_SEC) : cue;
+      try{
+        VideoGateway.seekTo(from, true);     // lead なら5秒手前、そうでなければ指定秒そのもの
+        VideoGateway.play();
+      }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
+      cueWatch = {target: cue, kind, lead, t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
+      view.status("頭出し中");
+      view.videoMsg("頭出し中…", false);
+      ClockGateway.frame(pollCue);
+    }
+    function pollCue(){
+      if(!cueWatch) return;
+      let st = -1, t = null;
+      try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
+
+      if(cueWatch.lead){
+        // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
+        // seekTo 直後は getCurrentTime が「巻き戻る前の位置」を数フレーム返すため、
+        // 助走開始点(cue-5)まで実際に戻ったのを確認してから計測を始める
+        // （確認前だと、記録直後で cue 付近にいる位置を「到達」と誤認して即開始してしまう）
+        if(t != null && !isNaN(t)){
+          const from = Math.max(0, cueWatch.target - Transport.LEAD_SEC);
+          if(!cueWatch.seeked && t <= from + 0.5) cueWatch.seeked = true;   // 助走開始点まで戻った
+          if(cueWatch.seeked){
+            const remain = cueWatch.target - t;
+            if(remain <= 0){
+              const kind = cueWatch.kind;
+              const over = Math.min(-remain, 0.05);
+              cueWatch = null; Transport.clearArm();
+              view.videoMsg("", false);
+              Transport.beginPlayback(kind, {skipWait:true, adjust:-over});
+              return;
+            }
+            view.videoMsg("あと " + remain.toFixed(1) + " 秒で開始", false);
+          }else{
+            view.videoMsg("頭出し中…", false);   // まだ助走開始点に戻っていない
+          }
+        }
+      }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
+        // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
+        const kind = cueWatch.kind;
+        const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
+        cueWatch = null; Transport.clearArm();
+        view.videoMsg("", false);
+        Transport.beginPlayback(kind, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
+        return;
+      }
+      if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
+        const kind = cueWatch.kind;
+        cueWatch = null; Transport.clearArm();
+        view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
+        Transport.beginPlayback(kind, {skipWait:true});
+        return;
+      }
+      ClockGateway.frame(pollCue);
+    }
+    // いま鳴り始めたグループに、そのときの動画位置を書き込む（全体レック）
+    function stampCue(gid, evTime){
+      const g = Store.findGroup(gid);
+      if(!g || !VideoGateway.ready()) return;
+      let t = null;
+      try{ t = VideoGateway.time(); }catch(err){}
+      if(t == null || isNaN(t)) return;
+      const late = Math.max(0, ClockGateway.now() - evTime);   // 取りこぼしたフレームぶんを引く
+      g.cue = Math.max(0, Math.round((t - late) * 100) / 100);
+      view.stampCueView(gid, g.cue);
+    }
+    return { init(o){ view = o.view || view; }, cancel, startFromTop, startAtCue, stampCue };
+  })();
+
+  /* ---------- Transport（再生ステートマシン：all/solo/lead・preroll・全REC・動画同期を統括） ----------
+     ClockGateway/SoundGateway/VideoSync/Store/PlaybackScheduler をオーケストレーションし、
+     UI へは view（onTick/onStatus/updateTransport 相当）経由で反映を委譲する。 */
+  const Transport = (() => {
+    const LEAD_SEC = 5;                       // −5秒から再生の助走
+    let running = false;
+    let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
+    let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
+    let recording = false, recGid = null;     // 全体レック
+    let resumeActiveId = null;                // 再生前にアクティブだったグループ
+    let firstBeatTime = 0;                    // 最初の1打が鳴る時刻（空白があるとき）
+    let cur = {gid:null, bar:-1, rep:0};
+    let shown = "";
+    let cancelTimer = null;
+    let view = {
+      render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
+      setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
+      endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
+      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}
+    };
+    const isSoloMode = m => m === "solo" || m === "lead";
+    const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
+
+    function soloTarget(){
+      const g = Store.findGroup(Store.getState().activeId);
+      return (g && g.pattern.rhythms.length) ? g : null;
+    }
+    function firstGroupFor(kind){
+      if(kind !== "all") return soloTarget();
+      return Store.getState().groups.filter(g => g.pattern.rhythms.length)[0] || null;
+    }
+    function cueOf(kind){
+      const g = firstGroupFor(kind);
+      return (g && typeof g.cue === "number") ? g.cue : null;
+    }
+
+    function schedulerTick(){
+      // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
+      const limit = ClockGateway.now() + (ClockGateway.hidden() ? 1.2 : PlaybackScheduler.AHEAD);
+      if(PlaybackScheduler.finished() && ClockGateway.now() >= PlaybackScheduler.endTime()){ stop(true); return; }
+      PlaybackScheduler.pump(limit);
+    }
+    function draw(){
+      if(!running) return;
+      const now = ClockGateway.now();
+      if(firstBeatTime && now < firstBeatTime){
+        view.prerollTick(Math.max(0, firstBeatTime - now).toFixed(2));
+      }else if(view.isWaiting()){
+        view.endWaiting(baseStatus());
+      }
+      const queue = PlaybackScheduler.queue;
+      while(queue.length && queue[0].time <= now){
+        const e = queue.shift();
+        const key = e.gid + ":" + e.rep + ":" + e.bar;
+        if(key !== shown){
+          shown = key;
+          if(recording && e.gid !== recGid){    // グループが切り替わった最初の1打で記録
+            recGid = e.gid;
+            VideoSync.stampCue(e.gid, e.time);
+          }
+          cur = {gid:e.gid, bar:e.bar, rep:e.rep};
+          view.paintBeats(e.meter.num);
+          view.showPulse(e.meter);
+          view.highlight();
+        }
+        view.setBeatDot(e.beat);
+      }
+      if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ stop(true); return; }
+      ClockGateway.frame(draw);
+    }
+
+    function beginPlayback(kind, opts){
+      if(kind !== "all" && !soloTarget()) return;
+      if(kind === "all" && !PlaybackScheduler.plan().length) return;
+      SoundGateway.ensure();
+      mode = (kind === "all") ? "all" : kind;
+      soloId = (mode === "all") ? null : Store.getState().activeId;
+      running = true; shown = "";
+      resumeActiveId = Store.getState().activeId;
+      Store.apply({activeId: null});          // 再生中は全グループを非アクティブにする
+      view.render();
+      // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
+      // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
+      // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる
+      const o = opts || {};
+      const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
+      const adjust = o.adjust || 0;
+      const start = Math.max(ClockGateway.now() + 0.005, ClockGateway.now() + 0.06 + wait + adjust);
+      PlaybackScheduler.prime(start);
+      firstBeatTime = wait > 0 ? start : 0;
+      cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
+      ClockGateway.frame(draw);
+      view.setRunning(true);
+      if(wait > 0){ view.startWaiting(wait.toFixed(2)); }
+      else{ view.status(baseStatus()); }
+      view.updateTransport();
+    }
+    function stop(completed, fromVideo){
+      running = false;
+      armKind = null; VideoSync.cancel();
+      recording = false; recGid = null;
+      if(!fromVideo) VideoGateway.pause();
+      if(cancelTimer){ cancelTimer(); cancelTimer = null; }
+      PlaybackScheduler.queue.length = 0;
+      view.clearBeats();
+      cur = {gid:null, bar:-1, rep:0};
+      Store.apply({activeId: resumeActiveId});     // 再生前に開いていたグループへ戻す
+      resumeActiveId = null;
+      view.render();
+      view.setRunning(false);
+      view.clearWaiting();
+      firstBeatTime = 0;
+      mode = "all"; soloId = null;
+      view.status(completed ? "完了" : "停止中");
+      PlaybackScheduler.resetPointer();
+      view.syncIdle();
+      view.updateTransport();
+    }
+    /* --- 再生の入口：動画があれば、動画が実際に鳴り出してから刻み始める --- */
+    function start(kind){
+      if(kind !== "all" && !soloTarget()) return;
+      if(kind === "all" && !PlaybackScheduler.plan().length) return;
+      if(VideoGateway.armed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
+        armKind = kind;
+        view.updateTransport();
+        VideoSync.startFromTop(kind);
+        return;
+      }
+      const cue = cueOf(kind);
+      if(kind === "lead"){                       // −5秒から再生は、動画と記録位置が揃っているときだけ
+        if(!VideoGateway.armed() || cue == null) return;
+        armKind = kind;
+        view.updateTransport();
+        VideoSync.startAtCue(kind, cue);
+        return;
+      }
+      if(VideoGateway.armed() && cue != null){          // グループ再生は記録した位置から合わせる
+        armKind = kind;
+        view.updateTransport();
+        VideoSync.startAtCue(kind, cue);
+        return;
+      }
+      if(VideoGateway.armed()){
+        armKind = kind;
+        view.updateTransport();
+        pendingKind = kind;
+        view.videoMsg("動画の再生を待っています…", false);
+        try{ VideoGateway.play(); }catch(err){ pendingKind = null; armKind = null; beginPlayback(kind); return; }
+        clearTimeout(waitTimer);
+        waitTimer = setTimeout(()=>{                 // 反応がなければ単体で始める
+          if(pendingKind){ const k = pendingKind; pendingKind = null; armKind = null; view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true); beginPlayback(k); }
+        }, 4000);
+        return;
+      }
+      beginPlayback(kind);
+    }
+    function armCancel(){
+      armKind = null; VideoSync.cancel(); pendingKind = null;
+      recording = false; recGid = null;
+      clearTimeout(waitTimer);
+      VideoGateway.pause();
+      view.videoMsg("", false);
+      view.status("停止中");
+      view.updateTransport();
+    }
+    function startRec(){
+      if(running || armKind){ stop(false); return; }       // レック中はトグルで停止
+      if(!VideoGateway.ready()){ view.videoMsg("動画を読み込むと全体レックが使えます", true); return; }
+      if(!PlaybackScheduler.plan().length) return;
+      HistoryService.commit();                    // レック1回ぶんをまとめて1手の履歴にする
+      recording = true; recGid = null;
+      start("all");                // 全体レックは常に全体再生・動画は先頭から
+    }
+    function wake(){ if(running && SoundGateway.ready) schedulerTick(); }
+    // VideoGateway からの状態通知
+    function onVideoPlaying(){
+      if(pendingKind){
+        const k = pendingKind; pendingKind = null; armKind = null;
+        clearTimeout(waitTimer);
+        view.videoMsg("", false);
+        beginPlayback(k);                    // 動画が鳴り出した瞬間に刻み始める
+      }
+    }
+    function onVideoStopped(){
+      clearTimeout(waitTimer); pendingKind = null;
+      if(running && VideoGateway.syncOn()) stop(false, true);   // 動画を止めたら刻みも止まる
+    }
+
+    return {
+      init(o){ view = o.view || view; },
+      running: () => running,
+      isSolo: () => isSoloMode(mode),
+      mode: () => mode,
+      soloId: () => soloId,
+      armKind: () => armKind,
+      recording: () => recording,
+      cur: () => cur,
+      soloTarget, LEAD_SEC,
+      clearArm(){ armKind = null; },
+      clearPending(){ pendingKind = null; },
+      start, stop, startRec, beginPlayback, armCancel, wake, onVideoPlaying, onVideoStopped
+    };
+  })();
+
+
+  /* ========================================================================
+     ui … DOM のみ。操作は StoreService/Transport を呼び、状態変化は Store.subscribe と
+     Transport の view コールバックを購読して再描画する。ビジネスロジックは持たない。
+     ======================================================================== */
+  const Ui = (() => {
+    // ---- DOM 参照 ----
+    const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
+    const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
+    const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
+          prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
+    const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
+    const seqNameEl=$("seqName");
+    const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
+          ioFile=$("ioFile"), ioMsg=$("ioMsg");
+    const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytOpen=$("ytOpen"), ytMsg=$("ytMsg");
+
+    const state = () => Store.getState();
+    const findGroup = id => Store.findGroup(id);
+    let focusHandleId = null;
+
+    /* ---------- View（派生値の描画：拍ドット・パルス表示・サマリー・時刻整形。表示の更新のみ） ---------- */
+    const View = {
+      fmtTime(sec){
+        if(sec == null) return "—";
+        const m = Math.floor(sec / 60), r = sec - m * 60;
+        return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+      },
+      timesText(g){ return "×" + g.reps; },
+      summary(){
+        const c = Domain.summaryCounts(state().groups);
+        seqSum.textContent = c.groups + " グループ ・ 全 " + c.bars + " 小節";
+      },
+      paintBeats(n){
+        beatsEl.innerHTML = "";
+        for(let i=0;i<n;i++){
+          const d = document.createElement("span");
+          d.className = "beat" + (i===0 ? " first" : "");
+          beatsEl.appendChild(d);
+        }
+      },
+      showPulse(bar){
+        const rate = Math.round((60/Domain.rhythmSeconds(bar.den, state().bpm))*10)/10;
+        pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span><b>'+rate+' /分</b>';
+      }
+    };
+
+    function applySeqName(){
+      document.title = (state().seqName.trim() || "無題のシーケンス") + " — メトロノーム";
+    }
+    function renderTempo(from){
+      const bpm = state().bpm;
+      bpmView.textContent = bpm;
+      termView.textContent = Domain.termFor(bpm);
+      if(from !== "range") range.value = bpm;
+      if(from !== "input") input.value = bpm;
+      range.style.setProperty("--p", ((bpm-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%");
+    }
+    function readPreroll(){ return StoreService.setPreroll(prerollInput.value); }
+
+    /* ---------- グループ描画 ---------- */
+    function renderGroups(){
+      const running = Transport.running();
+      const st = state();
+      groupsEl.innerHTML = "";
+      groupsEl.classList.toggle("locked", running);
+      addGroupBtn.disabled = running;
+      seqNameEl.disabled = running;
+      prerollInput.disabled = running;
+      leadEl.classList.toggle("na", running && Transport.isSolo());
+      updateVideoLock();
+
+      st.groups.forEach((g, gi)=>{
+        const card = document.createElement("article");
+        card.className = "group" + (g.id === st.activeId ? " active" : "");
+        card.dataset.id = g.id;
+        card.tabIndex = 0;
+
+        /* header */
+        const head = document.createElement("div");
+        head.className = "g-head";
+
+        const handle = document.createElement("button");
+        handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
+        handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
+        handle.disabled = running;
+        handle.addEventListener("pointerdown", e=>startDrag(e, gi, card));
+        handle.addEventListener("keydown", e=>{
+          if(e.key === "ArrowUp"){ e.preventDefault(); StoreService.moveGroup(gi, gi-1); }
+          if(e.key === "ArrowDown"){ e.preventDefault(); StoreService.moveGroup(gi, gi+1); }
+        });
+        head.appendChild(handle);
+
+        if(g.id === st.activeId){
+          const name = document.createElement("input");
+          name.className = "g-name"; name.type = "text"; name.value = g.name;
+          name.setAttribute("aria-label", "リズムグループ名");
+          let typing = false;
+          name.addEventListener("focus", ()=>{ typing = false; });
+          name.addEventListener("blur", ()=>{ typing = false; });
+          name.addEventListener("input", e=>{
+            if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1回分の履歴にまとめる
+            StoreService.setGroupName(g.id, e.target.value);
+          });
+          head.appendChild(name);
+
+          const acts = document.createElement("span");
+          acts.className = "g-actions";
+          acts.appendChild(mini("⧉","このリズムグループを複製", false, ()=>StoreService.duplicateGroup(g.id)));
+          const del = mini("✕","このリズムグループを削除", st.groups.length <= 1, ()=>StoreService.removeGroup(g.id));
+          del.classList.add("kill");
+          acts.appendChild(del);
+          head.appendChild(acts);
+        }else{
+          const title = document.createElement("span");
+          title.className = "g-title";
+          title.textContent = g.name;
+          head.appendChild(title);
+
+          const cueBox = document.createElement("span");
+          cueBox.className = "g-cue";
+          cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ
+          head.appendChild(cueBox);
+        }
+        card.appendChild(head);
+
+        /* collapsed summary */
+        if(g.id !== st.activeId){
+          const sub = document.createElement("div");
+          sub.className = "g-sub";
+          if(!g.pattern.rhythms.length){
+            const c = document.createElement("span");
+            c.className = "chip none"; c.textContent = "拍子なし";
+            sub.appendChild(c);
+          }else{
+            g.pattern.rhythms.forEach((b,bi)=>{
+              const c = document.createElement("span");
+              c.className = "chip"; c.dataset.bi = bi;
+              c.textContent = b.num + "/" + b.den;
+              sub.appendChild(c);
+            });
+          }
+          const times = document.createElement("span");
+          times.className = "g-times"; times.dataset.role = "times";
+          times.title = "再生回数";
+          times.textContent = View.timesText(g);
+          sub.appendChild(times);          // ×N は拍子チップの行に右寄せで整列
+          card.appendChild(sub);
+        }
+
+        /* active body */
+        if(g.id === st.activeId){
+          const body = document.createElement("div");
+          body.className = "g-body";
+
+          const crow = document.createElement("div");
+          crow.className = "g-row";
+          const clab = document.createElement("span");
+          clab.className = "g-label"; clab.textContent = "動画位置";
+          crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
+          body.appendChild(crow);
+
+          const row = document.createElement("div");
+          row.className = "g-row";
+          const lab = document.createElement("span");
+          lab.className = "g-label"; lab.textContent = "再生回数";
+          const reps = document.createElement("div");
+          reps.className = "g-reps";
+          const x = document.createElement("span"); x.className="x"; x.textContent="×";
+          const rin = document.createElement("input");
+          rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
+          rin.setAttribute("aria-label","再生回数");
+          rin.addEventListener("change", ()=>StoreService.setReps(g.id, rin.value));
+          reps.append(x, rin);
+          row.append(lab, reps);
+          body.appendChild(row);
+
+          const bars = document.createElement("div");
+          bars.className = "bars";
+          if(!g.pattern.rhythms.length){
+            const p = document.createElement("p");
+            p.className = "empty";
+            p.textContent = "下の拍子を追加すると、この順に鳴らします。";
+            bars.appendChild(p);
+          }
+          g.pattern.rhythms.forEach((b,bi)=>{
+            const rowb = document.createElement("div");
+            rowb.className = "bar"; rowb.dataset.bi = bi;
+            const sig = document.createElement("span");
+            sig.className = "bar-sig";
+            sig.innerHTML = b.num + ' <em>/</em> ' + b.den;
+            const ctl = document.createElement("span");
+            ctl.className = "bar-ctl";
+            ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>StoreService.moveBar(g.id,bi,-1)));
+            ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>StoreService.moveBar(g.id,bi,1)));
+            const k = mini("✕","削除", false, ()=>StoreService.removeBar(g.id,bi));
+            k.classList.add("kill");
+            ctl.appendChild(k);
+            rowb.append(sig, ctl);
+            bars.appendChild(rowb);
+          });
+          body.appendChild(bars);
+          body.appendChild(buildPicker(g));
+          card.appendChild(body);
+        }
+
+        card.addEventListener("click", e=>{
+          if(Transport.running()) return;                       // 再生中は編集に入らない
+          if(e.target.closest("input, select, button")) return;
+          StoreService.toggleActive(g.id);
+        });
+        card.addEventListener("keydown", e=>{
+          if(Transport.running()) return;
+          if(e.key === "Enter" && !e.target.closest("input, select, button")){
+            e.preventDefault(); StoreService.toggleActive(g.id);
+          }
+        });
+
+        groupsEl.appendChild(card);
       });
-    });
-  }
 
-  function applyUrl(){
-    const v = parseYouTube(ytUrl.value);
-    if(!v){ ytSay("YouTube のURLとして読めませんでした", true); return; }
-    mountVideo(v);
-  }
-  ytLoad.addEventListener("click", applyUrl);
-  ytUrl.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); applyUrl(); } });
-  ytUrl.addEventListener("paste", ()=>setTimeout(applyUrl, 0));
-  ytOpen.addEventListener("click", ()=>{
-    if(!ytCurrent) return;
-    const url = "https://www.youtube.com/watch?v=" + ytCurrent.id + (ytCurrent.start ? "&t=" + ytCurrent.start : "");
-    if(!running) start("all");          // 先にメトロノームを走らせてから動画を開く
-    window.open(url, "_blank", "noopener");
-  });
-  ytClear.addEventListener("click", ()=>{
-    if(running) stop(false);
-    try{ ytPlayer && ytPlayer.destroy(); }catch(err){}
-    ytPlayer = null; ytReady = false; pendingKind = null;
-    const holder = document.createElement("div");
-    holder.id = "ytFrame";
-    ytStage.innerHTML = ""; ytStage.appendChild(holder);
-    ytStage.hidden = true; ytFoot.hidden = true; ytOpen.hidden = true;
-    ytCurrent = null;
-    ytUrl.value = ""; ytSay("", false);
-    renderGroups();
-  });
+      if(focusHandleId){
+        const el = groupsEl.querySelector('[data-id="'+focusHandleId+'"] .handle');
+        if(el) el.focus();
+        focusHandleId = null;
+      }
+      View.summary();
+      updateTransport();
+      updateHistoryUI();
+      applyHighlight();
+    }
 
-  function updateVideoLock(){
-    ytOpen.disabled = false;
-    ytUrl.disabled = running;
-    ytLoad.disabled = running;
-    ytClear.disabled = running;
-    ytSync.disabled = running;
-  }
+    /* 動画位置の微調整。連打は1手の履歴にまとめる */
+    let nudgeId = null, nudgeAt = 0;
+    function nudge(g, delta, label){
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "nudge";
+      b.textContent = delta < 0 ? "−" : "＋";
+      b.title = Math.abs(delta) + "秒" + (delta < 0 ? "もどす" : "すすめる");
+      b.setAttribute("aria-label", b.title);
+      b.disabled = Transport.recording();                  // 全体レック中はタイムコード調整を止める
+      b.addEventListener("click", e=>{
+        e.stopPropagation();
+        const now = Date.now();
+        if(!(nudgeId === g.id && now - nudgeAt < 2500)) HistoryService.commit();
+        nudgeId = g.id; nudgeAt = now;
+        const nv = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
+        StoreService.nudgeCue(g.id, nv);
+        label.textContent = View.fmtTime(nv);      // 構造は変わらないので再描画しない
+      });
+      return b;
+    }
+
+    /* いまの動画位置をこのグループに記録する REC（●）ボタン */
+    function cueGrabButton(g){
+      const grab = document.createElement("button");
+      grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
+      grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
+      grab.setAttribute("aria-label", "動画の現在位置を記録");
+      grab.disabled = !VideoGateway.ready() || Transport.recording();   // 全体レック中は個別レックを止める
+      grab.addEventListener("click", e=>{
+        e.stopPropagation();
+        if(!VideoGateway.ready()) return;
+        let t = null;
+        try{ t = VideoGateway.time(); }catch(err){}
+        if(t == null || isNaN(t)) return;
+        StoreService.setCue(g.id, Math.round(t*100)/100);
+      });
+      return grab;
+    }
+
+    /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
+    function cueControls(g){
+      const box = document.createElement("span");
+      box.className = "g-cue";
+      box.appendChild(cueGrabButton(g));
+      const at = document.createElement("span");
+      at.className = "g-at" + (g.cue == null ? " none" : "");
+      at.textContent = View.fmtTime(g.cue);
+      at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
+      if(g.cue != null){
+        box.appendChild(nudge(g, -0.05, at));
+        box.appendChild(at);
+        box.appendChild(nudge(g, 0.05, at));
+        const clr = mini("✕", "動画位置を解除", Transport.recording(), ()=>StoreService.setCue(g.id, null));
+        clr.classList.add("kill");
+        clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+        clr.addEventListener("click", e=>e.stopPropagation());
+        box.appendChild(clr);
+      }else{
+        box.appendChild(at);
+      }
+      return box;
+    }
+
+    function mini(label, aria, disabled, fn){
+      const b=document.createElement("button");
+      b.type="button"; b.className="mini"; b.textContent=label;
+      b.setAttribute("aria-label",aria); b.disabled=disabled;
+      b.addEventListener("click", fn);
+      return b;
+    }
+
+    function buildPicker(g){
+      const wrap = document.createElement("div");
+      wrap.className = "g-add";
+      const nSel = document.createElement("select");
+      nSel.setAttribute("aria-label","分子");
+      const dSel = document.createElement("select");
+      dSel.setAttribute("aria-label","分母");
+      Domain.DENOMS.forEach(d=>{
+        const o=document.createElement("option"); o.value=d; o.textContent=d; dSel.appendChild(o);
+      });
+      dSel.value = String(state().pickDen);
+
+      function fillNum(){
+        nSel.innerHTML = "";
+        const pd = state().pickDen;
+        for(let i=1;i<=pd;i++){
+          const o=document.createElement("option"); o.value=i; o.textContent=i; nSel.appendChild(o);
+        }
+        const pn = Math.min(state().pickNum, pd);
+        StoreService.setPicker(pn, null);
+        nSel.value = String(pn);
+      }
+      fillNum();
+
+      dSel.addEventListener("change", ()=>{ StoreService.setPicker(null, Number(dSel.value)); fillNum(); syncIdle(); });
+      nSel.addEventListener("change", ()=>{ StoreService.setPicker(Number(nSel.value), null); syncIdle(); });
+
+      const slash = document.createElement("span");
+      slash.className="slash"; slash.textContent="/";
+      const add = document.createElement("button");
+      add.type="button"; add.className="step"; add.textContent="追加";
+      add.addEventListener("click", ()=>StoreService.addBar(g.id, state().pickNum, state().pickDen));
+      wrap.append(nSel, slash, dSel, add);
+      return wrap;
+    }
+
+    /* ---------- ドラッグ並び替え ---------- */
+    let drag = null;
+    function startDrag(e, index, card){
+      if(Transport.running() || state().groups.length < 2) return;
+      e.preventDefault();
+      const cards = [...groupsEl.children];
+      drag = {
+        index, card, target:index, startY:e.clientY,
+        rects: cards.map(c=>c.getBoundingClientRect()),
+        pid: e.pointerId
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      card.classList.add("dragging");
+      e.currentTarget.addEventListener("pointermove", onDragMove);
+      e.currentTarget.addEventListener("pointerup", endDrag);
+      e.currentTarget.addEventListener("pointercancel", endDrag);
+    }
+    function onDragMove(e){
+      if(!drag) return;
+      drag.card.style.transform = "translateY(" + (e.clientY - drag.startY) + "px)";
+      let t = 0;
+      drag.rects.forEach((r,i)=>{
+        if(i !== drag.index && e.clientY > r.top + r.height/2) t++;
+      });
+      drag.target = t;
+      const cards = [...groupsEl.children].filter((c,i)=>i !== drag.index);
+      cards.forEach(c=>c.classList.remove("drop-before","drop-after"));
+      if(cards.length){
+        if(t < cards.length) cards[t].classList.add("drop-before");
+        else cards[cards.length-1].classList.add("drop-after");
+      }
+    }
+    function endDrag(e){
+      if(!drag) return;
+      const el = e.currentTarget;
+      el.removeEventListener("pointermove", onDragMove);
+      el.removeEventListener("pointerup", endDrag);
+      el.removeEventListener("pointercancel", endDrag);
+      drag.card.style.transform = "";
+      drag.card.classList.remove("dragging");
+      const from = drag.index, to = drag.target;
+      drag = null;
+      StoreService.moveGroup(from, to);
+      renderGroups();
+    }
+
+    /* ---------- 再生まわりの表示 ---------- */
+    function applyHighlight(){
+      const running = Transport.running(), cur = Transport.cur();
+      [...groupsEl.children].forEach(card=>{
+        const g = findGroup(card.dataset.id);
+        const on = running && cur.gid === card.dataset.id;
+        card.classList.toggle("playing", on);
+        card.querySelectorAll("[data-bi]").forEach(n=>{
+          n.classList.toggle("now", on && Number(n.dataset.bi) === cur.bar);
+        });
+        const t = card.querySelector('[data-role="times"]');
+        if(t && g){
+          t.textContent = on ? (cur.rep+1) + " / " + g.reps : View.timesText(g);
+        }
+      });
+    }
+
+    function syncIdle(){
+      if(Transport.running()) return;
+      const gs = PlaybackScheduler.plan();
+      const bar = gs.length ? gs[0].pattern.rhythms[0] : {num: state().pickNum, den: state().pickDen};
+      View.paintBeats(bar.num);
+      View.showPulse(bar);
+      updateTransport();
+    }
+
+    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
+    function updateTransport(){
+      const btns = {all:startAllBtn, solo:startSoloBtn, lead:startLeadBtn};
+      const running = Transport.running(), armKind = Transport.armKind(), recording = Transport.recording();
+      if(running || armKind){
+        const active = running ? Transport.mode() : armKind;
+        Object.keys(btns).forEach(k=>{
+          const on = (k === active);
+          btns[k].textContent = on ? "停止" : LABELS[k];
+          btns[k].classList.toggle("on", on);
+          btns[k].disabled = !on;
+          btns[k].title = "";
+        });
+        recBtn.classList.toggle("on", recording);
+        recBtn.textContent = recording ? "■ レック中" : "● REC";
+        recBtn.disabled = !recording;
+      }else{
+        const ready = PlaybackScheduler.plan().length > 0;
+        const target = Transport.soloTarget();
+        const cued = target && target.cue != null && VideoGateway.ready();
+        Object.keys(btns).forEach(k=>{
+          btns[k].textContent = LABELS[k];
+          btns[k].classList.remove("on");
+        });
+        startAllBtn.disabled = !ready;
+        startSoloBtn.disabled = !target;
+        startLeadBtn.disabled = !cued;
+        startAllBtn.title = ready ? "" : "拍子を1つ以上追加してください";
+        startSoloBtn.title = target ? target.name + " だけを再生" : "再生したいリズムグループをタップして選んでください";
+        startLeadBtn.title = !target ? "再生したいリズムグループをタップして選んでください"
+          : !VideoGateway.ready() ? "動画を読み込むと使えます"
+          : target.cue == null ? "このグループに動画位置が記録されていません"
+          : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
+        recBtn.classList.remove("on");
+        recBtn.textContent = "● REC";
+        recBtn.disabled = !ready || !VideoGateway.ready();
+        recBtn.title = !VideoGateway.ready() ? "動画を読み込むと使えます"
+          : "動画を先頭から流し、各リズムグループの位置を記録します";
+      }
+    }
+    function updateHistoryUI(){
+      undoBtn.disabled = !HistoryService.canUndo() || Transport.running();
+      redoBtn.disabled = !HistoryService.canRedo() || Transport.running();
+    }
+    function updateVideoLock(){
+      const running = Transport.running();
+      ytOpen.disabled = false;
+      ytUrl.disabled = running;
+      ytLoad.disabled = running;
+      ytClear.disabled = running;
+      ytSync.disabled = running;
+    }
+    function stampCueView(gid, cue){
+      const card = groupsEl.querySelector('[data-id="' + gid + '"]');
+      const at = card && card.querySelector(".g-at");
+      if(at){                       // 再描画せず表示だけ差し替える
+        at.textContent = View.fmtTime(cue);
+        at.classList.remove("none");
+        at.classList.add("hit");
+      }
+    }
+
+    /* ---------- IO メッセージ ---------- */
+    let msgTimer = null;
+    function say(text, bad){
+      ioMsg.textContent = text;
+      ioMsg.classList.toggle("bad", !!bad);
+      ioMsg.hidden = false;
+      clearTimeout(msgTimer);
+      msgTimer = setTimeout(()=>{ ioMsg.hidden = true; }, bad ? 9000 : 5000);
+    }
+    function ytSay(text, bad){
+      ytMsg.textContent = text;
+      ytMsg.classList.toggle("bad", !!bad);
+      ytMsg.hidden = !text;
+    }
+    function importAndSay(text){
+      try{ say(SequenceIO.importText(text), false); }
+      catch(err){ say("読み込めませんでした：" + err.message, true); }
+    }
+
+    /* ---------- 復元後の再同期（undo/redo） ---------- */
+    function afterRestore(){
+      seqNameEl.value = state().seqName;
+      applySeqName();
+      renderGroups();
+      syncIdle();
+    }
+
+    /* ---------- Store の購読：meta フラグに応じて再描画する ---------- */
+    function dispatch(meta){
+      meta = meta || {};
+      if(meta.seqName){ seqNameEl.value = state().seqName; applySeqName(); }
+      if(meta.seqTitle){ applySeqName(); }
+      if(meta.tempo){ renderTempo(meta.from); }
+      if(meta.preroll){ prerollInput.value = state().preroll.toFixed(2); }
+      if(meta.render){ if(meta.focusHandle != null) focusHandleId = meta.focusHandle; renderGroups(); }
+      if(meta.idle){ syncIdle(); }
+    }
+
+    /* ---------- Transport への view（DOM 反映）インタフェース ---------- */
+    const view = {
+      render: renderGroups,
+      syncIdle: syncIdle,
+      updateTransport: updateTransport,
+      status: text => { statusText.textContent = text; },
+      videoMsg: ytSay,
+      setRunning: on => { document.body.classList.toggle("running", on); },
+      startWaiting: str => {
+        document.body.classList.add("waiting");
+        leadEl.classList.add("counting");
+        statusText.textContent = "待機中";
+        prerollCount.hidden = false;
+        prerollCount.textContent = str;
+      },
+      clearWaiting: () => {
+        document.body.classList.remove("waiting");
+        leadEl.classList.remove("counting");
+        prerollCount.hidden = true;
+      },
+      isWaiting: () => document.body.classList.contains("waiting"),
+      endWaiting: baseStatus => {
+        document.body.classList.remove("waiting");
+        leadEl.classList.remove("counting");
+        prerollCount.hidden = true;
+        statusText.textContent = baseStatus;
+      },
+      prerollTick: str => { prerollCount.textContent = str; },
+      clearBeats: () => { [...beatsEl.children].forEach(d=>d.classList.remove("on")); },
+      paintBeats: n => View.paintBeats(n),
+      showPulse: bar => View.showPulse(bar),
+      highlight: applyHighlight,
+      setBeatDot: beat => { const dots = beatsEl.children; for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === beat); },
+      readPreroll: readPreroll,
+      stampCueView: stampCueView
+    };
+
+    /* ---------- 静的バインド（1回だけ） ---------- */
+    function bindEvents(){
+      // テンポの目盛り
+      [50,100,150,200,250].forEach(v=>{
+        const el=document.createElement("div");
+        el.className="tick"; el.style.left=((v-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%";
+        el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
+      });
+      range.addEventListener("input", e=>StoreService.setTempo(e.target.value,"range"));
+      input.addEventListener("change", e=>StoreService.setTempo(e.target.value,"input"));
+      $("tempoForm").addEventListener("submit", e=>{e.preventDefault();StoreService.setTempo(input.value,"input");input.blur();});
+      document.querySelectorAll(".steps .step").forEach(b=>{
+        b.addEventListener("click", ()=>StoreService.setTempo(state().bpm+Number(b.dataset.delta)));
+      });
+
+      // シーケンス名
+      let typing = false;
+      seqNameEl.addEventListener("focus", ()=>{ typing = false; });
+      seqNameEl.addEventListener("blur", ()=>{
+        typing = false;
+        if(!seqNameEl.value.trim()){ StoreService.setSeqName("無題のシーケンス"); seqNameEl.value = "無題のシーケンス"; }
+      });
+      seqNameEl.addEventListener("input", e=>{
+        if(!typing){ HistoryService.commit(); typing = true; }   // 連続入力は1手にまとめる
+        StoreService.setSeqName(e.target.value);
+      });
+
+      addGroupBtn.addEventListener("click", ()=>StoreService.addGroup());
+      undoBtn.addEventListener("click", ()=>HistoryService.undo());
+      redoBtn.addEventListener("click", ()=>HistoryService.redo());
+      prerollInput.addEventListener("change", ()=>StoreService.setPreroll(prerollInput.value));
+      recBtn.addEventListener("click", ()=>Transport.startRec());
+
+      startAllBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("all")));
+      startSoloBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
+      startLeadBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
+
+      document.addEventListener("keydown", e=>{
+        const mod = e.metaKey || e.ctrlKey;
+        if(mod && e.key.toLowerCase() === "z"){
+          e.preventDefault();
+          e.shiftKey ? HistoryService.redo() : HistoryService.undo();
+          return;
+        }
+        if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); HistoryService.redo(); return; }
+        if(e.code !== "Space") return;
+        const t = e.target.tagName;
+        if(t==="INPUT" || t==="SELECT" || t==="BUTTON") return;
+        e.preventDefault();
+        Transport.running() ? Transport.stop(false) : Transport.start("all");
+      });
+
+      document.addEventListener("visibilitychange", ()=>Transport.wake());
+
+      // 保存 / 読み込み
+      saveBtn.addEventListener("click", async ()=>{
+        const r = await SequenceIO.save();
+        if(r) say(r.message, r.bad);
+      });
+      loadBtn.addEventListener("click", async ()=>{
+        try{ importAndSay(await FileGateway.open()); }
+        catch(err){
+          if(err && err.name === "AbortError") return;
+          say("ファイルを開けませんでした", true);
+        }
+      });
+      ioFile.addEventListener("change", ()=>{
+        const file = ioFile.files && ioFile.files[0];
+        if(file) FileGateway.readFile(file).then(importAndSay).catch(()=>say("ファイルを読めませんでした", true));
+        ioFile.value = "";
+      });
+      /* ダイアログが使える環境ではボタン、使えない環境では input[type=file] を出す */
+      if(FileGateway.canOpenPicker){
+        loadBtn.hidden = false;
+        ioFileLabel.hidden = true;
+      }
+
+      // ドラッグ＆ドロップ
+      let dragDepth = 0;
+      document.addEventListener("dragenter", e=>{
+        if(!e.dataTransfer || ![...e.dataTransfer.types].includes("Files")) return;
+        dragDepth++; document.body.classList.add("dropping");
+      });
+      document.addEventListener("dragover", e=>{ e.preventDefault(); });
+      document.addEventListener("dragleave", ()=>{
+        dragDepth = Math.max(0, dragDepth-1);
+        if(!dragDepth) document.body.classList.remove("dropping");
+      });
+      document.addEventListener("drop", e=>{
+        e.preventDefault();
+        dragDepth = 0; document.body.classList.remove("dropping");
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if(file) FileGateway.readFile(file).then(importAndSay).catch(()=>say("ファイルを読めませんでした", true));
+      });
+
+      // YouTube
+      function applyUrl(){
+        const v = VideoGateway.parse(ytUrl.value);
+        if(!v){ ytSay("YouTube のURLとして読めませんでした", true); return; }
+        VideoGateway.mount(v);
+      }
+      ytLoad.addEventListener("click", applyUrl);
+      ytUrl.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); applyUrl(); } });
+      ytUrl.addEventListener("paste", ()=>setTimeout(applyUrl, 0));
+      ytOpen.addEventListener("click", ()=>{
+        const cur = VideoGateway.current();
+        if(!cur) return;
+        const url = "https://www.youtube.com/watch?v=" + cur.id + (cur.start ? "&t=" + cur.start : "");
+        if(!Transport.running()) Transport.start("all");          // 先にメトロノームを走らせてから動画を開く
+        window.open(url, "_blank", "noopener");
+      });
+      ytClear.addEventListener("click", ()=>{
+        if(Transport.running()) Transport.stop(false);
+        VideoGateway.clear();
+        Transport.clearPending();
+        ytUrl.value = ""; ytSay("", false);
+        renderGroups();
+      });
+    }
+
+    return {
+      view, dispatch, bindEvents, renderGroups, syncIdle, applySeqName,
+      updateHistoryUI, afterRestore, readPreroll, ytSay,
+      syncEnabled: () => ytSync.checked
+    };
+  })();
+
+  /* ========================================================================
+     bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画する。
+     ======================================================================== */
+  HistoryService.init({
+    capture: () => Store.snapshot(),
+    apply: s => { Store.restore(s); Ui.afterRestore(); },
+    onChange: () => Ui.updateHistoryUI()
+  });
+  VideoGateway.init({
+    onMsg: (text, bad) => Ui.ytSay(text, bad),
+    onReady: () => { Ui.ytSay("", false); Ui.renderGroups(); },
+    onPlaying: () => Transport.onVideoPlaying(),
+    onStopped: () => Transport.onVideoStopped(),
+    syncEnabled: () => Ui.syncEnabled()
+  });
+  Transport.init({ view: Ui.view });
+  VideoSync.init({ view: Ui.view });
+  Store.subscribe(Ui.dispatch);
+  Ui.bindEvents();
 
   /* ---------- 初期化 ---------- */
-  renderGroups();
-  readPreroll();
-  applySeqName();
-  updateHistoryUI();
-  setTempo(120);
+  Ui.renderGroups();
+  Ui.readPreroll();
+  Ui.applySeqName();
+  Ui.updateHistoryUI();
+  StoreService.setTempo(120);
 })();
 </script>
 </body>
