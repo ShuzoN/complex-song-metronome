@@ -407,17 +407,25 @@
   const findGroup = id => groups.find(g => g.id === id);
 
   /* ---------- 履歴（シーケンスの編集のみ・テンポは対象外） ---------- */
-  const HISTORY_MAX = 60;
-  let past = [], future = [];
+  /* ---------- History（汎用：past/future スタックと undo/redo。何を記録/復元するかは capture/apply に委譲） ----------
+     対象はシーケンスの編集のみ（テンポは対象外）。capture=snapshot・apply=restore で束ねる。 */
+  const History = (() => {
+    const MAX = 60;
+    let past = [], future = [];
+    let capture = () => "", apply = () => {}, onChange = () => {};
+    return {
+      init(o){ capture = o.capture; apply = o.apply; onChange = o.onChange || (()=>{}); },
+      commit(){ past.push(capture()); if(past.length > MAX) past.shift(); future.length = 0; onChange(); },
+      undo(){ if(!past.length) return; future.push(capture()); apply(past.pop()); onChange(); },
+      redo(){ if(!future.length) return; past.push(capture()); apply(future.pop()); onChange(); },
+      canUndo(){ return past.length > 0; },
+      canRedo(){ return future.length > 0; }
+    };
+  })();
+  const commit = () => History.commit();
 
   function snapshot(){
     return JSON.stringify({seqName, groups, activeId, groupSeq, pickNum, pickDen});
-  }
-  function commit(){
-    past.push(snapshot());
-    if(past.length > HISTORY_MAX) past.shift();
-    future.length = 0;
-    updateHistoryUI();
   }
   function restore(s){
     const d = JSON.parse(s);
@@ -427,16 +435,15 @@
     seqNameEl.value = seqName;
     applySeqName();
     if(activeId && !findGroup(activeId)) activeId = null;
-    renderGroups(); syncIdle(); updateHistoryUI();
+    renderGroups(); syncIdle();
   }
-  function undo(){ if(!past.length) return; future.push(snapshot()); restore(past.pop()); }
-  function redo(){ if(!future.length) return; past.push(snapshot()); restore(future.pop()); }
   function updateHistoryUI(){
-    undoBtn.disabled = !past.length || running;
-    redoBtn.disabled = !future.length || running;
+    undoBtn.disabled = !History.canUndo() || running;
+    redoBtn.disabled = !History.canRedo() || running;
   }
-  undoBtn.addEventListener("click", undo);
-  redoBtn.addEventListener("click", redo);
+  History.init({capture: snapshot, apply: restore, onChange: updateHistoryUI});
+  undoBtn.addEventListener("click", ()=>History.undo());
+  redoBtn.addEventListener("click", ()=>History.redo());
 
   /* ---------- シーケンス名 ---------- */
   function applySeqName(){
@@ -1317,10 +1324,10 @@
     const mod = e.metaKey || e.ctrlKey;
     if(mod && e.key.toLowerCase() === "z"){
       e.preventDefault();
-      e.shiftKey ? redo() : undo();
+      e.shiftKey ? History.redo() : History.undo();
       return;
     }
-    if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); redo(); return; }
+    if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); History.redo(); return; }
     if(e.code !== "Space") return;
     const t = e.target.tagName;
     if(t==="INPUT" || t==="SELECT" || t==="BUTTON") return;
