@@ -23,6 +23,8 @@
     -webkit-font-smoothing:antialiased;
   }
   .device{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--ink);box-shadow:7px 7px 0 rgba(25,28,24,.20)}
+  /* 「開始までの空白・全体レック」より下（リズムグループ一覧＋追加）を、ページ内で高さ上限つきスクロールに */
+  .scroll-body{max-height:55vh;max-height:55dvh;overflow-y:auto}
 
   /* header */
   .head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--ink)}
@@ -312,8 +314,10 @@
     </div>
   </div>
 
-  <section class="groups" id="groups"></section>
-  <button class="addgroup" id="addGroupBtn" type="button">＋ リズムグループを追加</button>
+  <div class="scroll-body">
+    <section class="groups" id="groups"></section>
+    <button class="addgroup" id="addGroupBtn" type="button">＋ リズムグループを追加</button>
+  </div>
 </main>
 
 <script>
