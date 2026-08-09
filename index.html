@@ -293,6 +293,13 @@
            placeholder="シーケンス名" aria-label="シーケンス名" maxlength="60">
     <p class="io-msg" id="ioMsg" role="status" hidden></p>
   </div>
+
+  <div class="transport">
+    <button class="start primary" id="startAllBtn" type="button">全体再生</button>
+    <button class="start secondary" id="startSoloBtn" type="button">グループ再生</button>
+    <button class="start secondary" id="startLeadBtn" type="button">−5秒から再生</button>
+  </div>
+
   <div class="lead-wrap">
     <div class="lead" id="lead">
       <span class="g-label">開始までの空白</span>
@@ -311,12 +318,6 @@
 
   <div class="pulse" id="pulseView"></div>
   <div class="beats" id="beats" aria-hidden="true"></div>
-
-  <div class="transport">
-    <button class="start primary" id="startAllBtn" type="button">全体再生</button>
-    <button class="start secondary" id="startSoloBtn" type="button">グループ再生</button>
-    <button class="start secondary" id="startLeadBtn" type="button">−5秒から再生</button>
-  </div>
 </main>
 
 <script>
