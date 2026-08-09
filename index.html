@@ -535,40 +535,7 @@
 
         const cueBox = document.createElement("span");
         cueBox.className = "g-cue";
-        const grab = document.createElement("button");
-        grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
-        grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
-        grab.setAttribute("aria-label", "動画の現在位置を記録");
-        grab.disabled = !ytReady;
-        grab.addEventListener("click", e=>{
-          e.stopPropagation();
-          if(!ytReady) return;
-          let t = null;
-          try{ t = ytPlayer.getCurrentTime(); }catch(err){}
-          if(t == null || isNaN(t)) return;
-          commit();
-          g.cue = Math.round(t*100)/100;
-          renderGroups();
-        });
-        const at = document.createElement("span");
-        at.className = "g-at" + (g.cue == null ? " none" : "");
-        at.textContent = fmtTime(g.cue);
-        at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
-        cueBox.appendChild(grab);
-        if(g.cue != null){
-          cueBox.appendChild(nudge(g, -0.05, at));
-          cueBox.appendChild(at);
-          cueBox.appendChild(nudge(g, 0.05, at));
-        }else{
-          cueBox.appendChild(at);
-        }
-        if(g.cue != null){
-          const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
-          clr.classList.add("kill");
-          clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-          clr.addEventListener("click", e=>e.stopPropagation());
-          cueBox.appendChild(clr);
-        }
+        cueBox.appendChild(cueGrabButton(g));   // 非アクティブは REC ● だけ残す
         head.appendChild(cueBox);
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
@@ -600,6 +567,13 @@
       if(g.id === activeId){
         const body = document.createElement("div");
         body.className = "g-body";
+
+        const crow = document.createElement("div");
+        crow.className = "g-row";
+        const clab = document.createElement("span");
+        clab.className = "g-label"; clab.textContent = "動画位置";
+        crow.append(clab, cueControls(g));   // 00:00 と ± はアクティブ側・再生回数の上に
+        body.appendChild(crow);
 
         const row = document.createElement("div");
         row.className = "g-row";
@@ -701,6 +675,50 @@
       label.textContent = fmtTime(g.cue);      // 構造は変わらないので再描画しない
     });
     return b;
+  }
+
+  /* いまの動画位置をこのグループに記録する REC（●）ボタン */
+  function cueGrabButton(g){
+    const grab = document.createElement("button");
+    grab.type = "button"; grab.className = "grab"; grab.textContent = "●";
+    grab.title = "いまの動画の再生位置をこのグループに記録（グループ再生の頭出しに使います）";
+    grab.setAttribute("aria-label", "動画の現在位置を記録");
+    grab.disabled = !ytReady;
+    grab.addEventListener("click", e=>{
+      e.stopPropagation();
+      if(!ytReady) return;
+      let t = null;
+      try{ t = ytPlayer.getCurrentTime(); }catch(err){}
+      if(t == null || isNaN(t)) return;
+      commit();
+      g.cue = Math.round(t*100)/100;
+      renderGroups();
+    });
+    return grab;
+  }
+
+  /* アクティブ側の「動画位置」行：REC ● ＋ 00:00 ＋ ± ＋ ✕ */
+  function cueControls(g){
+    const box = document.createElement("span");
+    box.className = "g-cue";
+    box.appendChild(cueGrabButton(g));
+    const at = document.createElement("span");
+    at.className = "g-at" + (g.cue == null ? " none" : "");
+    at.textContent = fmtTime(g.cue);
+    at.title = g.cue == null ? "動画位置は未設定" : "グループ再生のとき、この位置から再生します";
+    if(g.cue != null){
+      box.appendChild(nudge(g, -0.05, at));
+      box.appendChild(at);
+      box.appendChild(nudge(g, 0.05, at));
+      const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
+      clr.classList.add("kill");
+      clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+      clr.addEventListener("click", e=>e.stopPropagation());
+      box.appendChild(clr);
+    }else{
+      box.appendChild(at);
+    }
+    return box;
   }
 
   function mini(label, aria, disabled, fn){
