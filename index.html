@@ -333,6 +333,52 @@
   const NOTE_NAME = {2:"2分音符",4:"4分音符",8:"8分音符",16:"16分音符",32:"32分音符",
                      3:"2分3連",6:"4分3連",12:"8分3連",9:"全音符÷9",15:"全音符÷15"};
 
+  /* ---------- Domain（純粋：エンティティ生成と拍子計算の唯一の真実。DOM は参照しない） ----------
+     階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
+       Rhythm        {num, den}          … 1拍子（例 7/8）。den ∈ DENOMS, num は 1..den
+       RhythmPattern {rhythms:[Rhythm]}  … グループ内の拍子の並び（YAML の pattern に対応）
+       RhythmGroup   {id,name,reps,cue,pattern}
+     生成はすべてここを通し、reps/cue/name の正規化を1箇所に集約する。 */
+  const Domain = {
+    makeRhythm(num, den){ return {num: Number(num), den: Number(den)}; },
+    // 文字列 "7/8" または {meter} を検証しつつ Rhythm 化。不正なら null（読み込み時の取りこぼし数え上げ用）
+    parseRhythm(v){
+      if(v == null) return null;
+      const m = String(v).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+      if(!m) return null;
+      const num = Number(m[1]), den = Number(m[2]);
+      if(!DENOMS.includes(den)) return null;
+      if(num < 1 || num > den) return null;
+      return {num, den};
+    },
+    formatRhythm(r){ return r.num + "/" + r.den; },
+    rhythmSeconds(den, bpm){ return (60/bpm) * (4/den); },
+    noteName(den){ return NOTE_NAME[den]; },
+    termFor(v){ return (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2]; },
+    makePattern(rhythms){ return {rhythms: (rhythms||[]).map(r=>Domain.makeRhythm(r.num, r.den))}; },
+    makeGroup(spec){
+      spec = spec || {};
+      const rhythms = spec.rhythms || (spec.pattern && spec.pattern.rhythms) || [];
+      const cueRaw = Number(spec.cue);
+      return {
+        id: uid(),
+        name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
+        reps: clampInt(spec.reps, 1, 999, 1),
+        cue: (spec.cue == null || isNaN(cueRaw) || cueRaw < 0) ? null : Math.round(cueRaw*100)/100,
+        pattern: Domain.makePattern(rhythms)
+      };
+    },
+    cloneGroup(g){
+      return {
+        id: uid(),
+        name: g.name + " のコピー",
+        reps: g.reps,
+        cue: g.cue,
+        pattern: {rhythms: g.pattern.rhythms.map(r=>({num:r.num, den:r.den}))}
+      };
+    }
+  };
+
   const $ = id => document.getElementById(id);
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
   const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
@@ -352,7 +398,7 @@
   let pickNum = 4, pickDen = 4;          // 「拍子を追加」用のピッカー状態
   let seqName = "シーケンス1";
   let groupSeq = 1;
-  let groups = [{id:uid(), name:"リズムグループ1", bars:[{num:4,den:4}], reps:8, cue:null}];
+  let groups = [Domain.makeGroup({name:"リズムグループ1", rhythms:[{num:4,den:4}], reps:8})];
   let activeId = groups[0].id;
   let resumeActiveId = null;   // 再生前にアクティブだったグループ
   let focusHandleId = null;
@@ -416,7 +462,7 @@
     el.className="tick"; el.style.left=((v-MIN)/(MAX-MIN)*100)+"%";
     el.innerHTML='<i></i><span>'+v+'</span>'; $("ticks").appendChild(el);
   });
-  const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
+  const termFor = v => Domain.termFor(v);
 
   function setTempo(v, from){
     v = Math.round(Number(v));
@@ -440,7 +486,7 @@
   function addGroup(){
     commit();
     groupSeq++;
-    const g = {id:uid(), name:"リズムグループ"+groupSeq, bars:[], reps:8, cue:null};
+    const g = Domain.makeGroup({name:"リズムグループ"+groupSeq, reps:8});
     groups.push(g);
     activeId = g.id;
     renderGroups();
@@ -448,12 +494,7 @@
   function duplicateGroup(id){
     commit();
     const i = groups.findIndex(g=>g.id===id);
-    const src = groups[i];
-    const copy = {
-      id:uid(), name:src.name+" のコピー",
-      bars:src.bars.map(b=>({num:b.num, den:b.den})),
-      reps:src.reps, cue:src.cue
-    };
+    const copy = Domain.cloneGroup(groups[i]);
     groups.splice(i+1, 0, copy);
     activeId = copy.id;
     renderGroups(); syncIdle();
@@ -557,12 +598,12 @@
       if(g.id !== activeId){
         const sub = document.createElement("div");
         sub.className = "g-sub";
-        if(!g.bars.length){
+        if(!g.pattern.rhythms.length){
           const c = document.createElement("span");
           c.className = "chip none"; c.textContent = "拍子なし";
           sub.appendChild(c);
         }else{
-          g.bars.forEach((b,bi)=>{
+          g.pattern.rhythms.forEach((b,bi)=>{
             const c = document.createElement("span");
             c.className = "chip"; c.dataset.bi = bi;
             c.textContent = b.num + "/" + b.den;
@@ -613,13 +654,13 @@
 
         const bars = document.createElement("div");
         bars.className = "bars";
-        if(!g.bars.length){
+        if(!g.pattern.rhythms.length){
           const p = document.createElement("p");
           p.className = "empty";
           p.textContent = "下の拍子を追加すると、この順に鳴らします。";
           bars.appendChild(p);
         }
-        g.bars.forEach((b,bi)=>{
+        g.pattern.rhythms.forEach((b,bi)=>{
           const rowb = document.createElement("div");
           rowb.className = "bar"; rowb.dataset.bi = bi;
           const sig = document.createElement("span");
@@ -628,7 +669,7 @@
           const ctl = document.createElement("span");
           ctl.className = "bar-ctl";
           ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>moveBar(g,bi,-1)));
-          ctl.appendChild(mini("↓","下へ移動", bi===g.bars.length-1, ()=>moveBar(g,bi,1)));
+          ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>moveBar(g,bi,1)));
           const k = mini("✕","削除", false, ()=>removeBar(g,bi));
           k.classList.add("kill");
           ctl.appendChild(k);
@@ -668,7 +709,7 @@
 
   function updateSummary(){
     let total = 0;
-    for(const g of groups) total += g.bars.length * g.reps;
+    for(const g of groups) total += g.pattern.rhythms.length * g.reps;
     seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
   }
 
@@ -775,7 +816,7 @@
     add.type="button"; add.className="step"; add.textContent="追加";
     add.addEventListener("click", ()=>{
       commit();
-      g.bars.push({num:pickNum, den:pickDen});
+      g.pattern.rhythms.push(Domain.makeRhythm(pickNum, pickDen));
       renderGroups(); syncIdle();
     });
     wrap.append(nSel, slash, dSel, add);
@@ -783,15 +824,16 @@
   }
 
   function moveBar(g, i, dir){
+    const rs = g.pattern.rhythms;
     const j = i + dir;
-    if(j < 0 || j >= g.bars.length) return;
+    if(j < 0 || j >= rs.length) return;
     commit();
-    [g.bars[i], g.bars[j]] = [g.bars[j], g.bars[i]];
+    [rs[i], rs[j]] = [rs[j], rs[i]];
     renderGroups();
   }
   function removeBar(g, i){
     commit();
-    g.bars.splice(i,1);
+    g.pattern.rhythms.splice(i,1);
     renderGroups(); syncIdle();
   }
 
@@ -864,13 +906,13 @@
 
   function plan(){
     if(running && isSoloMode(mode)){
-      return groups.filter(g => g.id === soloId && g.bars.length);
+      return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
     }
-    return groups.filter(g => g.bars.length);
+    return groups.filter(g => g.pattern.rhythms.length);
   }
   function soloTarget(){
     const g = findGroup(activeId);
-    return (g && g.bars.length) ? g : null;
+    return (g && g.pattern.rhythms.length) ? g : null;
   }
   const LABELS = {all:"全体再生", solo:"グループ再生", lead:"−5秒から再生"};
   function updateTransport(){
@@ -912,7 +954,7 @@
     }
   }
   function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
-  function beatSeconds(d){ return (60/bpm) * (4/d); }
+  const beatSeconds = d => Domain.rhythmSeconds(d, bpm);
 
   function click(accent, time, span){
     const decay = Math.min(0.045, span * 0.55);
@@ -936,8 +978,9 @@
       if(!gs.length){ finished = true; endTime = nextTime; break; }
       if(gIdx >= gs.length) gIdx = 0;
       const g = gs[gIdx];
-      if(barIdx >= g.bars.length) barIdx = 0;
-      const bar = g.bars[barIdx];
+      const rhythms = g.pattern.rhythms;
+      if(barIdx >= rhythms.length) barIdx = 0;
+      const bar = rhythms[barIdx];
       if(beatIdx >= bar.num) beatIdx = 0;
 
       const span = beatSeconds(bar.den);
@@ -948,7 +991,7 @@
       beatIdx++;
       if(beatIdx >= bar.num){
         beatIdx = 0; barIdx++;
-        if(barIdx >= g.bars.length){
+        if(barIdx >= rhythms.length){
           barIdx = 0; repIdx++;
           if(repIdx >= g.reps){
             repIdx = 0; gIdx++;
@@ -1021,7 +1064,7 @@
   function syncIdle(){
     if(running) return;
     const gs = plan();
-    const bar = gs.length ? gs[0].bars[0] : {num:pickNum, den:pickDen};
+    const bar = gs.length ? gs[0].pattern.rhythms[0] : {num:pickNum, den:pickDen};
     paintBeats(bar.num);
     showPulse(bar);
     updateTransport();
@@ -1032,7 +1075,7 @@
 
   function firstGroupFor(kind){
     if(kind !== "all") return soloTarget();
-    return groups.filter(g => g.bars.length)[0] || null;
+    return groups.filter(g => g.pattern.rhythms.length)[0] || null;
   }
   function cueOf(kind){
     const g = firstGroupFor(kind);
@@ -1304,7 +1347,7 @@
       L.push("  - name: " + yamlScalar(g.name));
       L.push("    repeat: " + g.reps);
       if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
-      L.push("    pattern: [" + g.bars.map(b=>b.num+"/"+b.den).join(", ") + "]");
+      L.push("    pattern: [" + g.pattern.rhythms.map(Domain.formatRhythm).join(", ") + "]");
     });
     return L.join("\n") + "\n";
   }
@@ -1403,15 +1446,6 @@
     if(isNaN(n)) return fallback;
     return Math.min(hi, Math.max(lo, n));
   }
-  function parseMeter(v){
-    if(v == null) return null;
-    const m = String(v).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-    if(!m) return null;
-    const num = Number(m[1]), den = Number(m[2]);
-    if(!DENOMS.includes(den)) return null;
-    if(num < 1 || num > den) return null;
-    return {num, den};
-  }
   function applyDoc(doc){
     if(!doc || typeof doc !== "object" || Array.isArray(doc)) throw new Error("シーケンスの形式ではありません");
     if(!Array.isArray(doc.groups)) throw new Error("groups が見つかりません");
@@ -1424,21 +1458,19 @@
       const g = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
       const pat = g.pattern;
       const items = Array.isArray(pat) ? pat : (pat == null ? [] : [pat]);
-      const bars = [];
+      const rhythms = [];
       items.forEach(it=>{
-        const b = parseMeter((it && typeof it === "object") ? it.meter : it);
-        if(b) bars.push(b); else dropped++;
+        const b = Domain.parseRhythm((it && typeof it === "object") ? it.meter : it);
+        if(b) rhythms.push(b); else dropped++;
       });
-      const cueRaw = Number(g.cue);
-      return {
-        id: uid(),
+      return Domain.makeGroup({
         name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
-        reps: clampInt(g.repeat, 1, 999, 1),
-        cue: (g.cue == null || isNaN(cueRaw) || cueRaw < 0) ? null : Math.round(cueRaw*100)/100,
-        bars
-      };
+        reps: g.repeat,
+        cue: g.cue,
+        rhythms
+      });
     });
-    if(!loaded.length) { loaded.push({id:uid(), name:"リズムグループ1", reps:1, bars:[]}); notes.push("グループが空だったので、空のグループを1つ作りました"); }
+    if(!loaded.length) { loaded.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
     if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + DENOMS.join(",") + "、分子は 1〜分母）");
 
     if(running) stop(false);
@@ -1460,7 +1492,7 @@
     renderGroups();
     syncIdle();
 
-    const bars = loaded.reduce((n,g)=>n+g.bars.length, 0);
+    const bars = loaded.reduce((n,g)=>n+g.pattern.rhythms.length, 0);
     return ["読み込みました：" + loaded.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
   }
 
