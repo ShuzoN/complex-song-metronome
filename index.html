@@ -141,13 +141,13 @@
   .group.drop-before{box-shadow:inset 0 3px 0 var(--signal)}
   .group.drop-after{box-shadow:inset 0 -3px 0 var(--signal)}
 
-  .g-head{display:flex;align-items:center;gap:8px;padding:8px 9px}
+  .g-head{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:8px 9px}
   .handle{width:24px;height:30px;flex:none;border:1px solid var(--rule);background:var(--panel);color:var(--dim);font-size:11px;line-height:1;display:grid;place-items:center;cursor:grab;touch-action:none}
   .handle:active{cursor:grabbing}
   .handle:disabled{opacity:.3;cursor:default}
-  .g-name{flex:1;min-width:0;height:30px;font-family:var(--body);font-size:13px;color:var(--ink);background:#FFF;border:1px solid var(--rule);border-radius:0;padding:0 7px}
+  .g-name{flex:1 1 110px;min-width:0;height:30px;font-family:var(--body);font-size:13px;color:var(--ink);background:#FFF;border:1px solid var(--rule);border-radius:0;padding:0 7px}
   .g-name:focus{border-color:var(--ink);outline:none}
-  .g-title{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .g-title{flex:1 1 90px;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .g-times{font-family:var(--mono);font-size:11.5px;color:var(--brass);white-space:nowrap;letter-spacing:.04em}
   .group.playing .g-times{color:var(--signal)}
 
@@ -166,6 +166,16 @@
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
   .mini.kill:hover:not(:disabled){background:var(--signal);color:var(--panel);border-color:var(--signal)}
+
+  .g-cue{display:flex;align-items:center;gap:4px;flex:none}
+  .g-cue .grab{width:28px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--ink)}
+  .g-cue .grab:hover:not(:disabled){border-color:var(--brass);color:var(--brass);background:#F7F3E9}
+  .g-cue .grab:disabled{opacity:.28;cursor:default}
+  .g-cue .nudge{width:22px;height:28px;padding:0;font-size:11px;line-height:1;background:var(--panel);border:1px solid var(--rule);color:var(--dim)}
+  .g-cue .nudge:hover{border-color:var(--brass);color:var(--brass);background:#F7F3E9}
+  .g-cue .nudge:active{transform:translateY(1px)}
+  .g-at{font-family:var(--mono);font-size:11px;color:var(--brass);white-space:nowrap;letter-spacing:.02em;min-width:46px;text-align:right;font-variant-numeric:tabular-nums}
+  .g-at.none{color:#A7ABA0}
 
   .bars{display:flex;flex-direction:column;gap:4px}
   .bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 3px 3px 8px;border:1px solid var(--rule);background:#FCFBF7}
@@ -329,7 +339,7 @@
   let pickNum = 4, pickDen = 4;          // 「拍子を追加」用のピッカー状態
   let seqName = "シーケンス1";
   let groupSeq = 1;
-  let groups = [{id:uid(), name:"リズムグループ1", bars:[{num:4,den:4}], reps:8}];
+  let groups = [{id:uid(), name:"リズムグループ1", bars:[{num:4,den:4}], reps:8, cue:null}];
   let activeId = groups[0].id;
   let resumeActiveId = null;   // 再生前にアクティブだったグループ
   let focusHandleId = null;
@@ -417,7 +427,7 @@
   function addGroup(){
     commit();
     groupSeq++;
-    const g = {id:uid(), name:"リズムグループ"+groupSeq, bars:[], reps:8};
+    const g = {id:uid(), name:"リズムグループ"+groupSeq, bars:[], reps:8, cue:null};
     groups.push(g);
     activeId = g.id;
     renderGroups();
@@ -429,7 +439,7 @@
     const copy = {
       id:uid(), name:src.name+" のコピー",
       bars:src.bars.map(b=>({num:b.num, den:b.den})),
-      reps:src.reps
+      reps:src.reps, cue:src.cue
     };
     groups.splice(i+1, 0, copy);
     activeId = copy.id;
@@ -458,6 +468,11 @@
   addGroupBtn.addEventListener("click", addGroup);
 
   /* ---------- 描画 ---------- */
+  function fmtTime(sec){
+    if(sec == null) return "—";
+    const m = Math.floor(sec / 60), r = sec - m * 60;
+    return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
+  }
   function timesText(g){
     return "× " + g.reps;
   }
@@ -518,6 +533,43 @@
         title.textContent = g.name;
         head.appendChild(title);
 
+        const cueBox = document.createElement("span");
+        cueBox.className = "g-cue";
+        const grab = document.createElement("button");
+        grab.type = "button"; grab.className = "grab"; grab.textContent = "▶";
+        grab.title = "いまの動画の再生位置をこのグループに記録";
+        grab.setAttribute("aria-label", "動画の現在位置を記録");
+        grab.disabled = !ytReady;
+        grab.addEventListener("click", e=>{
+          e.stopPropagation();
+          if(!ytReady) return;
+          let t = null;
+          try{ t = ytPlayer.getCurrentTime(); }catch(err){}
+          if(t == null || isNaN(t)) return;
+          commit();
+          g.cue = Math.round(t*100)/100;
+          renderGroups();
+        });
+        const at = document.createElement("span");
+        at.className = "g-at" + (g.cue == null ? " none" : "");
+        at.textContent = fmtTime(g.cue);
+        at.title = g.cue == null ? "動画位置は未設定" : "この位置から5秒手前で頭出しします";
+        cueBox.appendChild(grab);
+        if(g.cue != null){
+          cueBox.appendChild(nudge(g, -0.1, at));
+          cueBox.appendChild(at);
+          cueBox.appendChild(nudge(g, 0.1, at));
+        }else{
+          cueBox.appendChild(at);
+        }
+        if(g.cue != null){
+          const clr = mini("✕", "動画位置を解除", false, ()=>{ commit(); g.cue = null; renderGroups(); });
+          clr.classList.add("kill");
+          clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+          clr.addEventListener("click", e=>e.stopPropagation());
+          cueBox.appendChild(clr);
+        }
+        head.appendChild(cueBox);
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
         times.textContent = timesText(g);
@@ -630,6 +682,25 @@
     let total = 0;
     for(const g of groups) total += g.bars.length * g.reps;
     seqSum.textContent = groups.length + " グループ ・ 全 " + total + " 小節";
+  }
+
+  /* 動画位置の微調整。連打は1手の履歴にまとめる */
+  let nudgeId = null, nudgeAt = 0;
+  function nudge(g, delta, label){
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "nudge";
+    b.textContent = delta < 0 ? "−" : "＋";
+    b.title = (delta < 0 ? "0.1秒もどす" : "0.1秒すすめる");
+    b.setAttribute("aria-label", b.title);
+    b.addEventListener("click", e=>{
+      e.stopPropagation();
+      const now = Date.now();
+      if(!(nudgeId === g.id && now - nudgeAt < 2500)) commit();
+      nudgeId = g.id; nudgeAt = now;
+      g.cue = Math.max(0, Math.round((g.cue + delta) * 100) / 100);
+      label.textContent = fmtTime(g.cue);      // 構造は変わらないので再描画しない
+    });
+    return b;
   }
 
   function mini(label, aria, disabled, fn){
@@ -767,8 +838,8 @@
     return (g && g.bars.length) ? g : null;
   }
   function updateTransport(){
-    if(running){
-      const solo = mode === "solo";
+    if(running || armKind){
+      const solo = running ? (mode === "solo") : (armKind === "solo");
       startAllBtn.disabled = solo;
       startSoloBtn.disabled = !solo;
       startAllBtn.textContent = solo ? "全体再生" : "停止";
@@ -900,7 +971,54 @@
     updateTransport();
   }
 
-  function beginPlayback(kind){
+  const LEAD_IN = 5;          // 秒。cue の手前から流して体を合わせる余裕
+  let armKind = null;         // 準備中（動画の頭出し／再生待ち）のモード
+  let cueWatch = null;
+
+  function firstGroupFor(kind){
+    if(kind === "solo") return soloTarget();
+    return groups.filter(g => g.bars.length)[0] || null;
+  }
+  function cueOf(kind){
+    const g = firstGroupFor(kind);
+    return (g && typeof g.cue === "number") ? g.cue : null;
+  }
+  function armCancel(){
+    armKind = null; cueWatch = null; pendingKind = null;
+    clearTimeout(waitTimer);
+    videoPause();
+    ytSay("", false);
+    statusText.textContent = "停止中";
+    updateTransport();
+  }
+  function startAtCue(kind, cue){
+    const from = Math.max(0, cue - LEAD_IN);
+    try{
+      ytPlayer.seekTo(from, true);
+      ytPlayer.playVideo();
+    }catch(err){ armKind = null; beginPlayback(kind); return; }
+    cueWatch = {target: cue, kind};
+    statusText.textContent = "頭出し中";
+    requestAnimationFrame(pollCue);
+  }
+  function pollCue(){
+    if(!cueWatch) return;
+    let t = null;
+    try{ t = ytPlayer.getCurrentTime(); }catch(err){}
+    if(t == null || isNaN(t)){ requestAnimationFrame(pollCue); return; }
+    const remain = cueWatch.target - t;
+    if(remain <= 0){
+      const kind = cueWatch.kind, over = Math.min(-remain, 0.05);
+      cueWatch = null; armKind = null;
+      ytSay("", false);
+      beginPlayback(kind, {skipWait:true, adjust:-over});   // 行き過ぎたぶんだけ前倒し
+      return;
+    }
+    ytSay("頭出し中… " + remain.toFixed(1) + " 秒", false);
+    requestAnimationFrame(pollCue);
+  }
+
+  function beginPlayback(kind, opts){
     if(kind === "solo" && !soloTarget()) return;
     if(kind !== "solo" && !plan().length) return;
     if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -915,8 +1033,11 @@
     queue.length = 0;
     // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
     // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
-    const wait = (mode === "all") ? readPreroll() : 0;   // グループ再生には空白を入れない
-    nextTime = ctx.currentTime + 0.06 + wait;
+    // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる
+    const o = opts || {};
+    const wait = (mode === "all" && !o.skipWait) ? readPreroll() : 0;
+    const adjust = o.adjust || 0;
+    nextTime = Math.max(ctx.currentTime + 0.005, ctx.currentTime + 0.06 + wait + adjust);
     firstBeatTime = wait > 0 ? nextTime : 0;
     timer = setInterval(scheduler, LOOKAHEAD);
     requestAnimationFrame(draw);
@@ -934,6 +1055,7 @@
   }
   function stop(completed, fromVideo){
     running = false;
+    armKind = null; cueWatch = null;
     if(!fromVideo) videoPause();
     clearInterval(timer);
     queue.length = 0;
@@ -957,13 +1079,22 @@
   function start(kind){
     if(kind === "solo" && !soloTarget()) return;
     if(kind !== "solo" && !plan().length) return;
+    const cue = cueOf(kind);
+    if(videoArmed() && cue != null){          // 動画位置が設定されていれば、そこから合わせる
+      armKind = kind;
+      updateTransport();
+      startAtCue(kind, cue);
+      return;
+    }
     if(videoArmed()){
+      armKind = kind;
+      updateTransport();
       pendingKind = kind;
       ytSay("動画の再生を待っています…", false);
-      try{ ytPlayer.playVideo(); }catch(err){ pendingKind = null; beginPlayback(kind); return; }
+      try{ ytPlayer.playVideo(); }catch(err){ pendingKind = null; armKind = null; beginPlayback(kind); return; }
       clearTimeout(waitTimer);
       waitTimer = setTimeout(()=>{                 // 反応がなければ単体で始める
-        if(pendingKind){ const k = pendingKind; pendingKind = null; ytSay("動画の応答がないため、メトロノームだけ始めます", true); beginPlayback(k); }
+        if(pendingKind){ const k = pendingKind; pendingKind = null; armKind = null; ytSay("動画の応答がないため、メトロノームだけ始めます", true); beginPlayback(k); }
       }, 4000);
       return;
     }
@@ -972,8 +1103,8 @@
 
   document.addEventListener("visibilitychange", ()=>{ if(running && ctx) scheduler(); });
 
-  startAllBtn.addEventListener("click", ()=> running ? stop(false) : start("all"));
-  startSoloBtn.addEventListener("click", ()=> running ? stop(false) : start("solo"));
+  startAllBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("all")));
+  startSoloBtn.addEventListener("click", ()=> armKind ? armCancel() : (running ? stop(false) : start("solo")));
   document.addEventListener("keydown", e=>{
     const mod = e.metaKey || e.ctrlKey;
     if(mod && e.key.toLowerCase() === "z"){
@@ -1000,10 +1131,14 @@
   }
   function toYaml(){
     const L = ["version: 1", "kind: metronome.sequence", "",
-               "name: " + yamlScalar(seqName), "tempo: " + bpm, "", "groups:"];
+               "name: " + yamlScalar(seqName), "tempo: " + bpm];
+    if(preroll > 0) L.push("preroll: " + preroll.toFixed(2));
+    if(ytCurrent) L.push("video: " + yamlScalar(videoUrl()));
+    L.push("", "groups:");
     groups.forEach(g=>{
       L.push("  - name: " + yamlScalar(g.name));
       L.push("    repeat: " + g.reps);
+      if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
       L.push("    pattern: [" + g.bars.map(b=>b.num+"/"+b.den).join(", ") + "]");
     });
     return L.join("\n") + "\n";
@@ -1129,10 +1264,12 @@
         const b = parseMeter((it && typeof it === "object") ? it.meter : it);
         if(b) bars.push(b); else dropped++;
       });
+      const cueRaw = Number(g.cue);
       return {
         id: uid(),
         name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
         reps: clampInt(g.repeat, 1, 999, 1),
+        cue: (g.cue == null || isNaN(cueRaw) || cueRaw < 0) ? null : Math.round(cueRaw*100)/100,
         bars
       };
     });
@@ -1148,6 +1285,13 @@
     groupSeq = loaded.length;
     activeId = null;
     setTempo(clampInt(doc.tempo, MIN, MAX, 120));
+    const pre = Number(doc.preroll);
+    prerollInput.value = (isNaN(pre) ? 0 : Math.min(60, Math.max(0, pre))).toFixed(2);
+    readPreroll();
+    if(doc.video != null){
+      const v = parseYouTube(doc.video);
+      if(v) mountVideo(v); else notes.push("video のURLを読めませんでした");
+    }
     renderGroups();
     syncIdle();
 
@@ -1268,6 +1412,10 @@
     ytMsg.hidden = !text;
   }
   const videoArmed = () => ytReady && ytSync.checked && !!ytPlayer && !embedBlocked;
+  function videoUrl(){
+    if(!ytCurrent) return "";
+    return "https://www.youtube.com/watch?v=" + ytCurrent.id + (ytCurrent.start ? "&t=" + ytCurrent.start : "");
+  }
   function videoPause(){
     if(ytReady && ytPlayer && ytSync.checked){
       try{ ytPlayer.pauseVideo(); }catch(err){}
@@ -1329,12 +1477,12 @@
         videoId: v.id,
         playerVars: {playsinline:1, rel:0, modestbranding:1, start:v.start},
         events: {
-          onReady: ()=>{ ytReady = true; ytSay("", false); },
+          onReady: ()=>{ ytReady = true; ytSay("", false); renderGroups(); },
           onError: e=>ytSay(ERROR_NOTE[e.data] || ("再生できません（エラー " + e.data + "）"), true),
           onStateChange: e=>{
             if(e.data === YT.PlayerState.PLAYING){
               if(pendingKind){
-                const k = pendingKind; pendingKind = null;
+                const k = pendingKind; pendingKind = null; armKind = null;
                 clearTimeout(waitTimer);
                 ytSay("", false);
                 beginPlayback(k);                    // 動画が鳴り出した瞬間に刻み始める
@@ -1373,6 +1521,7 @@
     ytStage.hidden = true; ytFoot.hidden = true; ytOpen.hidden = true;
     ytCurrent = null;
     ytUrl.value = ""; ytSay("", false);
+    renderGroups();
   });
 
   function updateVideoLock(){
