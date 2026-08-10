@@ -46,10 +46,10 @@
   /* ---- 上：セクションタイムライン ---- */
   .top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
     padding:calc(env(safe-area-inset-top) + clamp(8px,2.4dvh,12px)) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
-  .rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
+  .rep{font-family:var(--mono);font-size:clamp(11px,3dvh,13px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .rep .of{color:rgba(245,244,239,.4)}
-  .rep .u{color:rgba(245,244,239,.45);font-size:.72em;margin-left:2px}
+  .rep .u{color:rgba(245,244,239,.45);font-size:.8em;margin-left:2px}
 
   .timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
   .seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
@@ -97,6 +97,9 @@
 
   /* pulse */
   .pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
+  /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
+  .pulse-line{display:flex;align-items:baseline;justify-content:center;gap:clamp(6px,1.6vw,10px);flex-wrap:wrap}
+  .sep{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);color:rgba(245,244,239,.3)}
   .meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .meter i{font-style:normal;color:var(--brass)}
   .beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
@@ -163,7 +166,6 @@
 
   <!-- 上：セクションタイムライン -->
   <div class="top">
-    <div class="rep"><span id="repNow">7</span><span class="of"> / 9</span><span class="u">周</span></div>
     <div class="timeline" id="timeline"><!-- セクションはJSで生成 --></div>
     <button class="close" aria-label="全画面を解除">✕</button>
   </div>
@@ -175,7 +177,11 @@
     </div>
     <div class="pulse">
       <div class="beats" id="beats"><!-- 拍ドットはJSで生成 --></div>
-      <div class="meter"><i id="meterSig">7/8</i> · <span id="meterName">八分音符</span></div>
+      <div class="pulse-line">
+        <span class="rep"><span id="repNow">7</span><span class="of"> / 9</span><span class="u">周</span></span>
+        <span class="sep">·</span>
+        <span class="meter"><i id="meterSig">7/8</i> · <span id="meterName">八分音符</span></span>
+      </div>
     </div>
   </div>
 
