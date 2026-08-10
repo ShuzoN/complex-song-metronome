@@ -179,6 +179,8 @@
   .g-reps{display:flex;align-items:center;gap:6px}
   .g-reps .x{font-family:var(--display);font-size:20px;color:var(--brass);line-height:1}
   .g-reps input{width:58px;height:32px;font-size:13px}
+  .g-bpm .x{font-size:15px}
+  .g-bpm-hint{font-family:var(--mono);font-size:11px;color:var(--dim)}
   /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・全幅 */
   .g-play{margin-top:2px;margin-bottom:0}
   .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
@@ -599,6 +601,15 @@
       const r = Math.round(n * 10) / 10;
       return Math.min(MAX, Math.max(MIN, r));
     }
+    // グループ個別 BPM の正規化：null/空/不正なら null（＝基準 BPM に追従）、値があれば clampTempo
+    function normBpm(v){
+      if(v == null || v === "") return null;
+      const n = Number(v);
+      if(isNaN(n)) return null;
+      return clampTempo(n, null);
+    }
+    // 実効 BPM：グループの上書きがあればそれ、無ければ基準（上部メトロノーム）の BPM
+    const effectiveBpm = (group, baseBpm) => (group && group.bpm != null) ? group.bpm : baseBpm;
     const makeRhythm = (num, den) => ({num: Number(num), den: Number(den)});
     // 文字列 "7/8" または {meter} を検証しつつ Rhythm 化。不正なら null（読み込み時の取りこぼし数え上げ用）
     function parseRhythm(v){
@@ -634,6 +645,7 @@
         id: uid(),
         name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
         reps: reps,
+        bpm: normBpm(spec.bpm),                 // このグループ個別の BPM。null=基準（上部メトロノーム）に追従
         cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
         repCues: fitCues(spec.repCues, reps),   // 各くり返し(rep)の動画位置。パッドの位置突き合わせに使う（UI なし）
         pattern: makePattern(rhythms)
@@ -644,6 +656,7 @@
         id: uid(),
         name: g.name + " のコピー",
         reps: g.reps,
+        bpm: g.bpm != null ? g.bpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
         pattern: {rhythms: g.pattern.rhythms.map(r=>({num:r.num, den:r.den}))}
@@ -670,7 +683,7 @@
 
     return {
       DENOMS, MIN, MAX, TERMS, NOTE_NAME,
-      uid, clampInt, clampTempo, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
+      uid, clampInt, clampTempo, normBpm, effectiveBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       noteName, termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
@@ -836,6 +849,7 @@
       dto.groups.forEach(g=>{
         L.push("  - name: " + scalarStr(g.name));
         L.push("    repeat: " + g.repeat);
+        if(g.bpm != null) L.push("    bpm: " + g.bpm);   // 上書きがあるグループだけ出力
         if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
         if(g.repCues) L.push("    repCues: [" + g.repCues.map(v => v == null ? "null" : v.toFixed(2)).join(", ") + "]");
         L.push("    pattern: [" + g.pattern.join(", ") + "]");
@@ -1171,6 +1185,14 @@
           g.repCues = Domain.fitCues(g.repCues, g.reps);   // reps に合わせて rep 別 cue の長さを同期
         }, {render:true});
       },
+      // このグループ個別の BPM。空/不正なら null＝基準（上部メトロノーム）に追従
+      setBpm(id, value){
+        HistoryService.commit();
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          if(g) g.bpm = Domain.normBpm(value);
+        }, {render:true});
+      },
       setCue(id, value){            // グループ先頭（rep0）の記録・解除（commit＋再描画）
         HistoryService.commit();
         Store.apply(s => {
@@ -1231,6 +1253,8 @@
         groups: seq.groups.map(g => ({
           name: g.name,
           repeat: g.reps,
+          // グループ個別 BPM は上書きがあるときだけ出力（無ければ非出力＝基準追従・後方互換）
+          bpm: (g.bpm != null) ? g.bpm : null,
           cue: (g.cue != null) ? g.cue : null,
           // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
           repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
@@ -1259,6 +1283,7 @@
         return Domain.makeGroup({
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
           reps: g.repeat,
+          bpm: g.bpm,                                    // 無指定/不正は normBpm が null 化＝基準追従
           cue: g.cue,
           repCues: Array.isArray(g.repCues) ? g.repCues : null,
           rhythms
@@ -1339,15 +1364,19 @@
       groups.forEach(g => {
         const rc = Array.isArray(g.repCues) ? g.repCues : null;
         const rhythms = g.pattern.rhythms;
+        // gbpm=このグループの個別 BPM（null=基準追従）。off/vt は実効 BPM で積算し、
+        // イベントには gbpm（上書き値 or null）を焼き込む＝スケジューラ側でテンポ追従を保つため
+        const gbpm = (g.bpm != null) ? g.bpm : null;
+        const ebpm = Domain.effectiveBpm(g, bpm);
         for(let rep = 0; rep < g.reps; rep++){
           // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
           const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
           if(anc != null) vt = Math.max(vt, anc);
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
-            const span = Domain.rhythmSeconds(m.den, bpm);
+            const span = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
-              events.push(Object.freeze({off, vt, gid:g.id, rep, bar, beat, meter:m, accent:(beat===0)}));
+              events.push(Object.freeze({off, vt, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
               off += span; vt += span;
             }
           }
@@ -1381,7 +1410,9 @@
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
     let nextTime = 0, i = 0, finished = false, endTime = 0;
-    const beatSeconds = d => Domain.rhythmSeconds(d, Store.getState().bpm);
+    // イベントの拍長。gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
+    // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）
+    const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, (e.gbpm != null) ? e.gbpm : Store.getState().bpm);
     function resetPointer(){ i = 0; finished = false; }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
@@ -1395,7 +1426,7 @@
       if(!n){ finished = true; endTime = nextTime; return; }
       while(!finished && nextTime < limit){
         const e = PlaybackService.at(i);
-        const span = beatSeconds(e.meter.den);
+        const span = beatSeconds(e);
         SoundGateway.click(e.accent, nextTime, span);
         queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
         nextTime += span;
@@ -1594,15 +1625,18 @@
       const idx = st.groups.indexOf(target);
       let prev = null;
       for(let i = idx - 1; i >= 0; i--){ if(st.groups[i].pattern.rhythms.length){ prev = st.groups[i]; break; } }
+      const srcGroup = prev || target;
       const src = prev ? prev.pattern.rhythms : target.pattern.rhythms.slice(0, 1);
+      // 助走は「出所グループ」の実効 BPM で鳴らす（177→88 の境界で誤テンポにならないように）
+      const ciBpm = Domain.effectiveBpm(srcGroup, st.bpm);
       const bars = [];
       let dur = 0;
       for(let i = src.length - 1; i >= 0; i--){
         bars.unshift(src[i]);
-        dur += src[i].num * Domain.rhythmSeconds(src[i].den, st.bpm);
+        dur += src[i].num * Domain.rhythmSeconds(src[i].den, ciBpm);
         if(dur >= COUNT_IN_SEC || bars.length >= COUNT_IN_MAX_BARS) break;
       }
-      return {bars, dur};
+      return {bars, dur, bpm: ciBpm};
     }
     function firstGroupFor(kind){
       if(kind !== "all") return soloTarget();
@@ -1676,6 +1710,7 @@
       // 鳴らし、切り替わりの少し前からメトロノームが聞こえるようにする（音のみ・拍ドットは downbeat から）
       const ci = o.countIn ? countInFor(ciTarget) : {bars:[], dur:0};
       const ciDur = ci.dur;
+      const ciBpm = ci.bpm != null ? ci.bpm : Store.getState().bpm;   // 助走の実効テンポ（出所グループ基準）
       // 先読みマージンは最小限に。さらに setInterval の初回発火（約25ms先）を待たず、
       // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
@@ -1685,7 +1720,7 @@
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
       for(const bar of ci.bars){
-        const beat = Domain.rhythmSeconds(bar.den, Store.getState().bpm);
+        const beat = Domain.rhythmSeconds(bar.den, ciBpm);
         for(let k = 0; k < bar.num; k++){ if(ct > t0) SoundGateway.click(k === 0, ct, beat); ct += beat; }
       }
       schedulerTick();     // 初回分を即予約（以降は下の setInterval が継続）
@@ -2173,6 +2208,41 @@
         reps.append(x, rin);
         row.append(lab, reps);
         body.appendChild(row);
+
+        /* このリズムグループの BPM（空欄＝基準テンポに追従／値を入れるとその区間だけ固定） */
+        {
+          const brow = document.createElement("div");
+          brow.className = "g-row";
+          const blab = document.createElement("span");
+          blab.className = "g-label"; blab.textContent = "BPM";
+          const bwrap = document.createElement("div");
+          bwrap.className = "g-reps g-bpm";
+          const note = document.createElement("span");
+          note.className = "x"; note.textContent = "♩=";
+          const baseTxt = Number.isInteger(st.bpm) ? String(st.bpm) : st.bpm.toFixed(1);
+          const bin = document.createElement("input");
+          bin.type = "number"; bin.min = String(Domain.MIN); bin.max = String(Domain.MAX);
+          bin.step = "0.1"; bin.inputMode = "decimal";
+          bin.value = (g.bpm != null) ? g.bpm : "";
+          bin.placeholder = baseTxt;            // 空欄のとき基準値をプレースホルダ表示（＝これに追従）
+          bin.title = "空欄にすると基準テンポ（" + baseTxt + "）に追従します";
+          bin.setAttribute("aria-label", "このリズムグループのBPM（空欄で基準テンポに追従）");
+          bin.addEventListener("change", ()=>GroupService.setBpm(g.id, bin.value));
+          bwrap.append(note, bin);
+          const hint = document.createElement("span");
+          hint.className = "g-bpm-hint";
+          if(g.bpm != null){                    // 上書き中：基準へ戻す × を出す
+            const clr = mini("✕", "基準テンポに戻す", running, ()=>GroupService.setBpm(g.id, ""));
+            clr.classList.add("kill");
+            clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
+            hint.appendChild(clr);
+          }else{                                // 追従中：基準に追従していることを明示
+            hint.textContent = "基準に追従";
+          }
+          bwrap.appendChild(hint);
+          brow.append(blab, bwrap);
+          body.appendChild(brow);
+        }
 
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
