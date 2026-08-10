@@ -179,8 +179,10 @@
   .g-reps{display:flex;align-items:center;gap:6px}
   .g-reps .x{font-family:var(--display);font-size:20px;color:var(--brass);line-height:1}
   .g-reps input{width:58px;height:32px;font-size:13px}
-  .g-bpm .x{font-size:15px}
-  .g-bpm-hint{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  /* ヘッダー内のグループ個別BPM。名前とコピー/削除の間にコンパクトに置く（空欄＝基準に追従） */
+  .g-hbpm{display:inline-flex;align-items:center;gap:4px;flex:none}
+  .g-hbpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
+  .g-hbpm input{width:54px;height:30px;font-size:13px}
   /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・全幅 */
   .g-play{margin-top:2px;margin-bottom:0}
   .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
@@ -2136,6 +2138,27 @@
         });
         head.appendChild(name);
 
+        /* グループ個別 BPM（名前とコピー/削除の間にインライン配置）。空欄＝基準テンポに追従、
+           値を入れるとその区間だけ固定。プレースホルダに基準値を出して「空欄で何に追従するか」を示す */
+        {
+          const bp = document.createElement("span");
+          bp.className = "g-hbpm";
+          bp.addEventListener("click", e=>e.stopPropagation());   // ラベル部クリックで折りたたまないように
+          const u = document.createElement("span"); u.className = "u"; u.textContent = "bpm";
+          const baseTxt = Number.isInteger(st.bpm) ? String(st.bpm) : st.bpm.toFixed(1);
+          const bin = document.createElement("input");
+          bin.type = "number"; bin.min = String(Domain.MIN); bin.max = String(Domain.MAX);
+          bin.step = "0.1"; bin.inputMode = "decimal";
+          bin.value = (g.bpm != null) ? g.bpm : "";
+          bin.placeholder = baseTxt;
+          bin.disabled = running;
+          bin.title = "このグループのBPM。空欄にすると基準テンポ（" + baseTxt + "）に追従します";
+          bin.setAttribute("aria-label", "このリズムグループのBPM（空欄で基準テンポに追従）");
+          bin.addEventListener("change", ()=>GroupService.setBpm(g.id, bin.value));
+          bp.append(u, bin);
+          head.appendChild(bp);
+        }
+
         const acts = document.createElement("span");
         acts.className = "g-actions";
         acts.appendChild(mini("⧉","このリズムグループを複製", false, ()=>SequenceService.duplicateGroup(g.id)));
@@ -2196,41 +2219,6 @@
         reps.append(x, rin);
         row.append(lab, reps);
         body.appendChild(row);
-
-        /* このリズムグループの BPM（空欄＝基準テンポに追従／値を入れるとその区間だけ固定） */
-        {
-          const brow = document.createElement("div");
-          brow.className = "g-row";
-          const blab = document.createElement("span");
-          blab.className = "g-label"; blab.textContent = "BPM";
-          const bwrap = document.createElement("div");
-          bwrap.className = "g-reps g-bpm";
-          const note = document.createElement("span");
-          note.className = "x"; note.textContent = "♩=";
-          const baseTxt = Number.isInteger(st.bpm) ? String(st.bpm) : st.bpm.toFixed(1);
-          const bin = document.createElement("input");
-          bin.type = "number"; bin.min = String(Domain.MIN); bin.max = String(Domain.MAX);
-          bin.step = "0.1"; bin.inputMode = "decimal";
-          bin.value = (g.bpm != null) ? g.bpm : "";
-          bin.placeholder = baseTxt;            // 空欄のとき基準値をプレースホルダ表示（＝これに追従）
-          bin.title = "空欄にすると基準テンポ（" + baseTxt + "）に追従します";
-          bin.setAttribute("aria-label", "このリズムグループのBPM（空欄で基準テンポに追従）");
-          bin.addEventListener("change", ()=>GroupService.setBpm(g.id, bin.value));
-          bwrap.append(note, bin);
-          const hint = document.createElement("span");
-          hint.className = "g-bpm-hint";
-          if(g.bpm != null){                    // 上書き中：基準へ戻す × を出す
-            const clr = mini("✕", "基準テンポに戻す", running, ()=>GroupService.setBpm(g.id, ""));
-            clr.classList.add("kill");
-            clr.style.width = "22px"; clr.style.height = "22px"; clr.style.fontSize = "9px";
-            hint.appendChild(clr);
-          }else{                                // 追従中：基準に追従していることを明示
-            hint.textContent = "基準に追従";
-          }
-          bwrap.appendChild(hint);
-          brow.append(blab, bwrap);
-          body.appendChild(brow);
-        }
 
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
