@@ -292,10 +292,10 @@
 
   .fs-top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
     padding:clamp(8px,2.4dvh,12px) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
-  .fs-rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
+  .fs-rep{font-family:var(--mono);font-size:clamp(11px,3dvh,13px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .fs-rep .of{color:rgba(245,244,239,.4)}
-  .fs-rep .u{color:rgba(245,244,239,.45);font-size:.72em;margin-left:2px}
+  .fs-rep .u{color:rgba(245,244,239,.45);font-size:.8em;margin-left:2px}
   .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
   .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
@@ -332,6 +332,10 @@
   .fs-fbar.now .fs-fr .fs-line{border-top-color:rgba(255,255,255,.85)}
 
   .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
+  /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
+  .fs-pulse-line{display:flex;align-items:baseline;justify-content:center;gap:clamp(6px,1.6vw,10px);flex-wrap:wrap}
+  .fs-sep{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);color:rgba(245,244,239,.3)}
+  .fs-rep:empty + .fs-sep{display:none}
   .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .fs-meter i{font-style:normal;color:var(--brass)}
   .fs-beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
@@ -505,7 +509,6 @@
   <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
 
   <div class="fs-top">
-    <div class="fs-rep" id="fsRep"></div>
     <div class="fs-timeline" id="fsTimeline"></div>
     <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
   </div>
@@ -514,7 +517,11 @@
     <div class="fs-strip-wrap"><div class="fs-track" id="fsTrack"></div></div>
     <div class="fs-pulse">
       <div class="fs-beats" id="fsBeats" aria-hidden="true"></div>
-      <div class="fs-meter" id="fsMeter"></div>
+      <div class="fs-pulse-line">
+        <span class="fs-rep" id="fsRep"></span>
+        <span class="fs-sep">·</span>
+        <span class="fs-meter" id="fsMeter"></span>
+      </div>
     </div>
   </div>
 
