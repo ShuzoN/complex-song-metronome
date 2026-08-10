@@ -33,17 +33,17 @@
     display:flex;flex-direction:column}
 
   /* ---- 上：セクションタイムライン ---- */
-  .top{display:flex;align-items:center;gap:12px;
-    padding:calc(env(safe-area-inset-top) + 12px) 16px 0 18px}
-  .rep{flex:0 0 auto;font-family:var(--mono);font-size:15px;color:var(--signal);
+  .top{flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
+    padding:calc(env(safe-area-inset-top) + clamp(8px,2.4dvh,12px)) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
+  .rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .rep .of{color:rgba(245,244,239,.4)}
-  .rep .u{color:rgba(245,244,239,.45);font-size:11px;margin-left:2px}
+  .rep .u{color:rgba(245,244,239,.45);font-size:.72em;margin-left:2px}
 
-  .timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:30px}
-  .seg{position:relative;flex-grow:1;flex-basis:0;min-width:34px;display:flex;align-items:center;justify-content:center;
+  .timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
+  .seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
-    font-family:var(--body);font-size:11px;letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
+    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
   .seg.done{opacity:.5}
   .seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
   /* 現在セクション内の進捗フィル（済み分） */
@@ -55,64 +55,70 @@
     display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
   .close:active{transform:translate(1px,1px)}
 
-  /* ---- 中央：フォーカス帯＋pulse ---- */
-  .center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;gap:14px;min-height:0}
+  /* ---- 中央：フォーカス帯＋pulse ----
+     すべて dvh/clamp でビューポート連動（低い/狭い横画面でも重ならない） */
+  .center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;
+    gap:clamp(8px,2.6dvh,16px);min-height:0;overflow:hidden}
 
-  .strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;height:138px;overflow:hidden;
+  .strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;
+    height:clamp(84px,34dvh,150px);overflow:hidden;
     -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
             mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
-  .track{display:flex;align-items:center;gap:14px;padding:0 50vw;
+  .track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw;
     transition:transform 320ms cubic-bezier(.22,.61,.36,1);will-change:transform}
 
   .fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
-    width:66px;height:64px;transition:all 260ms ease}
+    width:clamp(42px,15dvh,66px);height:clamp(42px,16dvh,64px);
+    font-size:clamp(13px,4.4dvh,20px);transition:width .26s ease,height .26s ease,font-size .26s ease,opacity .26s ease,background .26s ease}
   .fbar.done{opacity:.32}
-  .fbar.now{width:112px;height:112px;background:var(--signal);border-color:var(--signal);
-    box-shadow:0 6px 20px rgba(196,54,42,.32)}
+  .fbar.now{width:clamp(80px,30dvh,112px);height:clamp(80px,30dvh,112px);
+    font-size:clamp(26px,9.5dvh,40px);
+    background:var(--signal);border-color:var(--signal);box-shadow:0 6px 20px rgba(196,54,42,.32)}
 
-  /* 分数（線入り）: num / line / den を縦積み */
+  /* 分数（線入り）: num / line / den を縦積み。サイズはタイルの font-size(em)基準 */
   .fr{display:flex;flex-direction:column;align-items:center;justify-content:center;
     font-family:var(--mono);font-variant-numeric:tabular-nums;color:rgba(245,244,239,.6);line-height:1}
-  .fr .num,.fr .den{font-size:20px}
-  .fr .line{width:20px;height:0;border-top:1.5px solid rgba(245,244,239,.4);margin:3px 0}
+  .fr .num,.fr .den{font-size:1em}
+  .fr .line{width:1em;height:0;border-top:.09em solid rgba(245,244,239,.4);margin:.16em 0}
   .fbar.now .fr{color:#FFF}
-  .fbar.now .fr .num,.fbar.now .fr .den{font-size:40px}
-  .fbar.now .fr .line{width:40px;border-top-width:2.5px;border-top-color:rgba(255,255,255,.85);margin:5px 0}
+  .fbar.now .fr .line{border-top-color:rgba(255,255,255,.85)}
 
   /* pulse */
-  .pulse{display:flex;flex-direction:column;align-items:center;gap:10px;padding:0 20px}
-  .meter{font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
+  .meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .meter i{font-style:normal;color:var(--brass)}
-  .beats{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center;max-width:80vw}
-  .beat{width:15px;height:15px;border:1.5px solid rgba(245,244,239,.45);border-radius:50%;
+  .beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
+  .beat{width:clamp(10px,2.6dvh,15px);height:clamp(10px,2.6dvh,15px);
+    border:1.5px solid rgba(245,244,239,.45);border-radius:50%;
     transition:background 60ms linear,transform 60ms linear}
   .beat.first{border-color:var(--brass);box-shadow:inset 0 0 0 2.5px rgba(142,113,50,.32)}
   .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.4)}
   .beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
   /* ---- 下：操作系を集約 ---- */
-  .controls{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:26px;
-    padding:8px 16px calc(env(safe-area-inset-bottom) + 14px)}
-  .ctl{display:flex;flex-direction:column;align-items:center;gap:5px;
+  .controls{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
+    padding:clamp(4px,1.4dvh,8px) 16px calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px))}
+  .ctl{display:flex;flex-direction:column;align-items:center;gap:clamp(3px,1dvh,5px);
     background:transparent;border:none;color:var(--panel);cursor:pointer;-webkit-tap-highlight-color:transparent}
   .ctl-glyph{display:flex;align-items:center;justify-content:center;
     font-family:var(--mono);letter-spacing:-.04em;line-height:1;color:rgba(245,244,239,.92)}
-  .ctl-sub{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
-  .ctl.seek .ctl-glyph{font-size:30px}
+  .ctl-sub{font-family:var(--mono);font-size:clamp(9px,2.6dvh,10px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .ctl.seek .ctl-glyph{font-size:clamp(22px,7dvh,30px)}
   .ctl:active .ctl-glyph{opacity:.6}
   /* 中央＝一時停止/再開（枠つきの大きめボタン） */
-  .ctl.play{gap:6px}
-  .ctl.play .ctl-glyph{width:66px;height:66px;border-radius:50%;font-size:24px;
+  .ctl.play{gap:clamp(4px,1.2dvh,6px)}
+  .ctl.play .ctl-glyph{width:clamp(46px,15dvh,66px);height:clamp(46px,15dvh,66px);border-radius:50%;
     border:1.5px solid rgba(245,244,239,.5);background:rgba(245,244,239,.05);
     transition:transform 90ms ease,background 120ms ease,border-color 120ms ease}
   .ctl.play:active .ctl-glyph{transform:scale(.93)}
   .hud.is-paused .ctl.play .ctl-glyph{border-color:var(--signal);background:rgba(196,54,42,.2);color:#FFF}
-  /* 一時停止の二本線（絵文字を使わず矩形で描画） */
-  .bars2{display:flex;gap:6px}
-  .bars2 span{width:6px;height:24px;background:currentColor;display:block}
-  .tri{width:0;height:0;border-style:solid;border-width:13px 0 13px 22px;
-    border-color:transparent transparent transparent currentColor;margin-left:4px}
+  /* 一時停止の二本線 / 再開の三角（絵文字を使わず図形で描画。サイズはボタン連動） */
+  .bars2{display:flex;gap:clamp(4px,1.4dvh,6px)}
+  .bars2 span{width:clamp(4px,1.4dvh,6px);height:clamp(17px,5.4dvh,24px);background:currentColor;display:block}
+  .tri{width:0;height:0;border-style:solid;
+    border-width:clamp(9px,2.7dvh,13px) 0 clamp(9px,2.7dvh,13px) clamp(15px,4.5dvh,22px);
+    border-color:transparent transparent transparent currentColor;margin-left:clamp(3px,1dvh,4px)}
 
   /* シークフラッシュ（＋10秒 等）— 既存 .tap-flash 相当 */
   .flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
