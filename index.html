@@ -847,25 +847,41 @@
     // 再生開始で true（取得）、停止で false（解放）
     function keepAwake(on){ wantAwake = on; on ? acquire() : release(); }
 
-    /* --- 離脱ガード（未保存の編集があるときだけ確認） ---
-       戻る／進む・モバイルの「戻るジェスチャ」では beforeunload が発火しない環境が多い。
-       そこで履歴に番兵（sentinel）エントリを1つ積み、戻る操作で pop される popstate を捕まえて
-       confirm で止め、キャンセルなら番兵を積み直してその場にとどまる。
-       reload／タブ閉じ／URL 変更は popstate では拾えないため beforeunload も併用する。 */
+    /* --- 離脱ガード（未保存の編集があるときだけ、何度でも確認） ---
+       戻る／進む・モバイルの「戻るジェスチャ」では beforeunload が発火しない環境が多いので、
+       履歴に番兵（sentinel）を積み、戻るで pop される popstate を confirm で止める。
+
+       重要：Chrome 等の「履歴操作インターベンション」は “ユーザー操作なしで積んだ” 履歴エントリを
+       skippable として戻る時に読み飛ばす。そのため番兵は必ず編集ジェスチャ（markDirty＝クリック/入力の
+       同一タスク）内で積み、ユーザーアクティベーション付き＝skip されない状態にする。キャンセル直後に
+       積み直す番兵は操作なしのため一時的に skip 対象になり得るが、その番兵の上で続けて編集すると
+       アクティベーションが付いて skip されなくなる。よって「キャンセル→編集→また戻る」でも毎回止まる。
+       番兵は常に元のページの直上に1つだけ保ち履歴を汚さない。reload／タブ閉じ／URL 変更は beforeunload で補う。 */
     const LEAVE_MSG = "編集中の内容が保存されていません。このページを離れてもよろしいですか？";
     let dirty = false, bypass = false;
-    function markDirty(){ dirty = true; }
+    const onGuard = () => !!(history.state && history.state.__mnGuard);
+    // 「元のページ」の直上に番兵をちょうど1つだけ保つ（onGuard の時は積み増さない＝履歴を汚さない）
+    function armSentinel(){ if(!onGuard()) history.pushState({__mnGuard:1}, ""); }
     function markClean(){ dirty = false; }   // 保存成功時に呼ぶ
-    function armSentinel(){ history.pushState({__mnGuard: 1}, ""); }
+    // 編集ジェスチャ（クリック/入力）の同一タスク内で呼ばれるので、ここで積む番兵は
+    // ユーザーアクティベーション付き＝インターベンションの skip 対象にならない
+    function markDirty(){ dirty = true; armSentinel(); }
     function leave(){
+      window.removeEventListener("popstate", onPopState);
       bypass = true;               // 直後の beforeunload を黙らせて実際に離脱させる
       history.back();
-      // 戻り先が無く離脱できなかったときのために、少し後でガード状態を復旧しておく
-      setTimeout(() => { bypass = false; if(dirty) armSentinel(); }, 100);
+      // 戻り先が無く離脱できなかったときのため、少し後でガードを復旧しておく
+      setTimeout(() => {
+        bypass = false;
+        window.addEventListener("popstate", onPopState);
+        if(dirty) armSentinel();
+      }, 150);
     }
     function onPopState(){
-      // 番兵が pop されて元のページに居る状態。未保存なら確認し、拒否なら押し戻す
-      if(dirty && !window.confirm(LEAVE_MSG)){ armSentinel(); return; }
+      // 番兵が pop されて元のページに居る状態。未保存なら確認し、拒否ならその場に積み直す。
+      // 積み直した番兵は操作なしのため一時的に skip 対象になり得るが、続く編集の
+      // アクティベーションで解除され、次の「戻る」でも確実に止まる。
+      if(dirty && !window.confirm(LEAVE_MSG)){ history.pushState({__mnGuard:1}, ""); return; }
       leave();                     // 未編集、または離脱を了承 → 実際に前へ戻す
     }
     function onBeforeUnload(e){
@@ -873,13 +889,15 @@
       e.preventDefault(); e.returnValue = "";   // reload／タブ閉じ／URL 変更時のネイティブ確認
     }
     function bind(){
-      // 戻る1回で確実に popstate が発火するよう履歴に番兵を積む（reload では二重に積まない）
-      if(!(history.state && history.state.__mnGuard)) armSentinel();
       window.addEventListener("popstate", onPopState);
       window.addEventListener("beforeunload", onBeforeUnload);
+      // bfcache 復帰などで番兵が失われても、編集中なら取り直す
+      window.addEventListener("pageshow", () => { if(dirty) armSentinel(); });
       // Wake Lock はタブが背面になると自動解放されるので、再生中に前面へ戻ったら取り直す
       document.addEventListener("visibilitychange", () => {
-        if(wantAwake && document.visibilityState === "visible") acquire();
+        if(document.visibilityState !== "visible") return;
+        if(wantAwake) acquire();
+        if(dirty) armSentinel();
       });
     }
     return { bind, keepAwake, markDirty, markClean, isDirty: () => dirty };
