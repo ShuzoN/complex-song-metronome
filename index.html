@@ -1087,52 +1087,94 @@
     return { fileName, save, importText };
   })();
 
-  /* ---------- PlaybackScheduler（先読みスケジューラ。クリックを予約し、描画用の queue を積むだけ） ----------
-     ドット描画／REC 判定など DOM 由来は含めない。plan() は現在のモードに応じた再生対象グループ列。 */
-  const PlaybackScheduler = (() => {
-    const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
-    let nextTime = 0, beatIdx = 0, barIdx = 0, repIdx = 0, gIdx = 0, finished = false, endTime = 0;
-    const beatSeconds = d => Domain.rhythmSeconds(d, Store.getState().bpm);
-    function plan(){
+  /* ---------- PlaybackService（再生タイムラインの唯一の所有者・singleton） ----------
+     「鳴らすべきリズムの並び」を平坦なリスト（timeline）として1つだけ保持する。
+     生成・更新・削除ができるのはこのサービスだけ。他（スケジューラ／各再生ボタン）は読み取り専用。
+     ・events … 対象プランを group×rep×bar×beat で平坦化した不変配列。各要素は座標＋拍情報。
+                これをパースすれば任意地点のメトロノーム座標（と将来の動画位置 vt）が分かる。
+     ・timeline state それ自体も singleton（frame スロット1つ）。update で丸ごと差し替え、clear で破棄。
+     ・タイミング（発音時刻）は現行どおりスケジューラ側で bpm から都度計算する（テンポ追従を維持）。
+       ここでは順序と拍情報のみを確定し、off/vt は将来のシーク用の土台として持つ（今回の再生では未使用）。 */
+  const PlaybackService = (() => {
+    const isSoloMode = m => m === "solo" || m === "lead";
+    let frame = null;                          // 唯一の timeline state（singleton）
+    // 対象グループ列（solo/lead は該当グループのみ、他は拍子を持つ全グループ）
+    function targetGroups(mode, soloId){
       const groups = Store.getState().groups;
-      if(Transport.running() && Transport.isSolo()){
-        return groups.filter(g => g.id === Transport.soloId() && g.pattern.rhythms.length);
+      if(isSoloMode(mode) && soloId){
+        return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
       }
       return groups.filter(g => g.pattern.rhythms.length);
     }
-    function resetPointer(){ beatIdx=0; barIdx=0; repIdx=0; gIdx=0; finished=false; }
-    function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
-    function pump(limit){
-      while(!finished && nextTime < limit){
-        const gs = plan();
-        if(!gs.length){ finished = true; endTime = nextTime; break; }
-        if(gIdx >= gs.length) gIdx = 0;
-        const g = gs[gIdx];
+    // 現在の対象グループ列（guards / UI 用。running 依存で従来の plan() と同一）
+    function plan(){
+      if(Transport.running() && Transport.isSolo()){ return targetGroups(Transport.mode(), Transport.soloId()); }
+      return targetGroups("all", null);
+    }
+    function build(groups, bpm){
+      const events = [];
+      let off = 0, vt = 0;                      // off=先頭からの累積秒, vt=動画タイムコード（foundation）
+      groups.forEach(g => {
+        if(g.cue != null) vt = Math.max(vt, g.cue);   // 動画アンカー（foundation・単調増加へクランプ）
         const rhythms = g.pattern.rhythms;
-        if(barIdx >= rhythms.length) barIdx = 0;
-        const bar = rhythms[barIdx];
-        if(beatIdx >= bar.num) beatIdx = 0;
-
-        const span = beatSeconds(bar.den);
-        SoundGateway.click(beatIdx === 0, nextTime, span);
-        queue.push({time:nextTime, gid:g.id, rep:repIdx, bar:barIdx, beat:beatIdx, meter:bar});
-        nextTime += span;
-
-        beatIdx++;
-        if(beatIdx >= bar.num){
-          beatIdx = 0; barIdx++;
-          if(barIdx >= rhythms.length){
-            barIdx = 0; repIdx++;
-            if(repIdx >= g.reps){
-              repIdx = 0; gIdx++;
-              if(gIdx >= gs.length){ finished = true; endTime = nextTime; }
+        for(let rep = 0; rep < g.reps; rep++){
+          for(let bar = 0; bar < rhythms.length; bar++){
+            const m = rhythms[bar];
+            const span = Domain.rhythmSeconds(m.den, bpm);
+            for(let beat = 0; beat < m.num; beat++){
+              events.push(Object.freeze({off, vt, gid:g.id, rep, bar, beat, meter:m, accent:(beat===0)}));
+              off += span; vt += span;
             }
           }
         }
+      });
+      return Object.freeze({events: Object.freeze(events), dur: off});
+    }
+    return {
+      // ---- ライフサイクル（書けるのはここだけ） ----
+      update(mode, soloId){ frame = build(targetGroups(mode, soloId), Store.getState().bpm); return frame; },
+      clear(){ frame = null; },
+      // ---- 読み取り専用 ----
+      ready: () => !!frame,
+      count: () => frame ? frame.events.length : 0,
+      at: i => frame ? frame.events[i] : null,
+      dur: () => frame ? frame.dur : 0,
+      events: () => frame ? frame.events : [],
+      // vt 以上の最初の index（二分探索）。将来のシーク用の土台。今回の再生経路では未使用。
+      indexAtVideo(vtq){
+        if(!frame) return 0;
+        const ev = frame.events; let lo = 0, hi = ev.length;
+        while(lo < hi){ const mid = (lo + hi) >> 1; if(ev[mid].vt < vtq) lo = mid + 1; else hi = mid; }
+        return lo;
+      },
+      plan
+    };
+  })();
+
+  /* ---------- PlaybackScheduler（先読みスケジューラ。PlaybackService の timeline を読み、クリックを予約して queue を積む） ----------
+     ドット描画／REC 判定など DOM 由来は含めない。発音時刻は bpm から都度計算し、テンポ追従を維持する。 */
+  const PlaybackScheduler = (() => {
+    const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
+    let nextTime = 0, i = 0, finished = false, endTime = 0;
+    const beatSeconds = d => Domain.rhythmSeconds(d, Store.getState().bpm);
+    function resetPointer(){ i = 0; finished = false; }
+    function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
+    function pump(limit){
+      const n = PlaybackService.count();
+      if(!n){ finished = true; endTime = nextTime; return; }
+      while(!finished && nextTime < limit){
+        const e = PlaybackService.at(i);
+        const span = beatSeconds(e.meter.den);
+        SoundGateway.click(e.accent, nextTime, span);
+        queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
+        nextTime += span;
+        i++;
+        if(i >= n){ finished = true; endTime = nextTime; }
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, plan, resetPointer, prime, pump,
+      LOOKAHEAD, AHEAD, queue, resetPointer, prime, pump,
+      plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
   })();
@@ -1264,6 +1306,10 @@
     const LEAD_SEC = 5;                       // −5秒から再生の助走
     const COUNT_IN_SEC = 2.0;                 // 助走カウントインの目安の長さ（秒）。bpm で本数が決まる
     const COUNT_IN_MAX_BARS = 2;              // 前グループ末尾から取り込むリズムの上限（1〜2小節）
+    // タイムライン更新（再生のたびに作り直す）の準備バッファ。更新→読取は実測で約0.1ms（717拍の実曲）
+    // と軽く、build は同期実行されるため大きな待ちは不要。即時再生（全体再生）にごく短い余白だけ置く。
+    // ブロック再生（グループ／5秒前）は助走の余白に吸収されるため追加ディレイなし。
+    const IMMEDIATE_LEAD = 0.15;
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
@@ -1354,6 +1400,7 @@
       SoundGateway.ensure();
       mode = (kind === "all") ? "all" : kind;
       soloId = (mode === "all") ? null : Store.getState().activeId;
+      PlaybackService.update(mode, soloId);   // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
       running = true; shown = "";
       resumeActiveId = Store.getState().activeId;
@@ -1365,6 +1412,7 @@
       const o = opts || {};
       const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
       const adjust = o.adjust || 0;
+      const lead = o.lead || 0;               // 即時再生（動画なし全体再生）の準備ディレイ。約1秒後から鳴らす
       // 助走カウントイン（動画同期時のみ）：前グループ末尾の1〜2小節を downbeat の手前に実際の拍子で
       // 鳴らし、切り替わりの少し前からメトロノームが聞こえるようにする（音のみ・拍ドットは downbeat から）
       const ci = o.countIn ? countInFor(ciTarget) : {bars:[], dur:0};
@@ -1373,9 +1421,9 @@
       // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
       const t0 = ClockGateway.now();
-      const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust);
+      const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
       PlaybackScheduler.prime(start);
-      firstBeatTime = wait > 0 ? start : 0;
+      firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
       for(const bar of ci.bars){
         const beat = Domain.rhythmSeconds(bar.den, Store.getState().bpm);
@@ -1396,6 +1444,7 @@
       if(!fromVideo) VideoGateway.pause();
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
+      PlaybackService.clear();                     // timeline（singleton state）を破棄
       view.clearBeats();
       cur = {gid:null, bar:-1, rep:0};
       Store.apply({activeId: resumeActiveId});     // 再生前に開いていたグループへ戻す
@@ -1417,7 +1466,9 @@
       if(VideoGateway.armed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
         armKind = kind;
         view.updateTransport();
-        VideoSync.startFromTop(kind);
+        // 即時再生：タップ直後に動画を鳴らさず約1秒おき、その間に停止も受けられる（timeline 更新はこの後の beginPlayback で通る）
+        view.videoMsg("準備中…", false);
+        setTimeout(()=>{ if(armKind === kind && !running) VideoSync.startFromTop(kind); }, IMMEDIATE_LEAD * 1000);
         return;
       }
       const cue = cueOf(kind);
@@ -1446,7 +1497,7 @@
         }, 4000);
         return;
       }
-      beginPlayback(kind);
+      beginPlayback(kind, kind === "all" ? {lead: IMMEDIATE_LEAD} : null);   // 動画なしの即時全体再生は約1秒後から
     }
     function armCancel(){
       armKind = null; VideoSync.cancel(); pendingKind = null;
