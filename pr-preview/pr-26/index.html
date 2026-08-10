@@ -184,6 +184,7 @@
   .g-solo,.g-lead{height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
     font-family:var(--mono);font-size:12px;letter-spacing:.04em}
   .g-lead{border-left:none}
+  .g-solo.on,.g-lead.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
   .g-solo:disabled,.g-lead:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active,.g-lead:not(:disabled):active{transform:translateY(1px)}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
@@ -1646,13 +1647,14 @@
       mode = (kind === "all") ? "all" : kind;
       soloId = (mode === "all") ? null : Store.getState().activeId;
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
+      running = true; shown = "";             // 先に running を立て、下の再描画でトグル（停止）状態を反映する
       if(!o.resume){
         PlaybackService.update(mode, soloId); // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
         resumeActiveId = Store.getState().activeId;
-        Store.apply({activeId: null});        // 再生中は全グループを非アクティブにする
+        // グループ再生／5秒前は対象グループを展開したまま（アクティブ維持）。全体再生は全グループ非アクティブに
+        Store.apply({activeId: isSoloMode(mode) ? soloId : null});
         view.render();
       }
-      running = true; shown = "";
       // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
       // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
       // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる（パッド/動画同期は skipWait）
@@ -2164,29 +2166,41 @@
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
 
-        /* 「グループ再生 | 5秒前再生」を常にペアで表示。対象は soloTarget()=activeId＝この展開中グループ。
+        /* 「グループ再生 | 5秒前再生」を常にペアで表示。展開したこのグループを対象に再生し、再生中も
+           このカードは畳まず、同じボタンで停止できるトグルにする（対象＝soloTarget()=activeId＝このグループ）。
            5秒前再生は動画＋記録位置（cue）があるときだけ有効。裏側は全体再生と同じ Transport。 */
         const prow = document.createElement("div");
         prow.className = "g-row g-play";
         const hasBars = g.pattern.rhythms.length > 0;
+        const arm = Transport.armKind();
+        const busy = running || !!arm;                       // 何か再生／準備中
+        const cued = VideoGateway.ready() && g.cue != null;
+        // このカード（＝activeId のグループ）が solo / lead で稼働中か。稼働中はボタンを「停止」トグルに
+        const soloOn = (running && Transport.mode() === "solo" && Transport.soloId() === g.id) || arm === "solo";
+        const leadOn = (running && Transport.mode() === "lead" && Transport.soloId() === g.id) || arm === "lead";
+        const toggle = kind => Transport.armKind() ? Transport.armCancel()
+                             : (Transport.running() ? Transport.stop(false) : Transport.start(kind));
+
         const solo = document.createElement("button");
         solo.type = "button"; solo.className = "g-solo";
-        solo.textContent = "グループ再生";
-        solo.disabled = running || !hasBars;
-        solo.title = hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
-        solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
+        solo.textContent = soloOn ? "停止" : "グループ再生";
+        solo.classList.toggle("on", soloOn);
+        solo.disabled = soloOn ? false : (busy || !hasBars);
+        solo.title = soloOn ? "停止" : hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
+        solo.addEventListener("click", ()=> toggle("solo"));
         prow.appendChild(solo);
 
         const lead = document.createElement("button");
         lead.type = "button"; lead.className = "g-lead";
-        lead.textContent = "5秒前再生";
-        const cued = VideoGateway.ready() && g.cue != null;
-        lead.disabled = running || !hasBars || !cued;
-        lead.title = !hasBars ? "拍子を1つ以上追加してください"
+        lead.textContent = leadOn ? "停止" : "5秒前再生";
+        lead.classList.toggle("on", leadOn);
+        lead.disabled = leadOn ? false : (busy || !hasBars || !cued);
+        lead.title = leadOn ? "停止"
+          : !hasBars ? "拍子を1つ以上追加してください"
           : !VideoGateway.ready() ? "動画を読み込むと使えます"
           : g.cue == null ? "このグループに動画位置が記録されていません（全体レックで記録）"
           : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
-        lead.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
+        lead.addEventListener("click", ()=> toggle("lead"));
         prow.appendChild(lead);
         body.appendChild(prow);
         card.appendChild(body);
