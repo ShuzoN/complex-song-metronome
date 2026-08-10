@@ -395,7 +395,7 @@
   </section>
 
   <section class="scale">
-    <input type="range" id="tempoRange" min="50" max="250" step="1" value="120" aria-label="テンポ（BPM）">
+    <input type="range" id="tempoRange" min="50" max="250" step="0.1" value="120" aria-label="テンポ（BPM）">
     <div class="ticks" id="ticks"></div>
   </section>
 
@@ -409,7 +409,7 @@
 
   <form class="entry" id="tempoForm">
     <label for="tempoInput">直接入力</label>
-    <input type="number" id="tempoInput" min="50" max="250" step="1" value="120" inputmode="numeric">
+    <input type="number" id="tempoInput" min="50" max="250" step="0.1" value="120" inputmode="decimal">
     <button class="apply" type="submit">設定</button>
   </form>
 
@@ -592,6 +592,13 @@
       if(isNaN(n)) return fallback;
       return Math.min(hi, Math.max(lo, n));
     }
+    // テンポ専用クランプ：小数第1位（0.1刻み）へ丸めて [MIN, MAX] に収める。小数BPM（例 175.5）を許容
+    function clampTempo(v, fallback){
+      const n = Number(v);
+      if(isNaN(n)) return fallback;
+      const r = Math.round(n * 10) / 10;
+      return Math.min(MAX, Math.max(MIN, r));
+    }
     const makeRhythm = (num, den) => ({num: Number(num), den: Number(den)});
     // 文字列 "7/8" または {meter} を検証しつつ Rhythm 化。不正なら null（読み込み時の取りこぼし数え上げ用）
     function parseRhythm(v){
@@ -648,7 +655,7 @@
       const pre = Number(spec.preroll);
       return {
         name: (spec.name == null || String(spec.name) === "") ? "無題のシーケンス" : String(spec.name),
-        tempo: clampInt(spec.tempo, MIN, MAX, 120),
+        tempo: clampTempo(spec.tempo, 120),
         preroll: isNaN(pre) ? 0 : Math.min(60, Math.max(0, pre)),
         video: spec.video == null ? null : spec.video,
         groups: (spec.groups || []).map(g => (g && g.id) ? g : makeGroup(g))
@@ -663,7 +670,7 @@
 
     return {
       DENOMS, MIN, MAX, TERMS, NOTE_NAME,
-      uid, clampInt, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
+      uid, clampInt, clampTempo, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       noteName, termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
@@ -1075,9 +1082,9 @@
       },
       setTempo(v, from){            // テンポは履歴対象外
         const cur = Store.getState().bpm;
-        v = Math.round(Number(v));
+        v = Number(v);
         if(isNaN(v)) v = cur;
-        const bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, v));
+        const bpm = Math.min(Domain.MAX, Math.max(Domain.MIN, Math.round(v * 10) / 10));
         Store.apply({bpm}, {tempo:true, idle:true, from});
       },
       setPreroll(raw){              // 空白（秒）。0..60 に丸めて 2桁へ。meta で入力欄も整形
@@ -2327,12 +2334,13 @@
 
   /* ---------- TempoView（テンポ表示と操作） ---------- */
   const TempoView = (() => {
+    const fmtBpm = b => Number.isInteger(b) ? String(b) : b.toFixed(1);   // 小数BPMは1桁表示（桁ブレ回避）
     function render(from){
       const bpm = state().bpm;
-      bpmView.textContent = bpm;
+      bpmView.textContent = fmtBpm(bpm);
       termView.textContent = Domain.termFor(bpm);
       if(from !== "range") range.value = bpm;
-      if(from !== "input") input.value = bpm;
+      if(from !== "input") input.value = fmtBpm(bpm);
       range.style.setProperty("--p", ((bpm-Domain.MIN)/(Domain.MAX-Domain.MIN)*100)+"%");
     }
     function bind(){
