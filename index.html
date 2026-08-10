@@ -260,6 +260,120 @@
              text-shadow:0 2px 10px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity 140ms ease}
   .tap-flash.show{opacity:1;transition:opacity 60ms ease}
   @media (prefers-reduced-motion:reduce){.beat,.tap-pad-icon,.tap-flash{transition:none}}
+
+  /* ===== 全画面モード（横画面・練習HUD）。既存トークンを流用。クラスは fs- で名前空間 =====
+     上=セクションタイムライン / 中央=リズムパターンのフォーカス帯（分数・線入り）＋pulse /
+     下=操作集約（◁◁・一時停止・▷▷）。サイズはすべて clamp+dvh でビューポート連動。 */
+  .fs-enter{display:block;width:calc(100% - 28px);margin:2px 14px 12px;height:42px;
+    background:var(--ink);color:var(--panel);border:1px solid var(--ink);
+    font-family:var(--mono);font-size:12px;letter-spacing:.12em;cursor:pointer}
+  .fs-enter:active{transform:translateY(1px)}
+  body.fs-lock{overflow:hidden}
+
+  .fs-overlay{position:fixed;inset:0;z-index:9990;background:var(--ink);color:var(--panel);
+    display:flex;flex-direction:column;overflow:hidden;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+
+  /* 画面の左半分／右半分を大きなタップゾーンに（矢印ボタンに加えて）。
+     上部バー（タイムライン・✕）と下部の操作ボタンは z:2 で前面に置き、タップを取り合わない */
+  .fs-tapzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;width:50%;z-index:1;
+    border:none;background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent;
+    display:flex;align-items:center;justify-content:center}
+  .fs-tapzone.left{left:0} .fs-tapzone.right{right:0}
+  .fs-tapzone:active{background:rgba(245,244,239,.05)}
+  /* タップ可能なことを示す控えめなヒント矢印（中央のパターンと重ならないよう外側に薄く） */
+  .fs-tapzone .fs-hint{font-family:var(--mono);font-size:clamp(20px,6dvh,26px);color:rgba(245,244,239,.14);
+    transition:color 120ms ease}
+  .fs-tapzone.left .fs-hint{margin-right:auto;padding-left:clamp(6px,2vw,18px)}
+  .fs-tapzone.right .fs-hint{margin-left:auto;padding-right:clamp(6px,2vw,18px)}
+  .fs-tapzone:active .fs-hint{color:rgba(245,244,239,.4)}
+  .fs-overlay.no-seek .fs-tapzone{pointer-events:none}
+  .fs-overlay.no-seek .fs-tapzone .fs-hint{display:none}
+
+  .fs-top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
+    padding:clamp(8px,2.4dvh,12px) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
+  .fs-rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
+    font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
+  .fs-rep .of{color:rgba(245,244,239,.4)}
+  .fs-rep .u{color:rgba(245,244,239,.45);font-size:.72em;margin-left:2px}
+  .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
+  .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
+    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
+    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
+  .fs-seg.done{opacity:.5}
+  .fs-seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
+  .fs-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(196,54,42,.32);z-index:0;transition:width .3s ease}
+  .fs-lbl{position:relative;z-index:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis}
+  .fs-close{flex:0 0 auto;width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
+    background:rgba(245,244,239,.06);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .fs-close:active{transform:translate(1px,1px)}
+
+  .fs-center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;
+    gap:clamp(8px,2.6dvh,16px);min-height:0;overflow:hidden}
+  .fs-strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;
+    height:clamp(84px,34dvh,150px);overflow:hidden;
+    -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
+            mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
+  .fs-track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw;
+    transition:transform 320ms cubic-bezier(.22,.61,.36,1);will-change:transform}
+  .fs-fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
+    width:clamp(42px,15dvh,66px);height:clamp(42px,16dvh,64px);font-size:clamp(13px,4.4dvh,20px);
+    transition:width .26s ease,height .26s ease,font-size .26s ease,opacity .26s ease,background .26s ease}
+  .fs-fbar.done{opacity:.32}
+  .fs-fbar.now{width:clamp(80px,30dvh,112px);height:clamp(80px,30dvh,112px);font-size:clamp(26px,9.5dvh,40px);
+    background:var(--signal);border-color:var(--signal);box-shadow:0 6px 20px rgba(196,54,42,.32)}
+  .fs-fr{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:var(--mono);font-variant-numeric:tabular-nums;color:rgba(245,244,239,.6);line-height:1}
+  .fs-fr .fs-num,.fs-fr .fs-den{font-size:1em}
+  .fs-fr .fs-line{width:1em;height:0;border-top:.09em solid rgba(245,244,239,.4);margin:.16em 0}
+  .fs-fbar.now .fs-fr{color:#FFF}
+  .fs-fbar.now .fs-fr .fs-line{border-top-color:rgba(255,255,255,.85)}
+
+  .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
+  .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .fs-meter i{font-style:normal;color:var(--brass)}
+  .fs-beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
+  .fs-beat{width:clamp(10px,2.6dvh,15px);height:clamp(10px,2.6dvh,15px);
+    border:1.5px solid rgba(245,244,239,.45);border-radius:50%;transition:background 60ms linear,transform 60ms linear}
+  .fs-beat.first{border-color:var(--brass);box-shadow:inset 0 0 0 2.5px rgba(142,113,50,.32)}
+  .fs-beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.4)}
+  .fs-beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
+
+  .fs-controls{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
+    padding:clamp(4px,1.4dvh,8px) 16px clamp(8px,2.6dvh,14px)}
+  .fs-ctl{display:flex;flex-direction:column;align-items:center;gap:clamp(3px,1dvh,5px);
+    background:transparent;border:none;color:var(--panel);cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .fs-ctl-glyph{display:flex;align-items:center;justify-content:center;font-family:var(--mono);letter-spacing:-.04em;line-height:1;color:rgba(245,244,239,.92)}
+  .fs-ctl-sub{font-family:var(--mono);font-size:clamp(9px,2.6dvh,10px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .fs-ctl.fs-seek .fs-ctl-glyph{font-size:clamp(22px,7dvh,30px)}
+  .fs-ctl:active .fs-ctl-glyph{opacity:.6}
+  .fs-ctl.disabled{opacity:.3;pointer-events:none}
+  .fs-ctl.fs-play{gap:clamp(4px,1.2dvh,6px)}
+  .fs-ctl.fs-play .fs-ctl-glyph{width:clamp(46px,15dvh,66px);height:clamp(46px,15dvh,66px);border-radius:50%;
+    border:1.5px solid rgba(245,244,239,.5);background:rgba(245,244,239,.05);
+    transition:transform 90ms ease,background 120ms ease,border-color 120ms ease}
+  .fs-ctl.fs-play:active .fs-ctl-glyph{transform:scale(.93)}
+  .fs-overlay.is-paused .fs-ctl.fs-play .fs-ctl-glyph{border-color:var(--signal);background:rgba(196,54,42,.2);color:#FFF}
+  .fs-overlay.is-busy .fs-controls{opacity:.7}
+  .fs-bars2{display:flex;gap:clamp(4px,1.4dvh,6px)}
+  .fs-bars2 span{width:clamp(4px,1.4dvh,6px);height:clamp(17px,5.4dvh,24px);background:currentColor;display:block}
+  .fs-tri{width:0;height:0;border-style:solid;
+    border-width:clamp(9px,2.7dvh,13px) 0 clamp(9px,2.7dvh,13px) clamp(15px,4.5dvh,22px);
+    border-color:transparent transparent transparent currentColor;margin-left:clamp(3px,1dvh,4px)}
+
+  .fs-flash{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
+    font-family:var(--display);font-size:clamp(44px,14dvh,72px);font-weight:700;color:#FFF;letter-spacing:.02em;
+    text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
+  .fs-flash.show{opacity:1;transition:opacity 60ms ease}
+
+  .fs-rotate{position:absolute;inset:0;z-index:5;background:var(--ink);color:rgba(245,244,239,.7);
+    display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    font-family:var(--mono);font-size:13px;letter-spacing:.1em}
+  .fs-rotate .ic{font-size:44px}
+  @media (orientation:portrait){ .fs-overlay .fs-rotate{display:flex} }
+  @media (prefers-reduced-motion:reduce){.fs-beat,.fs-ctl,.fs-fbar,.fs-track,.fs-flash,.fs-fill{transition:none}}
 </style>
 </head>
 <body>
@@ -362,6 +476,9 @@
     <div class="tap-flash" id="tapFlash" aria-hidden="true"></div>
   </div>
 
+  <!-- 全画面（横画面 練習HUD）への入口。再生モードのときだけ表示 -->
+  <button class="fs-enter" id="fsBtn" type="button" hidden>⛶ 全画面表示</button>
+
   <div class="lead-wrap">
     <div class="lead" id="lead">
       <span class="g-label">開始までの空白</span>
@@ -380,6 +497,43 @@
     <button class="addgroup" id="addGroupBtn" type="button">＋ リズムグループを追加</button>
   </div>
 </main>
+
+<!-- ============ 全画面モード（横画面 練習HUD）。裏側は既存の Transport / VideoPadService を再利用 ============ -->
+<div class="fs-overlay" id="fsOverlay" hidden>
+  <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印ボタンに加えた大きなタップ領域） -->
+  <button class="fs-tapzone left" id="fsTapL" type="button" aria-label="タップで5秒戻す"><span class="fs-hint">◁</span></button>
+  <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
+
+  <div class="fs-top">
+    <div class="fs-rep" id="fsRep"></div>
+    <div class="fs-timeline" id="fsTimeline"></div>
+    <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
+  </div>
+
+  <div class="fs-center">
+    <div class="fs-strip-wrap"><div class="fs-track" id="fsTrack"></div></div>
+    <div class="fs-pulse">
+      <div class="fs-beats" id="fsBeats" aria-hidden="true"></div>
+      <div class="fs-meter" id="fsMeter"></div>
+    </div>
+  </div>
+
+  <div class="fs-controls">
+    <button class="fs-ctl fs-seek" id="fsSeekL" type="button" aria-label="5秒ずつ戻す">
+      <span class="fs-ctl-glyph">◁◁</span><span class="fs-ctl-sub">5秒戻す</span>
+    </button>
+    <button class="fs-ctl fs-play" id="fsPlay" type="button" aria-label="一時停止／再開">
+      <span class="fs-ctl-glyph" id="fsPlayGlyph"><span class="fs-tri"></span></span>
+      <span class="fs-ctl-sub" id="fsPlaySub">再生</span>
+    </button>
+    <button class="fs-ctl fs-seek" id="fsSeekR" type="button" aria-label="5秒ずつ送る">
+      <span class="fs-ctl-glyph">▷▷</span><span class="fs-ctl-sub">5秒送る</span>
+    </button>
+  </div>
+
+  <div class="fs-flash" id="fsFlash" aria-hidden="true"></div>
+  <div class="fs-rotate"><div class="ic">⟳</div><div>横向きにしてください</div></div>
+</div>
 
 <script>
 (function(){
@@ -1772,7 +1926,7 @@
     return {
       isPlay: () => mode === "play",
       get: () => mode,
-      set(m){ if(m === mode) return; mode = m; SequenceView.render(); TapPadView.update(); }
+      set(m){ if(m === mode) return; mode = m; SequenceView.render(); TapPadView.update(); FullscreenView.updateEntry(); }
     };
   })();
 
@@ -2398,6 +2552,185 @@
     return { update, bind };
   })();
 
+  /* ---------- FullscreenView（横画面の練習HUD。表示のみ・裏側は既存を再利用） ----------
+     上=セクションタイムライン（曲のどこを演奏中か）／中央=現在グループのリズムパターンを
+     フォーカス帯で表示（現在小節を大きく・分数線入り）＋pulse／下=操作集約。
+     再生状態は Transport.cur()/running() を、動画操作は VideoPadService（tap-pad と同じ統括）を
+     そのまま利用する。描画フックは Transport の view（paintBeats/showPulse/setBeatDot/highlight/
+     syncIdle）経由で受け取り、この HUD にも反映する。 */
+  const FullscreenView = (() => {
+    const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
+    let opened = false, lastGid = null, lastTLKey = "", flashTimer = null;
+    const el = {};
+    function cache(){
+      el.overlay=$("fsOverlay"); el.top=$("fsRep"); el.timeline=$("fsTimeline"); el.track=$("fsTrack");
+      el.beats=$("fsBeats"); el.meter=$("fsMeter"); el.rep=$("fsRep");
+      el.play=$("fsPlay"); el.playGlyph=$("fsPlayGlyph"); el.playSub=$("fsPlaySub");
+      el.seekL=$("fsSeekL"); el.seekR=$("fsSeekR"); el.flash=$("fsFlash");
+      el.tapL=$("fsTapL"); el.tapR=$("fsTapR");
+      el.close=$("fsClose"); el.btn=$("fsBtn");
+    }
+    // いま表示すべき文脈：再生中は現在グループ／小節、停止中は選択（or 先頭）グループのプレビュー
+    function context(){
+      if(Transport.running()){
+        const cur = Transport.cur();
+        return {running:true, g:findGroup(cur.gid), bar:cur.bar, rep:cur.rep};
+      }
+      const g = Transport.soloTarget() || state().groups.find(x=>x.pattern.rhythms.length) || null;
+      return {running:false, g, bar:0, rep:0};
+    }
+    function buildTimeline(){
+      const groups = state().groups;
+      const key = groups.map(g=>g.id+":"+g.name+":"+g.reps+":"+g.pattern.rhythms.length).join("|");
+      if(key === lastTLKey) return;
+      lastTLKey = key;
+      el.timeline.innerHTML = "";
+      groups.forEach(g=>{
+        const seg=document.createElement("div");
+        seg.className="fs-seg"; seg.dataset.id=g.id;
+        seg.style.flexGrow = Math.max(1, g.pattern.rhythms.length * g.reps);
+        const fill=document.createElement("div"); fill.className="fs-fill";
+        const lbl=document.createElement("div"); lbl.className="fs-lbl"; lbl.textContent=g.name;
+        seg.appendChild(fill); seg.appendChild(lbl);
+        el.timeline.appendChild(seg);
+      });
+    }
+    function buildStrip(g){
+      el.track.innerHTML = "";
+      if(!g) return;
+      g.pattern.rhythms.forEach((r,i)=>{
+        const t=document.createElement("div");
+        t.className="fs-fbar"; t.dataset.bi=i;
+        t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
+        el.track.appendChild(t);
+      });
+    }
+    function centerCurrent(bar){
+      const tiles = el.track.children;
+      if(!tiles.length) return;
+      const idx = Math.max(0, Math.min(bar, tiles.length-1));
+      const t = tiles[idx];
+      const center = el.track.parentElement.clientWidth / 2;
+      const barCenter = t.offsetLeft + t.offsetWidth/2;
+      el.track.style.transform = "translateX(" + (center - barCenter) + "px)";
+    }
+    function paintBeats(n){
+      if(!opened) return;
+      el.beats.innerHTML="";
+      for(let i=0;i<n;i++){ const d=document.createElement("span"); d.className="fs-beat"+(i===0?" first":""); el.beats.appendChild(d); }
+    }
+    function showPulse(bar){
+      if(!opened) return;
+      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span>';
+    }
+    function setBeatDot(beat){
+      if(!opened) return;
+      const dots=el.beats.children;
+      for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i===beat);
+    }
+    function clearBeats(){ if(!opened) return; [...el.beats.children].forEach(d=>d.classList.remove("on")); }
+    function updatePlay(){
+      if(!opened) return;
+      const hasVideo = VideoGateway.ready();
+      const paused = VideoPadService.isPaused(), running = Transport.running();
+      const playing = hasVideo ? (running && !paused) : running;
+      el.overlay.classList.toggle("is-paused", !playing);
+      el.overlay.classList.toggle("is-busy", VideoPadService.isBusy());
+      el.playGlyph.innerHTML = playing
+        ? '<span class="fs-bars2"><span></span><span></span></span>'
+        : '<span class="fs-tri"></span>';
+      el.playSub.textContent = hasVideo ? (paused ? "再開" : (running ? "一時停止" : "再生"))
+                                        : (running ? "停止" : "再生");
+      const canSeek = hasVideo && VideoPadService.active();
+      el.seekL.classList.toggle("disabled", !canSeek);
+      el.seekR.classList.toggle("disabled", !canSeek);
+      el.overlay.classList.toggle("no-seek", !canSeek);   // 左右ハーフのタップも同時に有効/無効
+    }
+    // タイムライン・フォーカス帯・周回を現在状態に同期（毎バー・開いた時に呼ばれる）
+    function sync(){
+      if(!opened) return;
+      const ctx = context(), groups = state().groups, bar = ctx.bar;
+      buildTimeline();
+      if(!ctx.g){ el.track.innerHTML=""; lastGid=null; el.rep.innerHTML=""; return; }
+      if(ctx.g.id !== lastGid){ lastGid = ctx.g.id; buildStrip(ctx.g); }
+      // フォーカス帯：現在小節=大・赤／済み=薄く
+      [...el.track.children].forEach((t,i)=>{
+        t.classList.toggle("now", i===bar);
+        t.classList.toggle("done", ctx.running && i<bar);
+      });
+      centerCurrent(bar);
+      // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
+      const gi = groups.indexOf(ctx.g);
+      [...el.timeline.children].forEach((seg,i)=>{
+        seg.classList.toggle("cur", i===gi);
+        seg.classList.toggle("done", i<gi);
+        const fill = seg.querySelector(".fs-fill");
+        if(i<gi) fill.style.width="100%";
+        else if(i>gi) fill.style.width="0%";
+        else{
+          const barsLen = ctx.g.pattern.rhythms.length || 1, total = barsLen * ctx.g.reps;
+          const done = (ctx.running ? ctx.rep : 0) * barsLen + bar;
+          fill.style.width = Math.round((done/total)*100) + "%";
+        }
+      });
+      // 周回カウンタ
+      el.rep.innerHTML = '<span>'+(ctx.running ? ctx.rep+1 : 1)+'</span><span class="of"> / '+ctx.g.reps+'</span><span class="u">周</span>';
+      // 停止中プレビューは pulse も自前で描く（再生中は Transport の描画フックが担当）
+      if(!ctx.running){
+        const b = ctx.g.pattern.rhythms[bar] || ctx.g.pattern.rhythms[0];
+        if(b){ paintBeats(b.num); showPulse(b); }
+      }
+      updatePlay();
+    }
+    function flash(text){
+      el.flash.textContent = text; el.flash.classList.add("show");
+      if(flashTimer) clearTimeout(flashTimer);
+      flashTimer = setTimeout(()=>el.flash.classList.remove("show"), 650);
+    }
+    function seek(dir){
+      if(!VideoGateway.ready() || !VideoPadService.active()) return;   // 動画あり・セッション中のみ
+      SoundGateway.ensure();
+      flash((dir<0 ? "−" : "＋") + STEP + "秒");
+      VideoPadService.seekBy(STEP * dir);
+    }
+    function center(){
+      SoundGateway.ensure();
+      if(VideoGateway.ready()) VideoPadService.togglePause();          // 動画あり：tap-pad と同じ統括
+      else Transport.running() ? Transport.stop(false) : Transport.start("all");   // 動画なし：全体再生の開始/停止
+    }
+    function open(){
+      if(opened) return;
+      opened = true; lastGid = null; lastTLKey = "";
+      el.overlay.hidden = false;
+      document.body.classList.add("fs-lock");
+      try{ if(el.overlay.requestFullscreen) el.overlay.requestFullscreen().catch(()=>{}); }catch(err){}
+      try{ if(screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(()=>{}); }catch(err){}
+      sync();
+    }
+    function close(){
+      if(!opened) return;
+      opened = false;
+      el.overlay.hidden = true;
+      document.body.classList.remove("fs-lock");
+      try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); }catch(err){}
+      try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(err){}
+    }
+    function updateEntry(){ if(el.btn) el.btn.hidden = !ViewMode.isPlay(); }
+    function bind(){
+      cache();
+      el.btn.addEventListener("click", open);
+      el.close.addEventListener("click", close);
+      el.seekL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });
+      el.seekR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });
+      el.tapL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });   // 左半分タップ
+      el.tapR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });    // 右半分タップ
+      el.play.addEventListener("pointerdown", e=>{ e.preventDefault(); center(); });
+      document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
+      window.addEventListener("resize", ()=>{ if(opened) centerCurrent(Transport.running() ? Transport.cur().bar : 0); });
+    }
+    return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
+  })();
+
   /* ---------- IoView（保存／読込のメッセージ表示とバインド） ---------- */
   const IoView = (() => {
     let msgTimer = null;
@@ -2494,24 +2827,24 @@
   /* ---------- 連携：Transport への view（DOM 反映）と Store の購読ディスパッチ ---------- */
   const view = {
     render: SequenceView.render,
-    syncIdle: TransportView.syncIdle,
-    updateTransport: TransportView.update,
+    syncIdle: () => { TransportView.syncIdle(); FullscreenView.sync(); },
+    updateTransport: () => { TransportView.update(); FullscreenView.updatePlay(); },
     status: TransportView.status,
     videoMsg: VideoView.ytSay,
-    setRunning: TransportView.setRunning,
+    setRunning: on => { TransportView.setRunning(on); FullscreenView.updatePlay(); },
     startWaiting: TransportView.startWaiting,
     clearWaiting: TransportView.clearWaiting,
     isWaiting: TransportView.isWaiting,
     endWaiting: TransportView.endWaiting,
     prerollTick: TransportView.prerollTick,
-    clearBeats: TransportView.clearBeats,
-    paintBeats: TransportView.paintBeats,
-    showPulse: TransportView.showPulse,
-    highlight: TransportView.highlight,
-    setBeatDot: TransportView.setBeatDot,
+    clearBeats: () => { TransportView.clearBeats(); FullscreenView.clearBeats(); },
+    paintBeats: n => { TransportView.paintBeats(n); FullscreenView.paintBeats(n); },
+    showPulse: bar => { TransportView.showPulse(bar); FullscreenView.showPulse(bar); },
+    highlight: () => { TransportView.highlight(); FullscreenView.sync(); },
+    setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
     stampCueView: GroupView.stampCueView,
-    padUpdate: TapPadView.update
+    padUpdate: () => { TapPadView.update(); FullscreenView.updatePlay(); }
   };
   // Store の変更を meta フラグに応じて各ビューへ配る
   function dispatch(meta){
@@ -2547,6 +2880,7 @@
   SequenceView.bind();
   TransportView.bind();
   TapPadView.bind();
+  FullscreenView.bind();
   IoView.bind();
   VideoView.bind();
 
@@ -2556,6 +2890,7 @@
   SequenceView.applyTitle();
   SequenceView.updateHistory();
   TapPadView.update();
+  FullscreenView.updateEntry();
   SequenceService.setTempo(120);
 })();
 </script>
