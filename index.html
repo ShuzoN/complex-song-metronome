@@ -825,6 +825,46 @@
     };
   })();
 
+  /* ---------- BrowserService（ブラウザ境界の制御：離脱ガード & 画面スリープ防止。DOM の状態は持たない） ----------
+     ・離脱ガード：未保存の編集があるとき、リロード／タブ閉じ／戻る・進むで beforeunload のネイティブ確認を出す。
+       このアプリは単一ページ・履歴1エントリ（router なし）なので、これらはすべて実 unload になり 1本で統一的に効く。
+     ・画面スリープ防止：再生中は Screen Wake Lock を取得し、停止で解放。背面で自動解放されるため復帰時に再取得する。 */
+  const BrowserService = (() => {
+    /* --- 画面スリープ防止（Screen Wake Lock） --- */
+    const canWake = ("wakeLock" in navigator);
+    let sentinel = null, wantAwake = false;
+    async function acquire(){
+      if(!canWake || !wantAwake || sentinel) return;
+      try{
+        sentinel = await navigator.wakeLock.request("screen");
+        sentinel.addEventListener("release", () => { sentinel = null; });
+      }catch(err){ /* 非セキュアコンテキスト／拒否／非表示などは黙って無視 */ }
+    }
+    async function release(){
+      const s = sentinel; sentinel = null;
+      if(s){ try{ await s.release(); }catch(err){} }
+    }
+    // 再生開始で true（取得）、停止で false（解放）
+    function keepAwake(on){ wantAwake = on; on ? acquire() : release(); }
+
+    /* --- 離脱ガード（未保存の編集があるときだけ確認） --- */
+    let dirty = false;
+    function markDirty(){ dirty = true; }
+    function markClean(){ dirty = false; }   // 保存成功時に呼ぶ
+    function onBeforeUnload(e){
+      if(!dirty) return;
+      e.preventDefault(); e.returnValue = "";   // ネイティブ「このサイトを離れますか？」を出す
+    }
+    function bind(){
+      window.addEventListener("beforeunload", onBeforeUnload);
+      // Wake Lock はタブが背面になると自動解放されるので、再生中に前面へ戻ったら取り直す
+      document.addEventListener("visibilitychange", () => {
+        if(wantAwake && document.visibilityState === "visible") acquire();
+      });
+    }
+    return { bind, keepAwake, markDirty, markClean, isDirty: () => dirty };
+  })();
+
 
   /* ========================================================================
      usecase … 操作インタフェースの集約と DTO⇔entity 変換。ui からはここだけを呼び、
@@ -2058,7 +2098,10 @@
     function status(text){ statusText.textContent = text; }
     function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
     // 空白（preroll）待機の表示
-    function setRunning(on){ document.body.classList.toggle("running", on); }
+    function setRunning(on){
+      document.body.classList.toggle("running", on);
+      BrowserService.keepAwake(on);          // 再生中は画面をスリープさせない（動画・刻みが止まらないように）
+    }
     function startWaiting(str){
       document.body.classList.add("waiting");
       leadEl.classList.add("counting");
@@ -2126,6 +2169,7 @@
       saveBtn.addEventListener("click", async ()=>{
         const r = await SequenceIO.save();
         if(r) say(r.message, r.bad);
+        if(r && !r.bad) BrowserService.markClean();   // 保存できたら離脱ガードを解除
       });
       loadBtn.addEventListener("click", async ()=>{
         try{ importAndSay(await FileGateway.open()); }
@@ -2255,6 +2299,7 @@
   TransportView.bind();
   IoView.bind();
   VideoView.bind();
+  BrowserService.bind();
 
   /* ---------- 初期化 ---------- */
   SequenceView.render();
@@ -2262,6 +2307,10 @@
   SequenceView.applyTitle();
   SequenceView.updateHistory();
   SequenceService.setTempo(120);
+
+  // 初期化の副作用（上の setTempo など）を dirty に数えないよう、購読は最後に登録する。
+  // 以降の編集はすべて Store.apply 経由で emit されるため、未保存状態として離脱ガードが働く。
+  Store.subscribe(() => BrowserService.markDirty());
 })();
 </script>
 </body>
