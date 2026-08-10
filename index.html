@@ -580,6 +580,7 @@
      ======================================================================== */
   const Domain = (() => {
     const DENOMS = [3,6,9,12,15,2,4,8,16,32];
+    const NUM_MAX = 16;                     // 分子（拍数）の上限。分母から独立（例：5/4 のような変拍子を許容）
     const MIN = 50, MAX = 250;
     const TERMS = [[50,65,"Largo"],[66,75,"Adagio"],[76,107,"Andante"],[108,119,"Moderato"],
                    [120,167,"Allegro"],[168,200,"Presto"],[201,250,"Prestissimo"]];
@@ -607,7 +608,7 @@
       if(!m) return null;
       const num = Number(m[1]), den = Number(m[2]);
       if(!DENOMS.includes(den)) return null;
-      if(num < 1 || num > den) return null;
+      if(num < 1 || num > NUM_MAX) return null;
       return {num, den};
     }
     const formatRhythm = r => r.num + "/" + r.den;
@@ -668,7 +669,7 @@
     const totalBars = groups => groups.reduce((n,g)=>n + g.pattern.rhythms.length, 0);
 
     return {
-      DENOMS, MIN, MAX, TERMS, NOTE_NAME,
+      DENOMS, NUM_MAX, MIN, MAX, TERMS, NOTE_NAME,
       uid, clampInt, clampTempo, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
@@ -1264,7 +1265,7 @@
         });
       });
       if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
-      if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + Domain.DENOMS.join(",") + "、分子は 1〜分母）");
+      if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + Domain.DENOMS.join(",") + "、分子は 1〜" + Domain.NUM_MAX + "）");
 
       const sequence = Domain.makeSequence({ name: doc.name, tempo: doc.tempo, preroll: doc.preroll, video: doc.video, groups });
       return { sequence, notes, rawVideo: doc.video };
@@ -1975,11 +1976,10 @@
 
       function fillNum(){
         nSel.innerHTML = "";
-        const pd = state().pickDen;
-        for(let i=1;i<=pd;i++){
+        for(let i=1;i<=Domain.NUM_MAX;i++){
           const o=document.createElement("option"); o.value=i; o.textContent=i; nSel.appendChild(o);
         }
-        const pn = Math.min(state().pickNum, pd);
+        const pn = Math.min(state().pickNum, Domain.NUM_MAX);
         RhythmService.setPicker(pn, null);
         nSel.value = String(pn);
       }
