@@ -385,7 +385,7 @@
 <body>
 
 <main class="device">
-  <div class="content" id="content">
+  <div class="content">
   <div class="head">
     <div class="wordmark">Metronome</div>
     <div class="status"><span class="lamp"></span><span id="statusText">停止中</span></div>
@@ -567,7 +567,7 @@
             └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
                 └ Rhythm … 1拍子 例 7/8（num, den）。UI 表示は「拍子」
 
-     再生タイミングの定数は不変（LOOKAHEAD=25 / AHEAD=0.12 / LEAD_SEC=5 ほか）。
+     再生タイミングの定数は不変（LOOKAHEAD=25 / AHEAD=0.12 ほか）。
      ============================================================================ */
 
   /* ========================================================================
@@ -623,7 +623,6 @@
     }
     const formatRhythm = r => r.num + "/" + r.den;
     const rhythmSeconds = (den, bpm) => (60/bpm) * (4/den);
-    const noteName = den => NOTE_NAME[den];
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
     const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den))});
     // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
@@ -684,7 +683,7 @@
     return {
       DENOMS, MIN, MAX, TERMS, NOTE_NAME,
       uid, clampInt, clampTempo, normBpm, effectiveBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
-      noteName, termFor, makePattern, makeGroup, cloneGroup,
+      termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
   })();
@@ -1343,7 +1342,7 @@
      ・vt は各 rep の repCues（無ければ rep0 は group.cue）でアンカーし、rep 内は bpm 補間。
        VideoPadService が indexAtVideo(vt) で「動画位置に一致する拍」を引き当て、そこからフィットさせる。 */
   const PlaybackService = (() => {
-    const isSoloMode = m => m === "solo" || m === "lead";
+    const isSoloMode = m => m === "solo";
     let frame = null;                          // 唯一の timeline state（singleton）
     // 対象グループ列（solo/lead は該当グループのみ、他は拍子を持つ全グループ）
     function targetGroups(mode, soloId){
@@ -1392,8 +1391,6 @@
       ready: () => !!frame,
       count: () => frame ? frame.events.length : 0,
       at: i => frame ? frame.events[i] : null,
-      dur: () => frame ? frame.dur : 0,
-      events: () => frame ? frame.events : [],
       // vt 以上の最初の index（二分探索）。VideoPadService が動画位置→開始拍の突き合わせに使う。
       indexAtVideo(vtq){
         if(!frame) return 0;
@@ -1491,19 +1488,18 @@
       ClockGateway.frame(pollTop);
     }
     function startAtCue(kind, cue){
-      const lead = (kind === "lead");
       // aim=実音を cue に重ねる補正位置。fire=そこからカウントイン(前グループ末尾の1〜2小節)ぶん
       // 手前＝助走の刻み出し位置。
       const aim = compensate(cue);
       const fire = Math.max(0, aim - Transport.countInFor(Transport.soloTarget()).dur);
-      const from = lead ? Math.max(0, fire - Transport.LEAD_SEC) : fire;
+      const from = fire;
       try{
-        VideoGateway.seekTo(from, true);     // lead なら助走5秒手前、そうでなければカウントイン開始点
+        VideoGateway.seekTo(from, true);     // カウントイン開始点へ頭出し
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      // lead は「手前へ寄せて実到達を確認してから target で刻む」ジャンプ方式。非 lead(cued) は従来どおり到達検知。
-      cueWatch = {target: fire, from, kind, index: 0, countIn: true, resume: false, jump: lead,
-                  t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
+      // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
+      cueWatch = {target: fire, from, kind, index: 0, countIn: true, resume: false, jump: false,
+                  t0: ClockGateway.perf(), limit: 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
       ClockGateway.frame(pollCue);
@@ -1584,19 +1580,18 @@
     return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
   })();
 
-  /* ---------- Transport（再生ステートマシン：all/solo/lead・preroll・全REC・動画同期を統括） ----------
+  /* ---------- Transport（再生ステートマシン：all/solo・preroll・全REC・動画同期を統括） ----------
      ClockGateway/SoundGateway/VideoSync/Store/PlaybackScheduler をオーケストレーションし、
      UI へは view（onTick/onStatus/updateTransport 相当）経由で反映を委譲する。 */
   const Transport = (() => {
-    const LEAD_SEC = 5;                       // −5秒から再生の助走
     const COUNT_IN_SEC = 2.0;                 // 助走カウントインの目安の長さ（秒）。bpm で本数が決まる
     const COUNT_IN_MAX_BARS = 2;              // 前グループ末尾から取り込むリズムの上限（1〜2小節）
     // タイムライン更新（再生のたびに作り直す）の準備バッファ。更新→読取は実測で約0.1ms（717拍の実曲）
     // と軽く、build は同期実行されるため大きな待ちは不要。即時再生（全体再生）にごく短い余白だけ置く。
-    // ブロック再生（グループ／5秒前）は助走の余白に吸収されるため追加ディレイなし。
+    // ブロック再生（グループ再生）は助走の余白に吸収されるため追加ディレイなし。
     const IMMEDIATE_LEAD = 0.15;
     let running = false;
-    let mode = "all", soloId = null;          // "all"=全体 / "solo","lead"=選択グループのみ
+    let mode = "all", soloId = null;          // "all"=全体 / "solo"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
     let recording = false;                    // 全体レック（各 rep の頭で repCues を記録）
     let resumeActiveId = null;                // 再生前にアクティブだったグループ
@@ -1610,7 +1605,7 @@
       endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
       highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}
     };
-    const isSoloMode = m => m === "solo" || m === "lead";
+    const isSoloMode = m => m === "solo";
     const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
 
     function soloTarget(){
@@ -1775,13 +1770,6 @@
         return;
       }
       const cue = cueOf(kind);
-      if(kind === "lead"){                       // −5秒から再生は、動画と記録位置が揃っているときだけ
-        if(!VideoGateway.armed() || cue == null) return;
-        armKind = kind;
-        view.updateTransport();
-        VideoSync.startAtCue(kind, cue);
-        return;
-      }
       if(VideoGateway.armed() && cue != null){          // グループ再生は記録した位置から合わせる
         armKind = kind;
         view.updateTransport();
@@ -1844,7 +1832,7 @@
       armKind: () => armKind,
       recording: () => recording,
       cur: () => cur,
-      soloTarget, countInFor, LEAD_SEC,
+      soloTarget, countInFor,
       clearArm(){ armKind = null; },
       clearPending(){ pendingKind = null; },
       halt,
