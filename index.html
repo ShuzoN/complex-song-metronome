@@ -298,8 +298,10 @@
   .fs-rep .u{color:rgba(245,244,239,.45);font-size:.8em;margin-left:2px}
   .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
   .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
-    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
-    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
+    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;cursor:pointer;
+    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap;
+    -webkit-tap-highlight-color:transparent}
+  .fs-seg:active{background:rgba(245,244,239,.12)}
   .fs-seg.done{opacity:.5}
   .fs-seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
   .fs-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(196,54,42,.32);z-index:0;transition:width .3s ease}
@@ -2705,6 +2707,16 @@
       if(VideoGateway.ready()) VideoPadService.togglePause();          // 動画あり：tap-pad と同じ統括
       else Transport.running() ? Transport.stop(false) : Transport.start("all");   // 動画なし：全体再生の開始/停止
     }
+    // タイムラインのグループをタップ → そのグループの先頭から再生（現状の「グループ再生」と同じヘッド）。
+    // 全画面を閉じずにグループ間を飛べる。再生中なら一旦止めてから当該グループで開始する。
+    function playGroup(id){
+      const g = findGroup(id);
+      if(!g || !g.pattern.rhythms.length) return;                     // 空グループは無視
+      SoundGateway.ensure();
+      if(Transport.running() || Transport.armKind()) Transport.stop(false);
+      Store.apply({activeId: id}, {});                                // solo 対象＝このグループ（stop の後に設定）
+      Transport.start("solo");
+    }
     function open(){
       if(opened) return;
       opened = true; lastGid = null; lastTLKey = "";
@@ -2732,6 +2744,11 @@
       el.tapL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });   // 左半分タップ
       el.tapR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });    // 右半分タップ
       el.play.addEventListener("pointerdown", e=>{ e.preventDefault(); center(); });
+      // タイムラインのグループをタップして、そのグループから再生（委譲：再描画でセグメントが作り直されるため）
+      el.timeline.addEventListener("click", e=>{
+        const seg = e.target.closest(".fs-seg");
+        if(seg && seg.dataset.id) playGroup(seg.dataset.id);
+      });
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
       window.addEventListener("resize", ()=>{ if(opened) centerCurrent(Transport.running() ? Transport.cur().bar : 0); });
     }
