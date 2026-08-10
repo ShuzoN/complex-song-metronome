@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>全画面モード モック（横画面）— Complex Song Metronome</title>
+<title>全画面モード モック（横画面 v3）— Complex Song Metronome</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -22,106 +22,117 @@
   body{background:var(--ink);color:var(--panel);font-family:var(--body);-webkit-font-smoothing:antialiased;overflow:hidden}
 
   /* ===================================================================
-     横画面・全面z重ねの静的モック（見た目のみ）。
-     下レイヤー = リズムパターン(フォーカス帯) + pulse + グループ情報
-     上レイヤー = 映像なしの透過パッド操作（⏪/⏸/⏩）
+     横画面・練習HUD 静的モック v3（見た目のみ）。
+       上   = セクションタイムライン（曲のどこを演奏中か）
+       中央 = リズムパターンのフォーカス帯（分数・線入り）＋ pulse
+       下   = 操作系を集約（◁◁ / 一時停止 / ▷▷）
      本実装では TransportView / TapPadView / VideoPadService を再利用。
      =================================================================== */
 
-  .hud{position:fixed;inset:0;background:var(--ink);color:var(--panel);overflow:hidden}
+  .hud{position:fixed;inset:0;background:var(--ink);color:var(--panel);overflow:hidden;
+    display:flex;flex-direction:column}
 
-  /* ---- 下レイヤー：主コンテンツ（表示のみ・タップは透過） ---- */
-  .layer-content{position:absolute;inset:0;display:flex;flex-direction:column;pointer-events:none}
-  /* 帯＋pulse を中央に寄せ、下部は操作バンド用に空ける */
-  .center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:18px;padding-bottom:86px}
+  /* ---- 上：セクションタイムライン ---- */
+  .top{display:flex;align-items:center;gap:12px;
+    padding:calc(env(safe-area-inset-top) + 12px) 16px 0 18px}
+  .rep{flex:0 0 auto;font-family:var(--mono);font-size:15px;color:var(--signal);
+    font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
+  .rep .of{color:rgba(245,244,239,.4)}
+  .rep .u{color:rgba(245,244,239,.45);font-size:11px;margin-left:2px}
 
-  /* 上部バー：グループ名＋周回 */
-  .hud-top{display:flex;align-items:center;gap:14px;
-    padding:calc(env(safe-area-inset-top) + 14px) 20px 0 22px}
-  .hud-group{display:flex;align-items:center;gap:10px}
-  .hud-group .bar{width:4px;height:20px;background:var(--signal)}
-  .hud-group .name{font-family:var(--body);font-weight:700;font-size:17px;color:rgba(245,244,239,.9);letter-spacing:.02em}
-  .hud-rep{font-family:var(--mono);font-size:18px;color:var(--signal);font-variant-numeric:tabular-nums;letter-spacing:.04em}
-  .hud-rep .of{color:rgba(245,244,239,.4)}
+  .timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:30px}
+  .seg{position:relative;flex-grow:1;flex-basis:0;min-width:34px;display:flex;align-items:center;justify-content:center;
+    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
+    font-family:var(--body);font-size:11px;letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
+  .seg.done{opacity:.5}
+  .seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
+  /* 現在セクション内の進捗フィル（済み分） */
+  .seg .fill{position:absolute;left:0;top:0;bottom:0;background:rgba(196,54,42,.32);z-index:0}
+  .seg .lbl{position:relative;z-index:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis}
 
-  /* ---- フォーカス帯（リズムパターン） ---- */
-  .strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;height:132px;overflow:hidden;
-    -webkit-mask-image:linear-gradient(to right,transparent 0,#000 20%,#000 80%,transparent 100%);
-            mask-image:linear-gradient(to right,transparent 0,#000 20%,#000 80%,transparent 100%)}
-  .track{display:flex;align-items:center;gap:16px;padding:0 50vw;
+  .close{flex:0 0 auto;width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
+    background:rgba(245,244,239,.06);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .close:active{transform:translate(1px,1px)}
+
+  /* ---- 中央：フォーカス帯＋pulse ---- */
+  .center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;gap:14px;min-height:0}
+
+  .strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;height:138px;overflow:hidden;
+    -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
+            mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
+  .track{display:flex;align-items:center;gap:14px;padding:0 50vw;
     transition:transform 320ms cubic-bezier(.22,.61,.36,1);will-change:transform}
-  .fbar{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    border:1px solid rgba(245,244,239,.28);background:rgba(245,244,239,.04);
-    font-family:var(--mono);font-variant-numeric:tabular-nums;color:rgba(245,244,239,.55);
-    width:64px;height:60px;font-size:19px;transition:all 260ms ease}
-  .fbar .den{font-size:.62em;color:rgba(245,244,239,.4);margin-top:-2px}
-  .fbar.done{opacity:.34}
-  /* 現在小節：大きく・赤（既存 .chip.now 相当の色） */
-  .fbar.now{width:108px;height:108px;font-size:42px;color:#FFF;
-    background:var(--signal);border-color:var(--signal);box-shadow:0 6px 20px rgba(196,54,42,.32)}
-  .fbar.now .den{font-size:.5em;color:rgba(255,255,255,.8);margin-top:-4px}
 
-  /* ---- pulse（現在小節の拍） ---- */
-  .hud-pulse{display:flex;flex-direction:column;align-items:center;gap:12px;padding:2px 20px}
-  .hud-meter{font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
-  .hud-meter i{font-style:normal;color:var(--brass)}
-  .beats{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center}
-  .beat{width:16px;height:16px;border:1.5px solid rgba(245,244,239,.45);border-radius:50%;
+  .fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
+    width:66px;height:64px;transition:all 260ms ease}
+  .fbar.done{opacity:.32}
+  .fbar.now{width:112px;height:112px;background:var(--signal);border-color:var(--signal);
+    box-shadow:0 6px 20px rgba(196,54,42,.32)}
+
+  /* 分数（線入り）: num / line / den を縦積み */
+  .fr{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-family:var(--mono);font-variant-numeric:tabular-nums;color:rgba(245,244,239,.6);line-height:1}
+  .fr .num,.fr .den{font-size:20px}
+  .fr .line{width:20px;height:0;border-top:1.5px solid rgba(245,244,239,.4);margin:3px 0}
+  .fbar.now .fr{color:#FFF}
+  .fbar.now .fr .num,.fbar.now .fr .den{font-size:40px}
+  .fbar.now .fr .line{width:40px;border-top-width:2.5px;border-top-color:rgba(255,255,255,.85);margin:5px 0}
+
+  /* pulse */
+  .pulse{display:flex;flex-direction:column;align-items:center;gap:10px;padding:0 20px}
+  .meter{font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .meter i{font-style:normal;color:var(--brass)}
+  .beats{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center;max-width:80vw}
+  .beat{width:15px;height:15px;border:1.5px solid rgba(245,244,239,.45);border-radius:50%;
     transition:background 60ms linear,transform 60ms linear}
   .beat.first{border-color:var(--brass);box-shadow:inset 0 0 0 2.5px rgba(142,113,50,.32)}
   .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.4)}
   .beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
-  /* 次グループ（右下・薄く） */
-  .hud-next{position:absolute;right:20px;bottom:calc(env(safe-area-inset-bottom) + 16px);
-    display:flex;align-items:baseline;gap:9px;color:var(--dim);opacity:.7}
-  .hud-next .tag{font-family:var(--mono);font-size:11px;letter-spacing:.14em}
-  .hud-next .nm{font-family:var(--body);font-weight:600;font-size:16px;color:rgba(245,244,239,.6)}
-  .hud-next .rp{font-family:var(--mono);font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
-
-  /* ---- 上レイヤー：透過パッド操作（映像なし） ---- */
-  .layer-ctl{position:absolute;inset:0}
-  .tapzone{position:absolute;top:0;bottom:86px;width:26%;border:none;background:transparent;color:var(--panel);
-    display:flex;flex-direction:column;justify-content:center;gap:8px;cursor:pointer;
-    font-family:var(--mono);-webkit-tap-highlight-color:transparent}
-  .tapzone.left{left:0;align-items:flex-start;padding-left:16px}
-  .tapzone.right{right:0;align-items:flex-end;padding-right:16px}
-  .tapzone-glyph{font-size:32px;line-height:1;opacity:.5}
-  .tapzone-sub{font-size:10px;letter-spacing:.12em;color:rgba(245,244,239,.42)}
-  .tapzone:active{background:rgba(245,244,239,.05)}
-
-  .hud-pause{position:absolute;left:50%;bottom:calc(env(safe-area-inset-bottom) + 14px);transform:translateX(-50%);
-    width:60px;height:60px;border-radius:50%;border:1.5px solid rgba(245,244,239,.5);
-    background:rgba(25,28,24,.35);backdrop-filter:blur(2px);color:var(--panel);
-    display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;cursor:pointer;
-    -webkit-tap-highlight-color:transparent;transition:transform 90ms ease,background 120ms ease}
-  .hud-pause:active{transform:translateX(-50%) scale(.93)}
-  .hud.is-paused .hud-pause{border-color:var(--signal);background:rgba(196,54,42,.2);color:#FFF}
-
-  .hud-close{position:absolute;top:calc(env(safe-area-inset-top) + 12px);right:16px;
-    width:42px;height:42px;border:1px solid rgba(245,244,239,.4);background:rgba(245,244,239,.06);color:var(--panel);
-    font-family:var(--mono);font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
-  .hud-close:active{transform:translate(1px,1px)}
+  /* ---- 下：操作系を集約 ---- */
+  .controls{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:26px;
+    padding:8px 16px calc(env(safe-area-inset-bottom) + 14px)}
+  .ctl{display:flex;flex-direction:column;align-items:center;gap:5px;
+    background:transparent;border:none;color:var(--panel);cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .ctl-glyph{display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);letter-spacing:-.04em;line-height:1;color:rgba(245,244,239,.92)}
+  .ctl-sub{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .ctl.seek .ctl-glyph{font-size:30px}
+  .ctl:active .ctl-glyph{opacity:.6}
+  /* 中央＝一時停止/再開（枠つきの大きめボタン） */
+  .ctl.play{gap:6px}
+  .ctl.play .ctl-glyph{width:66px;height:66px;border-radius:50%;font-size:24px;
+    border:1.5px solid rgba(245,244,239,.5);background:rgba(245,244,239,.05);
+    transition:transform 90ms ease,background 120ms ease,border-color 120ms ease}
+  .ctl.play:active .ctl-glyph{transform:scale(.93)}
+  .hud.is-paused .ctl.play .ctl-glyph{border-color:var(--signal);background:rgba(196,54,42,.2);color:#FFF}
+  /* 一時停止の二本線（絵文字を使わず矩形で描画） */
+  .bars2{display:flex;gap:6px}
+  .bars2 span{width:6px;height:24px;background:currentColor;display:block}
+  .tri{width:0;height:0;border-style:solid;border-width:13px 0 13px 22px;
+    border-color:transparent transparent transparent currentColor;margin-left:4px}
 
   /* シークフラッシュ（＋10秒 等）— 既存 .tap-flash 相当 */
-  .hud-flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  .flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font-family:var(--display);font-size:72px;font-weight:700;color:#FFF;letter-spacing:.02em;
     text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
-  .hud-flash.show{opacity:1;transition:opacity 60ms ease}
+  .flash.show{opacity:1;transition:opacity 60ms ease}
 
   /* ===== モック操作用デモバー（本番には無い） ===== */
-  .demo-bar{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:30;
-    display:flex;gap:7px;align-items:center;background:rgba(25,28,24,.85);border:1px solid rgba(245,244,239,.25);padding:6px 9px}
-  .demo-bar span{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:rgba(245,244,239,.5);text-transform:uppercase}
-  .demo-bar button{font-family:var(--mono);font-size:10.5px;color:var(--panel);background:rgba(245,244,239,.08);border:1px solid rgba(245,244,239,.3);padding:5px 8px;cursor:pointer}
+  .demo-bar{position:fixed;left:10px;top:50%;transform:translateY(-50%);z-index:30;
+    display:flex;flex-direction:column;gap:6px;align-items:stretch;background:rgba(25,28,24,.8);border:1px solid rgba(245,244,239,.22);padding:7px}
+  .demo-bar span{font-family:var(--mono);font-size:8px;letter-spacing:.14em;color:rgba(245,244,239,.45);text-transform:uppercase;text-align:center}
+  .demo-bar button{font-family:var(--mono);font-size:10px;color:var(--panel);background:rgba(245,244,239,.08);border:1px solid rgba(245,244,239,.3);padding:5px 8px;cursor:pointer;white-space:nowrap}
   .demo-bar button:active{transform:translateY(1px)}
 
-  /* 縦向きのときは横向きを促す（本実装の回転案内イメージ） */
+  /* 縦向き時の回転案内（本実装の回転ガードのイメージ） */
   .rotate-hint{position:fixed;inset:0;z-index:40;background:var(--ink);color:rgba(245,244,239,.7);
     display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:var(--mono);font-size:13px;letter-spacing:.1em}
   .rotate-hint .ic{font-size:44px}
   @media (orientation:portrait){ .rotate-hint{display:flex} }
-  @media (prefers-reduced-motion:reduce){.beat,.hud-pause,.hud-flash,.fbar,.track{transition:none}}
+  @media (prefers-reduced-motion:reduce){.beat,.ctl,.fbar,.track,.flash{transition:none}}
   :focus-visible{outline:2px solid var(--signal);outline-offset:2px}
 </style>
 </head>
@@ -129,53 +140,43 @@
 
 <div class="hud" id="hud">
 
-  <!-- 下レイヤー：主コンテンツ（タップは透過） -->
-  <div class="layer-content">
+  <!-- 上：セクションタイムライン -->
+  <div class="top">
+    <div class="rep"><span id="repNow">7</span><span class="of"> / 9</span><span class="u">周</span></div>
+    <div class="timeline" id="timeline"><!-- セクションはJSで生成 --></div>
+    <button class="close" aria-label="全画面を解除">✕</button>
+  </div>
 
-    <div class="hud-top">
-      <div class="hud-group">
-        <span class="bar"></span>
-        <span class="name">A メロ</span>
-      </div>
-      <div class="hud-rep"><span id="repNow">7</span><span class="of"> / 9</span></div>
+  <!-- 中央：フォーカス帯＋pulse -->
+  <div class="center">
+    <div class="strip-wrap">
+      <div class="track" id="track"><!-- 小節タイルはJSで生成 --></div>
     </div>
-
-    <div class="center">
-      <div class="strip-wrap">
-        <div class="track" id="track"><!-- 小節タイルはJSで生成 --></div>
-      </div>
-
-      <div class="hud-pulse">
-        <div class="beats" id="beats"><!-- 拍ドットはJSで生成 --></div>
-        <div class="hud-meter"><i id="meterSig">7/8</i> · <span id="meterName">八分音符</span></div>
-      </div>
-    </div>
-
-    <div class="hud-next">
-      <span class="tag">次 ›</span>
-      <span class="nm">サビ前</span>
-      <span class="rp">×2</span>
+    <div class="pulse">
+      <div class="beats" id="beats"><!-- 拍ドットはJSで生成 --></div>
+      <div class="meter"><i id="meterSig">7/8</i> · <span id="meterName">八分音符</span></div>
     </div>
   </div>
 
-  <!-- 上レイヤー：透過パッド操作（映像なし） -->
-  <div class="layer-ctl">
-    <button class="tapzone left" aria-label="5秒ずつ戻す">
-      <span class="tapzone-glyph">⏪</span>
-      <span class="tapzone-sub">5秒ずつ戻す</span>
+  <!-- 下：操作系を集約 -->
+  <div class="controls">
+    <button class="ctl seek" aria-label="5秒ずつ戻す">
+      <span class="ctl-glyph">◁◁</span>
+      <span class="ctl-sub">5秒戻す</span>
     </button>
-    <button class="tapzone right" aria-label="5秒ずつ送る">
-      <span class="tapzone-glyph">⏩</span>
-      <span class="tapzone-sub">5秒ずつ送る</span>
+    <button class="ctl play" id="play" aria-label="一時停止・再開">
+      <span class="ctl-glyph" id="playGlyph"><span class="bars2"><span></span><span></span></span></span>
+      <span class="ctl-sub" id="playSub">一時停止</span>
     </button>
-    <button class="hud-pause" id="pause" aria-label="一時停止・再開">⏸</button>
-    <button class="hud-close" aria-label="全画面を解除">✕</button>
+    <button class="ctl seek" aria-label="5秒ずつ送る">
+      <span class="ctl-glyph">▷▷</span>
+      <span class="ctl-sub">5秒送る</span>
+    </button>
   </div>
 
-  <div class="hud-flash" id="flash">＋10秒</div>
+  <div class="flash" id="flash">＋10秒</div>
 </div>
 
-<!-- 縦向き回転案内（本実装の回転ガードのイメージ） -->
 <div class="rotate-hint"><div class="ic">⟳</div><div>横向きにしてください</div></div>
 
 <!-- モック操作用（本番には無い） -->
@@ -190,37 +191,59 @@
 <script>
   /* モックの状態切替デモ専用。本番では TransportView.highlight / setBeatDot /
      paintBeats・TapPadView などが担当します。 */
-
-  // Aメロのリズムパターン（ダミー小節列）
-  var RHYTHMS = [
-    {num:4,den:4},{num:4,den:4},{num:4,den:4},{num:4,den:4},
-    {num:7,den:8},{num:8,den:8},{num:4,den:4},{num:4,den:4},{num:6,den:8}
-  ];
   var NOTE_NAME = {2:"二分音符",4:"四分音符",8:"八分音符",16:"十六分音符"};
+  var F = function(n,d){ return {num:n,den:d}; };
 
+  // 曲＝セクション（リズムグループ）の並び。各セクションが小節列を持つ。
+  var SECTIONS = [
+    { name:"Aメロ",  bars:[F(4,4),F(4,4),F(4,4),F(4,4),F(4,4),F(7,8),F(8,8),F(4,4),F(6,8)] },
+    { name:"サビ前", bars:[F(4,4),F(4,4)] },
+    { name:"サビ1",  bars:[F(4,4),F(4,4),F(4,4),F(4,4),F(4,4),F(4,4),F(7,8),F(4,4),F(4,4),F(4,4),F(4,4),F(4,4)] },
+    { name:"Bメロ",  bars:[F(4,4),F(4,4),F(4,4),F(4,4)] }
+  ];
+
+  // 全小節を平坦化（各小節に所属セクションindexを付与）
+  var allBars = [];
+  SECTIONS.forEach(function(s,si){ s.bars.forEach(function(b){ allBars.push({num:b.num,den:b.den,si:si}); }); });
+
+  var timelineEl = document.getElementById('timeline');
   var track = document.getElementById('track');
   var beatsEl = document.getElementById('beats');
   var meterSig = document.getElementById('meterSig');
   var meterName = document.getElementById('meterName');
   var hud = document.getElementById('hud');
-  var pauseBtn = document.getElementById('pause');
+  var playSub = document.getElementById('playSub');
+  var playGlyph = document.getElementById('playGlyph');
   var flash = document.getElementById('flash');
 
-  var curBar = 4;   // 現在小節（0始まり）
-  var curBeat = 0;  // 現在拍
+  var curBar = 5;   // 全体での現在小節index（Aメロの7/8）
+  var curBeat = 0;
   var paused = false;
 
-  // 小節タイルを生成
-  RHYTHMS.forEach(function(r,i){
+  // --- タイムライン生成（セクション幅＝小節数に比例） ---
+  var segEls = [];
+  SECTIONS.forEach(function(s,si){
+    var seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.style.flexGrow = s.bars.length;
+    seg.innerHTML = '<div class="fill" style="width:0"></div><div class="lbl">'+s.name+'</div>';
+    timelineEl.appendChild(seg);
+    segEls.push(seg);
+  });
+
+  // --- 小節タイル生成 ---
+  allBars.forEach(function(b,i){
     var el = document.createElement('div');
     el.className = 'fbar';
     el.setAttribute('data-bi', i);
-    el.innerHTML = '<span class="numer">'+r.num+'</span><span class="den">'+r.den+'</span>';
+    el.innerHTML = '<div class="fr"><span class="num">'+b.num+'</span><span class="line"></span><span class="den">'+b.den+'</span></div>';
     track.appendChild(el);
   });
   var tiles = Array.prototype.slice.call(track.children);
 
   function renderBar(){
+    var cur = allBars[curBar];
+    // タイル状態
     tiles.forEach(function(el,i){
       el.classList.toggle('now', i === curBar);
       el.classList.toggle('done', i < curBar);
@@ -230,12 +253,28 @@
     var center = track.parentElement.clientWidth / 2;
     var barCenter = el.offsetLeft + el.offsetWidth / 2;
     track.style.transform = 'translateX(' + (center - barCenter) + 'px)';
-    // pulse を現在小節に合わせる
-    var r = RHYTHMS[curBar];
-    meterSig.textContent = r.num + '/' + r.den;
-    meterName.textContent = NOTE_NAME[r.den] || '';
+
+    // タイムライン状態
+    segEls.forEach(function(seg,si){
+      seg.classList.toggle('cur', si === cur.si);
+      seg.classList.toggle('done', si < cur.si);
+      var fill = seg.querySelector('.fill');
+      if (si < cur.si) fill.style.width = '100%';
+      else if (si > cur.si) fill.style.width = '0%';
+      else {
+        // 現在セクション内の進捗
+        var s = SECTIONS[si];
+        var start = 0; for (var k=0;k<si;k++) start += SECTIONS[k].bars.length;
+        var within = curBar - start;
+        fill.style.width = Math.round((within / s.bars.length) * 100) + '%';
+      }
+    });
+
+    // pulse
+    meterSig.textContent = cur.num + '/' + cur.den;
+    meterName.textContent = NOTE_NAME[cur.den] || '';
     curBeat = 0;
-    paintBeats(r.num);
+    paintBeats(cur.num);
   }
   function paintBeats(n){
     beatsEl.innerHTML = '';
@@ -246,21 +285,25 @@
     }
   }
   function stepBeat(){
-    var dots = beatsEl.children;
-    if (!dots.length) return;
+    var dots = beatsEl.children; if (!dots.length) return;
     dots[curBeat].classList.remove('on');
     curBeat = (curBeat + 1) % dots.length;
-    dots[curBeat].classList.toggle('on', true);
-    dots[curBeat].classList.toggle('first', curBeat===0);
+    dots[curBeat].classList.add('on');
+  }
+  function togglePause(){
+    paused = !paused;
+    hud.classList.toggle('is-paused', paused);
+    playSub.textContent = paused ? '再開' : '一時停止';
+    playGlyph.innerHTML = paused ? '<span class="tri"></span>'
+                                 : '<span class="bars2"><span></span><span></span></span>';
   }
 
   document.getElementById('btnBar').addEventListener('click', function(){
-    curBar = (curBar + 1) % RHYTHMS.length; renderBar();
+    curBar = (curBar + 1) % allBars.length; renderBar();
   });
   document.getElementById('btnBeat').addEventListener('click', stepBeat);
-  function togglePause(){ paused = !paused; hud.classList.toggle('is-paused', paused); pauseBtn.textContent = paused ? '▶' : '⏸'; }
   document.getElementById('btnPause').addEventListener('click', togglePause);
-  pauseBtn.addEventListener('click', togglePause);
+  document.getElementById('play').addEventListener('click', togglePause);
   document.getElementById('btnFlash').addEventListener('click', function(){
     flash.textContent = '＋10秒'; flash.classList.add('show');
     setTimeout(function(){ flash.classList.remove('show'); }, 700);
