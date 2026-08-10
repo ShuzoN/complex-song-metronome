@@ -22,9 +22,10 @@
     display:flex;align-items:center;justify-content:center;padding:24px 16px;
     -webkit-font-smoothing:antialiased;
   }
-  .device{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--ink);box-shadow:7px 7px 0 rgba(25,28,24,.20)}
-  /* 「開始までの空白・全体レック」より下（リズムグループ一覧＋追加）を、ページ内で高さ上限つきスクロールに */
-  .scroll-body{max-height:55vh;max-height:55dvh;overflow-y:auto}
+  .device{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--ink);box-shadow:7px 7px 0 rgba(25,28,24,.20);
+    display:flex;flex-direction:column;max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px)}
+  /* ヘッダ〜グループ一覧＋追加までを1つのスクロール領域に。下部の dock（再生バー＋練習モード）は常に固定表示 */
+  .content{flex:1 1 auto;overflow-y:auto;min-height:0}
 
   /* header */
   .head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--ink)}
@@ -172,6 +173,12 @@
   .g-reps{display:flex;align-items:center;gap:6px}
   .g-reps .x{font-family:var(--display);font-size:20px;color:var(--brass);line-height:1}
   .g-reps input{width:58px;height:32px;font-size:13px}
+  /* グループ単体再生（solo）／5秒前から（lead）。展開したカード内に置く */
+  .g-play{margin-top:2px;margin-bottom:0}
+  .g-solo{flex:1 1 auto;height:38px;background:var(--ink);color:var(--panel);border:1px solid var(--ink);font-family:var(--mono);font-size:12px;letter-spacing:.06em}
+  .g-lead{flex:0 0 auto;height:38px;padding:0 12px;background:var(--panel);color:var(--ink);border:1px solid var(--ink);font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+  .g-solo:disabled,.g-lead:disabled{opacity:.35;cursor:default}
+  .g-solo:not(:disabled):active,.g-lead:not(:disabled):active{transform:translateY(1px)}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
@@ -215,57 +222,36 @@
 
   body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
-  /* 編集／再生 モード切り替えタブ（transport の上） */
-  .mode-tabs{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--ink);margin-top:12px}
-  .mode-tab{height:40px;border:none;background:var(--panel);color:var(--dim);font-family:var(--mono);font-size:11.5px;letter-spacing:.18em}
-  .mode-tab + .mode-tab{border-left:1px solid var(--ink)}
-  .mode-tab:hover:not(.active){background:#EAE9E2;color:var(--ink)}
-  .mode-tab.active{background:var(--signal);color:#FFF}   /* カラーバーと同じ色味・白抜き */
+  /* 選択中（グループ単体再生／5秒前再生の対象）カードの表示 */
+  .group.selected{border-color:var(--signal)}
+  .group.selected::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--signal)}
 
-  /* 再生モード：選択中（グループ／5秒前再生の対象）カード */
-  .group.play{cursor:pointer}
-  .group.play.selected{border-color:var(--signal)}
-  .group.play.selected::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--signal)}
+  /* ===== 下部固定バー（dock）：拍表示＋再生バー（◁◁ □ ▷▷）＋練習モード入口。編集ペインのどこでも常に見える ===== */
+  .dock{flex:0 0 auto;background:var(--panel);border-top:1px solid var(--ink)}
+  .dock .pulse{margin-top:10px}
+  .dock .beats{border-bottom:none;padding-bottom:12px}
 
-  .transport{display:grid;grid-template-columns:1.1fr 1fr 1fr;border-top:1px solid var(--ink)}
-  .start{height:60px;border:none;font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:0 3px;line-height:1.35}
-  .start.primary{background:var(--ink);color:var(--panel)}
-  .start.secondary{background:var(--panel);color:var(--ink);border-left:1px solid var(--ink)}
-  .start.on{background:var(--signal);color:var(--panel)}
-  .start:disabled{opacity:.35;cursor:default}
-  .start:not(:disabled):active{transform:translateY(1px)}
-
-  /* 再生パッド（動画スクラブ）：左＝戻し / 右＝送り / 中央＝一時停止・再開 */
-  .tap-pad{position:relative;display:grid;grid-template-columns:1fr auto 1fr;align-items:stretch;
-           height:150px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);
-           background:var(--ink);overflow:hidden;touch-action:manipulation;user-select:none}
-  .tap-zone{border:none;background:transparent;color:var(--panel);display:flex;flex-direction:column;
-            align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:var(--mono);
-            -webkit-tap-highlight-color:transparent}
-  .tap-zone.left{border-right:1px solid rgba(245,244,239,.14)}
-  .tap-zone.right{border-left:1px solid rgba(245,244,239,.14)}
-  .tap-zone-glyph{font-size:26px;line-height:1;opacity:.9}
-  .tap-zone-sub{font-size:10px;letter-spacing:.12em;color:rgba(245,244,239,.62)}
-  .tap-zone:active{background:rgba(245,244,239,.06)}
-  .tap-pad-center{width:88px;border:none;background:transparent;color:var(--panel);cursor:pointer;
-                  display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent}
-  .tap-pad-icon{width:56px;height:56px;border-radius:50%;border:1.5px solid rgba(245,244,239,.5);
-                background:rgba(245,244,239,.06);display:flex;align-items:center;justify-content:center;
-                font-size:22px;line-height:1;transition:transform 90ms ease,background 120ms ease}
-  .tap-pad-center:active .tap-pad-icon{transform:scale(.92)}
-  .tap-pad.is-paused .tap-pad-icon{border-color:var(--signal);background:rgba(196,54,42,.18);color:#FFF}
-  .tap-pad.is-busy{opacity:.75;pointer-events:none}       /* 着地待ちのあいだは操作を受けない */
-  .tap-flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-             font-family:var(--display);font-size:40px;font-weight:700;color:#FFF;letter-spacing:.02em;
-             text-shadow:0 2px 10px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity 140ms ease}
-  .tap-flash.show{opacity:1;transition:opacity 60ms ease}
-  @media (prefers-reduced-motion:reduce){.beat,.tap-pad-icon,.tap-flash{transition:none}}
+  /* 再生バー：◁◁＝5秒戻す / □＝全体再生・停止（動画時は一時停止・再開） / ▷▷＝5秒送る */
+  .playbar{display:grid;grid-template-columns:1fr 1.2fr 1fr;align-items:stretch;border-top:1px solid var(--ink)}
+  .pb-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:64px;
+    border:none;background:var(--panel);color:var(--ink);font-family:var(--mono);cursor:pointer;
+    -webkit-tap-highlight-color:transparent}
+  .pb-btn + .pb-btn{border-left:1px solid var(--ink)}
+  .pb-glyph{font-size:20px;line-height:1;letter-spacing:-.04em}
+  .pb-sub{font-size:9.5px;letter-spacing:.1em;color:var(--dim)}
+  .pb-play{background:var(--ink);color:var(--panel)}
+  .pb-play .pb-sub{color:rgba(245,244,239,.6)}
+  .pb-play.on{background:var(--signal);color:#FFF}
+  .pb-play.on .pb-sub{color:rgba(255,255,255,.75)}
+  .pb-btn:not(:disabled):active{transform:translateY(1px)}
+  .pb-btn:disabled{opacity:.3;cursor:default;pointer-events:none}
+  @media (prefers-reduced-motion:reduce){.beat{transition:none}}
 
   /* ===== 全画面モード（横画面・練習HUD）。既存トークンを流用。クラスは fs- で名前空間 =====
      上=セクションタイムライン / 中央=リズムパターンのフォーカス帯（分数・線入り）＋pulse /
      下=操作集約（◁◁・一時停止・▷▷）。サイズはすべて clamp+dvh でビューポート連動。 */
-  .fs-enter{display:block;width:calc(100% - 28px);margin:2px 14px 12px;height:42px;
-    background:var(--ink);color:var(--panel);border:1px solid var(--ink);
+  .fs-enter{display:block;width:100%;height:44px;margin:0;
+    background:var(--ink);color:var(--panel);border:none;border-top:1px solid var(--ink);
     font-family:var(--mono);font-size:12px;letter-spacing:.12em;cursor:pointer}
   .fs-enter:active{transform:translateY(1px)}
   body.fs-lock{overflow:hidden}
@@ -385,6 +371,7 @@
 <body>
 
 <main class="device">
+  <div class="content" id="content">
   <div class="head">
     <div class="wordmark">Metronome</div>
     <div class="status"><span class="lamp"></span><span id="statusText">停止中</span></div>
@@ -452,39 +439,6 @@
     <p class="io-msg" id="ioMsg" role="status" hidden></p>
   </div>
 
-  <div class="mode-tabs" role="tablist" aria-label="モード">
-    <button class="mode-tab active" id="editTab" type="button" role="tab" aria-selected="true">編集</button>
-    <button class="mode-tab" id="playTab" type="button" role="tab" aria-selected="false">再生</button>
-  </div>
-
-  <div class="transport">
-    <button class="start primary" id="startAllBtn" type="button">全体再生</button>
-    <button class="start secondary" id="startSoloBtn" type="button">グループ再生</button>
-    <button class="start secondary" id="startLeadBtn" type="button">グループ再生<br>(5秒前から)</button>
-  </div>
-
-  <div class="pulse" id="pulseView"></div>
-  <div class="beats" id="beats" aria-hidden="true"></div>
-
-  <!-- 再生モードのスクラブパッド（動画コントローラ）。左＝5秒戻し / 右＝5秒送り / 中央＝一時停止・再開。動画あり再生モードのみ表示 -->
-  <div class="tap-pad" id="tapPad" hidden>
-    <button class="tap-zone left" id="tapLeft" type="button" aria-label="5秒ずつ戻す（ダブルタップ＝−5秒、連打で追加）">
-      <span class="tap-zone-glyph">⏪</span>
-      <span class="tap-zone-sub">5秒ずつ戻す</span>
-    </button>
-    <button class="tap-pad-center" id="tapPause" type="button" aria-label="一時停止／再開">
-      <span class="tap-pad-icon" id="tapPauseIcon">▶</span>
-    </button>
-    <button class="tap-zone right" id="tapRight" type="button" aria-label="5秒ずつ送る（ダブルタップ＝＋5秒、連打で追加）">
-      <span class="tap-zone-glyph">⏩</span>
-      <span class="tap-zone-sub">5秒ずつ送る</span>
-    </button>
-    <div class="tap-flash" id="tapFlash" aria-hidden="true"></div>
-  </div>
-
-  <!-- 全画面（横画面 練習HUD）への入口。再生モードのときだけ表示 -->
-  <button class="fs-enter" id="fsBtn" type="button" hidden>⛶ 全画面表示</button>
-
   <div class="lead-wrap">
     <div class="lead" id="lead">
       <span class="g-label">開始までの空白</span>
@@ -502,6 +456,29 @@
     <section class="groups" id="groups"></section>
     <button class="addgroup" id="addGroupBtn" type="button">＋ リズムグループを追加</button>
   </div>
+  </div><!-- /content -->
+
+  <!-- ============ 下部固定バー（dock）。編集ペインのどの位置でも常に見える再生バー＋練習モード入口 ============ -->
+  <footer class="dock">
+    <div class="pulse" id="pulseView"></div>
+    <div class="beats" id="beats" aria-hidden="true"></div>
+
+    <!-- 再生バー：◁◁＝5秒戻す / □＝全体再生・停止（動画時は一時停止・再開） / ▷▷＝5秒送る。裏側は既存 Transport / VideoPadService を再利用 -->
+    <div class="playbar">
+      <button class="pb-btn pb-seek" id="pbSeekL" type="button" aria-label="5秒戻す">
+        <span class="pb-glyph">◁◁</span><span class="pb-sub">5秒戻す</span>
+      </button>
+      <button class="pb-btn pb-play" id="pbPlay" type="button" aria-label="全体再生／停止">
+        <span class="pb-glyph" id="pbPlayGlyph">▶</span><span class="pb-sub" id="pbPlaySub">全体再生</span>
+      </button>
+      <button class="pb-btn pb-seek" id="pbSeekR" type="button" aria-label="5秒送る">
+        <span class="pb-glyph">▷▷</span><span class="pb-sub">5秒送る</span>
+      </button>
+    </div>
+
+    <!-- 全画面（横画面 練習HUD）への入口。常時表示 -->
+    <button class="fs-enter" id="fsBtn" type="button">⛶ 練習モード（全画面再生）</button>
+  </footer>
 </main>
 
 <!-- ============ 全画面モード（横画面 練習HUD）。裏側は既存の Transport / VideoPadService を再利用 ============ -->
@@ -1897,13 +1874,12 @@
   // ---- 共有の DOM 参照 ----
   const bpmView=$("bpmView"), termView=$("termView"), range=$("tempoRange"), input=$("tempoInput");
   const groupsEl=$("groups"), beatsEl=$("beats"), pulseView=$("pulseView");
-  const startAllBtn=$("startAllBtn"), startSoloBtn=$("startSoloBtn"), startLeadBtn=$("startLeadBtn"), statusText=$("statusText"),
+  const statusText=$("statusText"),
         prerollInput=$("prerollInput"), prerollCount=$("prerollCount"), leadEl=$("lead"), recBtn=$("recBtn");
   const seqSum=$("seqSum"), undoBtn=$("undoBtn"), redoBtn=$("redoBtn"), addGroupBtn=$("addGroupBtn");
   const seqNameEl=$("seqName");
-  const editTab=$("editTab"), playTab=$("playTab");
-  const tapPad=$("tapPad"), tapLeft=$("tapLeft"), tapRight=$("tapRight"), tapPause=$("tapPause"),
-        tapPauseIcon=$("tapPauseIcon"), tapFlash=$("tapFlash");
+  const pbPlay=$("pbPlay"), pbSeekL=$("pbSeekL"), pbSeekR=$("pbSeekR"),
+        pbPlayGlyph=$("pbPlayGlyph"), pbPlaySub=$("pbPlaySub");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
         ioFile=$("ioFile"), ioMsg=$("ioMsg");
   const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytMsg=$("ytMsg");
@@ -1929,15 +1905,8 @@
     return b;
   }
 
-  /* 編集／再生 の表示モード（UI 限定の状態。シーケンスデータ・履歴・保存には含めない） */
-  const ViewMode = (() => {
-    let mode = "edit";                          // "edit" | "play"
-    return {
-      isPlay: () => mode === "play",
-      get: () => mode,
-      set(m){ if(m === mode) return; mode = m; SequenceView.render(); TapPadView.update(); FullscreenView.updateEntry(); }
-    };
-  })();
+  /* 再生ペイン（編集／再生モード）は廃止。常に編集ビューで、再生操作は下部固定バー（PlaybarView）と
+     各グループカード内のボタンから行う。 */
 
   /* ---------- RhythmView（リズム：1拍子の描画） ---------- */
   const RhythmView = {
@@ -2082,11 +2051,10 @@
     function card(g, gi){
       const st = state();
       const running = Transport.running();
-      const play = ViewMode.isPlay();            // 再生モード：編集を廃し、選択可能な折りたたみ一覧に
-      const active = g.id === st.activeId;
-      const expanded = active && !play;          // 編集本体（名前・拍子編集）を開くのは編集モードのみ
+      const active = g.id === st.activeId;        // 選択＝展開して編集。単体再生（solo/lead）の対象でもある
+      const expanded = active;
       const card = document.createElement("article");
-      card.className = "group" + (active ? " active" : "") + (play ? " play" : "") + (play && active ? " selected" : "");
+      card.className = "group" + (active ? " active selected" : "");
       card.dataset.id = g.id;
       card.tabIndex = 0;
 
@@ -2094,7 +2062,7 @@
       const head = document.createElement("div");
       head.className = "g-head";
 
-      if(!play){                                 // 並び替えは編集操作なので再生モードでは出さない
+      {                                          // 並び替えハンドル（常時。再生中のみ無効）
         const handle = document.createElement("button");
         handle.type = "button"; handle.className = "handle"; handle.textContent = "⠿";
         handle.setAttribute("aria-label", "並び替え（ドラッグ、または上下キー）");
@@ -2183,21 +2151,42 @@
 
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
+
+        /* このグループだけを再生（solo）／動画位置を記録済みなら 5秒前から（lead）。
+           対象は soloTarget()=activeId＝この展開中グループ。裏側は全体再生と同じ Transport。 */
+        const prow = document.createElement("div");
+        prow.className = "g-row g-play";
+        const hasBars = g.pattern.rhythms.length > 0;
+        const solo = document.createElement("button");
+        solo.type = "button"; solo.className = "g-solo";
+        solo.textContent = "▶ このグループを再生";
+        solo.disabled = running || !hasBars;
+        solo.title = hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
+        solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
+        prow.appendChild(solo);
+        if(VideoGateway.ready() && g.cue != null){
+          const lead = document.createElement("button");
+          lead.type = "button"; lead.className = "g-lead";
+          lead.textContent = "5秒前から";
+          lead.disabled = running || !hasBars;
+          lead.title = "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
+          lead.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
+          prow.appendChild(lead);
+        }
+        body.appendChild(prow);
         card.appendChild(body);
       }
 
       card.addEventListener("click", e=>{
         if(Transport.running()) return;                       // 再生中は編集に入らない
         if(e.target.closest("input, select, button")) return;
-        if(play) SequenceService.setActive(g.id);             // 再生モード：頭出し対象を選ぶ（開かない）
-        else SequenceService.toggleActive(g.id);
+        SequenceService.toggleActive(g.id);
       });
       card.addEventListener("keydown", e=>{
         if(Transport.running()) return;
         if(e.key === "Enter" && !e.target.closest("input, select, button")){
           e.preventDefault();
-          if(play) SequenceService.setActive(g.id);
-          else SequenceService.toggleActive(g.id);
+          SequenceService.toggleActive(g.id);
         }
       });
       return card;
@@ -2278,15 +2267,9 @@
 
     function render(){
       const running = Transport.running();
-      const play = ViewMode.isPlay();
       const st = state();
-      editTab.classList.toggle("active", !play);
-      playTab.classList.toggle("active", play);
-      editTab.setAttribute("aria-selected", String(!play));
-      playTab.setAttribute("aria-selected", String(play));
       groupsEl.innerHTML = "";
       groupsEl.classList.toggle("locked", running);
-      addGroupBtn.hidden = play;                 // 追加は編集モードのみ
       addGroupBtn.disabled = running;
       seqNameEl.disabled = running;
       prerollInput.disabled = running;
@@ -2327,8 +2310,6 @@
       addGroupBtn.addEventListener("click", ()=>SequenceService.addGroup());
       undoBtn.addEventListener("click", ()=>HistoryService.undo());
       redoBtn.addEventListener("click", ()=>HistoryService.redo());
-      editTab.addEventListener("click", ()=>ViewMode.set("edit"));
-      playTab.addEventListener("click", ()=>ViewMode.set("play"));
     }
 
     return { startDrag, render, summary, applyTitle, updateHistory, afterRestore, bind };
@@ -2362,8 +2343,6 @@
 
   /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
   const TransportView = (() => {
-    const LABELS = {all:"全体再生", solo:"グループ再生", lead:"グループ再生<br>(5秒前から)"};
-
     function paintBeats(n){
       beatsEl.innerHTML = "";
       for(let i=0;i<n;i++){
@@ -2405,44 +2384,20 @@
       update();
     }
     function update(){
-      const btns = {all:startAllBtn, solo:startSoloBtn, lead:startLeadBtn};
       const running = Transport.running(), armKind = Transport.armKind(), recording = Transport.recording();
       if(running || armKind){
-        const active = running ? Transport.mode() : armKind;
-        Object.keys(btns).forEach(k=>{
-          const on = (k === active);
-          btns[k].innerHTML = on ? "停止" : LABELS[k];   // lead ラベルは <br> を含むため innerHTML
-          btns[k].classList.toggle("on", on);
-          btns[k].disabled = !on;
-          btns[k].title = "";
-        });
         recBtn.classList.toggle("on", recording);
         recBtn.textContent = recording ? "■ レック中" : "● REC";
         recBtn.disabled = !recording;
       }else{
         const ready = PlaybackScheduler.plan().length > 0;
-        const target = Transport.soloTarget();
-        const cued = target && target.cue != null && VideoGateway.ready();
-        Object.keys(btns).forEach(k=>{
-          btns[k].innerHTML = LABELS[k];   // lead ラベルは <br> を含むため innerHTML
-          btns[k].classList.remove("on");
-        });
-        startAllBtn.disabled = !ready;
-        startSoloBtn.disabled = !target;
-        startLeadBtn.disabled = !cued;
-        startAllBtn.title = ready ? "" : "拍子を1つ以上追加してください";
-        startSoloBtn.title = target ? target.name + " だけを再生" : "再生したいリズムグループをタップして選んでください";
-        startLeadBtn.title = !target ? "再生したいリズムグループをタップして選んでください"
-          : !VideoGateway.ready() ? "動画を読み込むと使えます"
-          : target.cue == null ? "このグループに動画位置が記録されていません"
-          : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
         recBtn.classList.remove("on");
         recBtn.textContent = "● REC";
         recBtn.disabled = !ready || !VideoGateway.ready();
         recBtn.title = !VideoGateway.ready() ? "動画を読み込むと使えます"
           : "動画を先頭から流し、各リズムグループの位置を記録します";
       }
-      TapPadView.update();   // 再生パッドの表示・状態を同期
+      PlaybarView.update();   // 下部固定バー（◁◁ □ ▷▷）の表示・状態を同期
     }
     function status(text){ statusText.textContent = text; }
     function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
@@ -2472,9 +2427,6 @@
     function bind(){
       recBtn.addEventListener("click", ()=>Transport.startRec());
       prerollInput.addEventListener("change", ()=>SequenceService.setPreroll(prerollInput.value));
-      startAllBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("all")));
-      startSoloBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
-      startLeadBtn.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
       document.addEventListener("keydown", e=>{
         const mod = e.metaKey || e.ctrlKey;
         if(mod && e.key.toLowerCase() === "z"){
@@ -2497,66 +2449,45 @@
     };
   })();
 
-  /* ---------- TapPadView（再生モードの動画スクラブパッド：左＝戻し／右＝送り／中央＝一時停止・再開） ----------
-     UI 専用。左右の連打を TAP_WINDOW で合算し、確定時に VideoPadService.seekBy を1回だけ呼ぶ。
-     中央は VideoPadService.togglePause。動画操作はすべて VideoPadService（統括）に委ね、ここは表示のみ。 */
-  const TapPadView = (() => {
+  /* ---------- PlaybarView（下部固定の再生バー：◁◁＝5秒戻す／□＝全体再生・停止／▷▷＝5秒送る） ----------
+     UI 専用。全画面 HUD 下部コントロール（FullscreenView.center/seek）と同じ挙動をメイン画面へ。
+     ◁◁/▷▷ は動画セッション中のみ有効（VideoPadService.seekBy）。□ は動画ありなら一時停止・再開、
+     動画なしは全体再生の開始/停止（arm 中はキャンセル）。再生・シークはすべて統括サービスに委ねる。 */
+  const PlaybarView = (() => {
     const STEP = 5;                 // 1タップぶんの秒数
-    const TAP_WINDOW = 400;         // 連打の合算ウィンドウ（ms）。最後のタップからこの時間で確定
-    let acc = {dir:0, taps:0, timer:null};
-    let flashTimer = null;
-
-    function resetAcc(){ if(acc.timer) clearTimeout(acc.timer); acc = {dir:0, taps:0, timer:null}; }
-    function flash(text, back){
-      tapFlash.textContent = text;
-      tapFlash.classList.toggle("back", !!back);
-      tapFlash.classList.add("show");
-      if(flashTimer) clearTimeout(flashTimer);
-    }
-    function flashOut(delay){
-      if(flashTimer) clearTimeout(flashTimer);
-      flashTimer = setTimeout(()=>{ tapFlash.classList.remove("show"); }, delay);
-    }
-    function label(dir, sec){ return (dir < 0 ? "−" : "＋") + sec + "秒"; }
-    function showPending(){                          // ダブルタップ成立（taps>=2）からオーバーレイ表示
-      if(acc.taps < 2) return;
-      flash(label(acc.dir, (acc.taps - 1) * STEP), acc.dir < 0);
-    }
-    function commit(){
-      const dir = acc.dir, taps = acc.taps;
-      resetAcc();
-      if(taps < 2){ flashOut(0); return; }           // 単発は無効（ダブルタップから）
-      const sec = (taps - 1) * STEP;
-      flash(label(dir, sec), dir < 0); flashOut(700);
+    function seek(dir){
+      if(!VideoGateway.ready() || !VideoPadService.active()) return;   // 動画あり・セッション中のみ
       SoundGateway.ensure();
-      VideoPadService.seekBy(sec * dir);
+      VideoPadService.seekBy(STEP * dir);
     }
-    function onTap(dir){
-      if(!VideoPadService.active()) return;           // セッション中（再生/一時停止）かつ着地待ちでないときだけ
-      if(acc.dir !== dir) resetAcc();
-      acc.dir = dir; acc.taps++;
-      if(acc.timer) clearTimeout(acc.timer);
-      acc.timer = setTimeout(commit, TAP_WINDOW);
-      showPending();
-    }
-    function onCenter(){
+    function center(){
       SoundGateway.ensure();
-      resetAcc(); flashOut(0);
-      VideoPadService.togglePause();
+      if(VideoGateway.ready()){ VideoPadService.togglePause(); return; }   // 動画あり：tap-pad / HUD と同じ統括
+      if(Transport.armKind()) Transport.armCancel();                       // 動画なし：全体再生の開始/停止
+      else Transport.running() ? Transport.stop(false) : Transport.start("all");
     }
     function update(){
-      const show = ViewMode.isPlay() && VideoGateway.ready();
-      tapPad.hidden = !show;
-      if(!show){ resetAcc(); flashOut(0); return; }
-      const paused = VideoPadService.isPaused(), running = Transport.running();
-      tapPad.classList.toggle("is-paused", paused);
-      tapPad.classList.toggle("is-busy", VideoPadService.isBusy());
-      tapPauseIcon.textContent = (running && !paused) ? "⏸" : "▶";
+      const videoReady = VideoGateway.ready();
+      const running = Transport.running(), armed = !!Transport.armKind(), paused = VideoPadService.isPaused();
+      const canSeek = videoReady && VideoPadService.active() && !VideoPadService.isBusy();
+      pbSeekL.disabled = !canSeek;
+      pbSeekR.disabled = !canSeek;
+      if(paused){
+        pbPlayGlyph.textContent = "▶"; pbPlaySub.textContent = "再開"; pbPlay.classList.remove("on");
+      }else if(running || armed){
+        pbPlayGlyph.textContent = videoReady ? "⏸" : "■";
+        pbPlaySub.textContent   = videoReady ? "一時停止" : "停止";
+        pbPlay.classList.add("on");
+      }else{
+        pbPlayGlyph.textContent = "▶"; pbPlaySub.textContent = "全体再生"; pbPlay.classList.remove("on");
+      }
+      const ready = PlaybackScheduler.plan().length > 0;
+      pbPlay.disabled = !ready && !running && !paused && !armed;   // 拍子が1つも無いときだけ不可
     }
     function bind(){
-      tapLeft.addEventListener("pointerdown", e=>{ e.preventDefault(); onTap(-1); });
-      tapRight.addEventListener("pointerdown", e=>{ e.preventDefault(); onTap(1); });
-      tapPause.addEventListener("pointerdown", e=>{ e.preventDefault(); onCenter(); });
+      pbSeekL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });
+      pbSeekR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });
+      pbPlay.addEventListener("pointerdown", e=>{ e.preventDefault(); center(); });
     }
     return { update, bind };
   })();
@@ -2734,7 +2665,7 @@
       try{ if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); }catch(err){}
       try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(err){}
     }
-    function updateEntry(){ if(el.btn) el.btn.hidden = !ViewMode.isPlay(); }
+    function updateEntry(){ if(el.btn) el.btn.hidden = false; }   // 練習モードバーは常時表示
     function bind(){
       cache();
       el.btn.addEventListener("click", open);
@@ -2842,7 +2773,7 @@
         Transport.clearPending();
         ytUrl.value = ""; ytSay("", false);
         SequenceView.render();
-        TapPadView.update();
+        PlaybarView.update();
       });
     }
     return { ytSay, updateLock, syncEnabled, bind };
@@ -2868,7 +2799,7 @@
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
     stampCueView: GroupView.stampCueView,
-    padUpdate: () => { TapPadView.update(); FullscreenView.updatePlay(); }
+    padUpdate: () => { PlaybarView.update(); FullscreenView.updatePlay(); }
   };
   // Store の変更を meta フラグに応じて各ビューへ配る
   function dispatch(meta){
@@ -2891,7 +2822,7 @@
   });
   VideoGateway.init({
     onMsg: (text, bad) => VideoView.ytSay(text, bad),
-    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); TapPadView.update(); },
+    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); PlaybarView.update(); },
     onPlaying: () => Transport.onVideoPlaying(),
     onStopped: () => Transport.onVideoStopped(),
     syncEnabled: () => VideoView.syncEnabled()
@@ -2903,7 +2834,7 @@
   TempoView.bind();
   SequenceView.bind();
   TransportView.bind();
-  TapPadView.bind();
+  PlaybarView.bind();
   FullscreenView.bind();
   IoView.bind();
   VideoView.bind();
@@ -2913,7 +2844,7 @@
   TransportView.readPreroll();
   SequenceView.applyTitle();
   SequenceView.updateHistory();
-  TapPadView.update();
+  PlaybarView.update();
   FullscreenView.updateEntry();
   SequenceService.setTempo(120);
 })();
