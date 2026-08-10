@@ -1418,6 +1418,11 @@
     // 動画より遅れて聞こえるため、記録位置より少し手前を狙って刻み出す＝実音が cue に重なる。
     // 実測でおおよそ 8分音符ぶん（♩=115 換算 ≒ 0.26 秒）。耳で合わせて調整可。
     const CUE_LATENCY = 0.26;
+    // 全体レックの記録補正（秒）。getCurrentTime() は実再生位置より遅れて（小さめに）返り、
+    // さらにクリックの音声出力遅延ぶんも合わさって、記録位置は実際の頭拍より手前へ寄る（実測 ~0.2〜0.25 秒）。
+    // 再生側 compensate(cue) が cue から引くのと対称に、記録時はこのぶんを足し戻して真の頭拍位置へ寄せる。
+    // 耳で合わせて調整可（0 にすると従来どおり無補正）。
+    const REC_LATENCY = 0.24;
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
     function compensate(cue){ return Math.max(0, cue - CUE_LATENCY); }
@@ -1540,7 +1545,7 @@
       try{ t = VideoGateway.time(); }catch(err){}
       if(t == null || isNaN(t)) return;
       const late = Math.max(0, ClockGateway.now() - evTime);   // 取りこぼしたフレームぶんを引く
-      const val = Math.max(0, Math.round((t - late) * 100) / 100);
+      const val = Math.max(0, Math.round((t - late + REC_LATENCY) * 100) / 100);   // 手前寄りを足し戻して真の頭拍へ
       if(!Array.isArray(g.repCues)) g.repCues = Domain.fitCues(null, g.reps);
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
