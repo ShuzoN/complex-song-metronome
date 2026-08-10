@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&icon_names=fast_forward,fast_rewind,fullscreen,pause,play_arrow,stop&display=block" rel="stylesheet">
 <style>
   :root{
     --bg:#A9B0A2; --panel:#F5F4EF; --ink:#191C18; --rule:#C7CABC;
@@ -26,6 +27,11 @@
     display:flex;flex-direction:column;max-height:calc(100vh - 48px);max-height:calc(100dvh - 48px)}
   /* ヘッダ〜グループ一覧＋追加までを1つのスクロール領域に。下部の dock（再生バー＋練習モード）は常に固定表示 */
   .content{flex:1 1 auto;overflow-y:auto;min-height:0}
+  /* モバイルはデバイスを全画面化し、下部バーを画面端（左右・下端）まで届かせる。比率はそのまま。PC は中央カードのまま */
+  @media (max-width:480px){
+    body{padding:0}
+    .device{max-width:none;border:none;box-shadow:none;max-height:100vh;max-height:100dvh}
+  }
 
   /* header */
   .head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--ink)}
@@ -173,10 +179,11 @@
   .g-reps{display:flex;align-items:center;gap:6px}
   .g-reps .x{font-family:var(--display);font-size:20px;color:var(--brass);line-height:1}
   .g-reps input{width:58px;height:32px;font-size:13px}
-  /* グループ単体再生（solo）／5秒前から（lead）。展開したカード内に置く */
-  .g-play{margin-top:2px;margin-bottom:0}
-  .g-solo{flex:1 1 auto;height:38px;background:var(--ink);color:var(--panel);border:1px solid var(--ink);font-family:var(--mono);font-size:12px;letter-spacing:.06em}
-  .g-lead{flex:0 0 auto;height:38px;padding:0 12px;background:var(--panel);color:var(--ink);border:1px solid var(--ink);font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+  /* 「グループ再生 | 5秒前再生」ペア。展開したカード内。フラットベージュで等幅、隣接罫線が区切り「|」に */
+  .g-play{margin-top:2px;margin-bottom:0;display:grid;grid-template-columns:1fr 1fr;gap:0}
+  .g-solo,.g-lead{height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
+    font-family:var(--mono);font-size:12px;letter-spacing:.04em}
+  .g-lead{border-left:none}
   .g-solo:disabled,.g-lead:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active,.g-lead:not(:disabled):active{transform:translateY(1px)}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
@@ -226,23 +233,27 @@
   .group.selected{border-color:var(--signal)}
   .group.selected::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--signal)}
 
-  /* ===== 下部固定バー（dock）：拍表示＋再生バー（◁◁ □ ▷▷）＋練習モード入口。編集ペインのどこでも常に見える ===== */
-  .dock{flex:0 0 auto;background:var(--panel);border-top:1px solid var(--ink)}
+  /* Material Symbols（Google アイコン）。テキストは ligature 名。読込前/失敗時はサブラベルで意味を担保 */
+  .msym{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;
+    letter-spacing:normal;text-transform:none;white-space:nowrap;direction:ltr;
+    -webkit-font-feature-settings:'liga';font-feature-settings:'liga';-webkit-font-smoothing:antialiased}
+
+  /* ===== 下部固定バー（dock）：拍表示＋再生バー（◁◁ □ ▷▷）＋練習モード入口。編集ペインのどこでも常に見える。
+     ベージュ基調のフラットデザイン（濃色の塗りつぶしは使わず、状態はアイコン色で示す） ===== */
+  .dock{flex:0 0 auto;background:var(--panel);border-top:1px solid var(--ink);padding-bottom:env(safe-area-inset-bottom)}
   .dock .pulse{margin-top:10px}
   .dock .beats{border-bottom:none;padding-bottom:12px}
 
   /* 再生バー：◁◁＝5秒戻す / □＝全体再生・停止（動画時は一時停止・再開） / ▷▷＝5秒送る */
-  .playbar{display:grid;grid-template-columns:1fr 1.2fr 1fr;align-items:stretch;border-top:1px solid var(--ink)}
+  .playbar{display:grid;grid-template-columns:1fr 1.2fr 1fr;align-items:stretch;border-top:1px solid var(--rule)}
   .pb-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;height:64px;
     border:none;background:var(--panel);color:var(--ink);font-family:var(--mono);cursor:pointer;
     -webkit-tap-highlight-color:transparent}
-  .pb-btn + .pb-btn{border-left:1px solid var(--ink)}
-  .pb-glyph{font-size:20px;line-height:1;letter-spacing:-.04em}
+  .pb-btn + .pb-btn{border-left:1px solid var(--rule)}
+  .pb-glyph{font-size:26px;line-height:1;letter-spacing:-.04em}
   .pb-sub{font-size:9.5px;letter-spacing:.1em;color:var(--dim)}
-  .pb-play{background:var(--ink);color:var(--panel)}
-  .pb-play .pb-sub{color:rgba(245,244,239,.6)}
-  .pb-play.on{background:var(--signal);color:#FFF}
-  .pb-play.on .pb-sub{color:rgba(255,255,255,.75)}
+  .pb-play .pb-glyph{font-size:30px}
+  .pb-play.on .pb-glyph{color:var(--signal)}          /* 再生・停止中はアイコンを赤に（塗りつぶさずフラット） */
   .pb-btn:not(:disabled):active{transform:translateY(1px)}
   .pb-btn:disabled{opacity:.3;cursor:default;pointer-events:none}
   @media (prefers-reduced-motion:reduce){.beat{transition:none}}
@@ -250,9 +261,10 @@
   /* ===== 全画面モード（横画面・練習HUD）。既存トークンを流用。クラスは fs- で名前空間 =====
      上=セクションタイムライン / 中央=リズムパターンのフォーカス帯（分数・線入り）＋pulse /
      下=操作集約（◁◁・一時停止・▷▷）。サイズはすべて clamp+dvh でビューポート連動。 */
-  .fs-enter{display:block;width:100%;height:44px;margin:0;
-    background:var(--ink);color:var(--panel);border:none;border-top:1px solid var(--ink);
+  .fs-enter{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:46px;margin:0;
+    background:var(--panel);color:var(--ink);border:none;border-top:1px solid var(--rule);
     font-family:var(--mono);font-size:12px;letter-spacing:.12em;cursor:pointer}
+  .fs-enter .fs-enter-ic{font-size:18px;color:var(--dim)}
   .fs-enter:active{transform:translateY(1px)}
   body.fs-lock{overflow:hidden}
 
@@ -466,18 +478,18 @@
     <!-- 再生バー：◁◁＝5秒戻す / □＝全体再生・停止（動画時は一時停止・再開） / ▷▷＝5秒送る。裏側は既存 Transport / VideoPadService を再利用 -->
     <div class="playbar">
       <button class="pb-btn pb-seek" id="pbSeekL" type="button" aria-label="5秒戻す">
-        <span class="pb-glyph">◁◁</span><span class="pb-sub">5秒戻す</span>
+        <span class="pb-glyph msym">fast_rewind</span><span class="pb-sub">5秒戻す</span>
       </button>
       <button class="pb-btn pb-play" id="pbPlay" type="button" aria-label="全体再生／停止">
-        <span class="pb-glyph" id="pbPlayGlyph">▶</span><span class="pb-sub" id="pbPlaySub">全体再生</span>
+        <span class="pb-glyph msym" id="pbPlayGlyph">play_arrow</span><span class="pb-sub" id="pbPlaySub">全体再生</span>
       </button>
       <button class="pb-btn pb-seek" id="pbSeekR" type="button" aria-label="5秒送る">
-        <span class="pb-glyph">▷▷</span><span class="pb-sub">5秒送る</span>
+        <span class="pb-glyph msym">fast_forward</span><span class="pb-sub">5秒送る</span>
       </button>
     </div>
 
     <!-- 全画面（横画面 練習HUD）への入口。常時表示 -->
-    <button class="fs-enter" id="fsBtn" type="button">⛶ 練習モード（全画面再生）</button>
+    <button class="fs-enter" id="fsBtn" type="button"><span class="msym fs-enter-ic">fullscreen</span>練習モード（全画面再生）</button>
   </footer>
 </main>
 
@@ -2152,27 +2164,30 @@
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
 
-        /* このグループだけを再生（solo）／動画位置を記録済みなら 5秒前から（lead）。
-           対象は soloTarget()=activeId＝この展開中グループ。裏側は全体再生と同じ Transport。 */
+        /* 「グループ再生 | 5秒前再生」を常にペアで表示。対象は soloTarget()=activeId＝この展開中グループ。
+           5秒前再生は動画＋記録位置（cue）があるときだけ有効。裏側は全体再生と同じ Transport。 */
         const prow = document.createElement("div");
         prow.className = "g-row g-play";
         const hasBars = g.pattern.rhythms.length > 0;
         const solo = document.createElement("button");
         solo.type = "button"; solo.className = "g-solo";
-        solo.textContent = "▶ このグループを再生";
+        solo.textContent = "グループ再生";
         solo.disabled = running || !hasBars;
         solo.title = hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
         solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
         prow.appendChild(solo);
-        if(VideoGateway.ready() && g.cue != null){
-          const lead = document.createElement("button");
-          lead.type = "button"; lead.className = "g-lead";
-          lead.textContent = "5秒前から";
-          lead.disabled = running || !hasBars;
-          lead.title = "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
-          lead.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
-          prow.appendChild(lead);
-        }
+
+        const lead = document.createElement("button");
+        lead.type = "button"; lead.className = "g-lead";
+        lead.textContent = "5秒前再生";
+        const cued = VideoGateway.ready() && g.cue != null;
+        lead.disabled = running || !hasBars || !cued;
+        lead.title = !hasBars ? "拍子を1つ以上追加してください"
+          : !VideoGateway.ready() ? "動画を読み込むと使えます"
+          : g.cue == null ? "このグループに動画位置が記録されていません（全体レックで記録）"
+          : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
+        lead.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel() : (Transport.running() ? Transport.stop(false) : Transport.start("lead")));
+        prow.appendChild(lead);
         body.appendChild(prow);
         card.appendChild(body);
       }
@@ -2473,13 +2488,13 @@
       pbSeekL.disabled = !canSeek;
       pbSeekR.disabled = !canSeek;
       if(paused){
-        pbPlayGlyph.textContent = "▶"; pbPlaySub.textContent = "再開"; pbPlay.classList.remove("on");
+        pbPlayGlyph.textContent = "play_arrow"; pbPlaySub.textContent = "再開"; pbPlay.classList.remove("on");
       }else if(running || armed){
-        pbPlayGlyph.textContent = videoReady ? "⏸" : "■";
+        pbPlayGlyph.textContent = videoReady ? "pause" : "stop";
         pbPlaySub.textContent   = videoReady ? "一時停止" : "停止";
         pbPlay.classList.add("on");
       }else{
-        pbPlayGlyph.textContent = "▶"; pbPlaySub.textContent = "全体再生"; pbPlay.classList.remove("on");
+        pbPlayGlyph.textContent = "play_arrow"; pbPlaySub.textContent = "全体再生"; pbPlay.classList.remove("on");
       }
       const ready = PlaybackScheduler.plan().length > 0;
       pbPlay.disabled = !ready && !running && !paused && !armed;   // 拍子が1つも無いときだけ不可
