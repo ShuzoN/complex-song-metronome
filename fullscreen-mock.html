@@ -53,8 +53,10 @@
 
   .timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
   .seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
-    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;
-    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap}
+    border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;cursor:pointer;
+    font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap;
+    -webkit-tap-highlight-color:transparent}
+  .seg:active{background:rgba(245,244,239,.12)}
   .seg.done{opacity:.5}
   .seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
   /* 現在セクション内の進捗フィル（済み分） */
@@ -246,10 +248,18 @@
   SECTIONS.forEach(function(s,si){
     var seg = document.createElement('div');
     seg.className = 'seg';
+    seg.dataset.si = si;
     seg.style.flexGrow = s.bars.length;
     seg.innerHTML = '<div class="fill" style="width:0"></div><div class="lbl">'+s.name+'</div>';
     timelineEl.appendChild(seg);
     segEls.push(seg);
+  });
+  // セクションをタップ → そのセクションの先頭小節へジャンプ（本番は Transport.start("solo")）
+  timelineEl.addEventListener('click', function(e){
+    var seg = e.target.closest('.seg'); if(!seg) return;
+    var si = Number(seg.dataset.si), start = 0;
+    for (var k=0;k<si;k++) start += SECTIONS[k].bars.length;
+    curBar = start; renderBar();
   });
 
   // --- 小節タイル生成 ---
