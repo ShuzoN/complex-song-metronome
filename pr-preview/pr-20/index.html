@@ -1306,9 +1306,29 @@
         VideoGateway.seekTo(from, true);     // lead なら助走5秒手前、そうでなければカウントイン開始点
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      cueWatch = {target: fire, kind, lead, t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
+      // lead は「手前へ寄せて実到達を確認してから target で刻む」ジャンプ方式。非 lead(cued) は従来どおり到達検知。
+      cueWatch = {target: fire, from, kind, index: 0, countIn: true, resume: false, jump: lead,
+                  t0: ClockGateway.perf(), limit: lead ? (Transport.LEAD_SEC + 8) * 1000 : 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
+      ClockGateway.frame(pollCue);
+    }
+    // パッド用：timeline の index 番目の拍（その動画位置 vt）へ寄せ、実到達後に beginPlayback(index) で刻み出す。
+    // ボタン再生と同じ pollCue／beginPlayback を共有（空白判定＝実再生フレーム待ち・遅延補正・overshoot 前倒し）。
+    const SNAP_LEAD = 0.4;
+    function startAtIndex(index){
+      const ev = PlaybackService.at(index);
+      if(!ev){ Transport.clearArm(); return; }   // 対象拍なし（曲末尾より後）→ 動画だけ動かしメトロノームは止めたまま
+      const aim = compensate(ev.vt);
+      const from = Math.max(0, aim - SNAP_LEAD);
+      try{
+        VideoGateway.seekTo(from, true);
+        VideoGateway.play();
+      }catch(err){ Transport.clearArm(); Transport.beginPlayback("all", {skipWait:true, index, resume:true}); return; }
+      cueWatch = {target: aim, from, kind: "all", index, countIn: false, resume: true, jump: true,
+                  t0: ClockGateway.perf(), limit: (SNAP_LEAD + 8) * 1000};
+      view.status("頭出し中");
+      view.videoMsg("位置を合わせています…", false);
       ClockGateway.frame(pollCue);
     }
     function pollCue(){
@@ -1316,43 +1336,39 @@
       let st = -1, t = null;
       try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
 
-      if(cueWatch.lead){
-        // 5秒手前から流して、記録位置に重なった瞬間に刻み出す。
-        // seekTo 直後は getCurrentTime が「巻き戻る前の位置」を数フレーム返すため、
-        // 助走開始点(cue-5)まで実際に戻ったのを確認してから計測を始める
-        // （確認前だと、記録直後で cue 付近にいる位置を「到達」と誤認して即開始してしまう）
+      if(cueWatch.jump){
+        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（lead＝5秒手前 / パッド＝SNAP_LEAD 手前）。
+        // seekTo 直後は getCurrentTime が「移動前の位置」を数フレーム返すため、from まで実到達を確認してから計測。
         if(t != null && !isNaN(t)){
-          const from = Math.max(0, cueWatch.target - Transport.LEAD_SEC);
-          if(!cueWatch.seeked && t <= from + 0.5) cueWatch.seeked = true;   // 助走開始点まで戻った
+          if(!cueWatch.seeked && t <= cueWatch.from + 0.5) cueWatch.seeked = true;
           if(cueWatch.seeked){
             const remain = cueWatch.target - t;
             if(remain <= 0){
-              const kind = cueWatch.kind;
-              const over = Math.min(-remain, 0.05);
+              const w = cueWatch; const over = Math.min(-remain, 0.05);
               cueWatch = null; Transport.clearArm();
               view.videoMsg("", false);
-              Transport.beginPlayback(kind, {skipWait:true, adjust:-over, countIn:true});
+              Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index, resume:w.resume});
               return;
             }
             view.videoMsg("あと " + remain.toFixed(1) + " 秒で開始", false);
           }else{
-            view.videoMsg("頭出し中…", false);   // まだ助走開始点に戻っていない
+            view.videoMsg("頭出し中…", false);   // まだ寄せ先まで到達していない
           }
         }
       }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
         // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
-        const kind = cueWatch.kind;
+        const w = cueWatch;
         const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
         cueWatch = null; Transport.clearArm();
         view.videoMsg("", false);
-        Transport.beginPlayback(kind, {skipWait:true, adjust:-over, countIn:true});   // 行き過ぎたぶんだけ前倒し
+        Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index});   // 行き過ぎたぶんだけ前倒し
         return;
       }
       if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
-        const kind = cueWatch.kind;
+        const w = cueWatch;
         cueWatch = null; Transport.clearArm();
         view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
-        Transport.beginPlayback(kind, {skipWait:true});
+        Transport.beginPlayback(w.kind, {skipWait:true, index:w.index, resume:w.resume});
         return;
       }
       ClockGateway.frame(pollCue);
@@ -1370,7 +1386,7 @@
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
     }
-    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, stampCue };
+    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
   })();
 
   /* ---------- Transport（再生ステートマシン：all/solo/lead・preroll・全REC・動画同期を統括） ----------
@@ -1467,22 +1483,27 @@
       ClockGateway.frame(draw);
     }
 
+    // 単一の再生開始経路。ボタン再生は index 0（＝先頭）、パッドは opts.index（動画位置に一致する拍）から。
+    // opts: {skipWait, adjust, lead, countIn, index, resume}
+    //   resume=true … セッション継続中の再フィット（timeline 再構築・activeId 退避・全再描画をしない）
     function beginPlayback(kind, opts){
+      const o = opts || {};
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
       SoundGateway.ensure();
       mode = (kind === "all") ? "all" : kind;
       soloId = (mode === "all") ? null : Store.getState().activeId;
-      PlaybackService.update(mode, soloId);   // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
+      if(!o.resume){
+        PlaybackService.update(mode, soloId); // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
+        resumeActiveId = Store.getState().activeId;
+        Store.apply({activeId: null});        // 再生中は全グループを非アクティブにする
+        view.render();
+      }
       running = true; shown = "";
-      resumeActiveId = Store.getState().activeId;
-      Store.apply({activeId: null});          // 再生中は全グループを非アクティブにする
-      view.render();
       // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
       // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
-      // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる
-      const o = opts || {};
+      // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる（パッド/動画同期は skipWait）
       const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
       const adjust = o.adjust || 0;
       const lead = o.lead || 0;               // 即時再生（動画なし全体再生）の準備ディレイ。約1秒後から鳴らす
@@ -1495,7 +1516,7 @@
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
       const t0 = ClockGateway.now();
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
-      PlaybackScheduler.prime(start);
+      PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
       for(const bar of ci.bars){
@@ -1508,24 +1529,6 @@
       view.setRunning(true);
       if(wait > 0){ view.startWaiting(wait.toFixed(2)); }
       else{ view.status(baseStatus()); }
-      view.updateTransport();
-    }
-    // パッド（VideoPadService）用：現在の timeline を任意 index から（再）起動しメトロノームをフィット。
-    // mode は "all"（曲全体）固定。timeline/PlaybackService.frame は保持。カウントイン・プレロールなし。
-    function fitFromIndex(index, opts){
-      const o = opts || {};
-      SoundGateway.ensure();
-      mode = "all"; soloId = null;
-      running = true; shown = "";
-      firstBeatTime = 0;
-      const t0 = ClockGateway.now();
-      const start = Math.max(t0 + 0.005, t0 + 0.02 + (o.adjust || 0));
-      PlaybackScheduler.primeAtIndex(start, index);
-      schedulerTick();     // 初回分を即予約
-      cancelTimer = ClockGateway.every(PlaybackScheduler.LOOKAHEAD, schedulerTick);
-      ClockGateway.frame(draw);
-      view.setRunning(true);
-      view.status(baseStatus());
       view.updateTransport();
       view.padUpdate();
     }
@@ -1644,64 +1647,50 @@
       soloTarget, countInFor, LEAD_SEC,
       clearArm(){ armKind = null; },
       clearPending(){ pendingKind = null; },
-      fitFromIndex, halt,
+      halt,
       start, stop, startRec, beginPlayback, armCancel, wake, onVideoPlaying, onVideoStopped
     };
   })();
 
   /* ---------- VideoPadService（再生パッドの統括：動画マスター、メトロノームは付随してフィット） ----------
      パッドの役割は「動画をシームレスに ±5秒／再生／一時停止する」だけ。VideoGateway（動画）を操作し、
-     操作のたびに PlaybackService(timeline) の indexAtVideo で「今の動画位置に一致する拍」を引き当て、
-     既存の再生ランナー（Transport.fitFromIndex/halt = SoundGateway 経由）でメトロノームを合わせ直す。
-     timeline の生成・読み取りは PlaybackService、発音は Transport に委ねる（ここは統括のみ）。 */
+     PlaybackService(timeline) の indexAtVideo で「今の動画位置に一致する拍」を引き当て、
+     あとは **ボタン再生と同じ VideoSync.startAtIndex → pollCue → beginPlayback** に委ねて刻み直す
+     （空白判定＝実再生フレーム待ち・遅延補正・overshoot 前倒しをボタンと完全共有）。ここは統括のみ。 */
   const VideoPadService = (() => {
-    const SNAP_LEAD = 0.4;                 // seek 実到達を確認するための小さな助走（秒）
-    let paused = false, busy = false;      // busy=シーク着地待ち
-    let watch = null;
+    let paused = false;
+    let jumpPending = false;               // シーク/再開を要求してから実際に鳴り出すまで
     let view = { padUpdate(){}, setRunning(){}, status(){}, updateTransport(){} };
 
     function ensureTimeline(){ if(!PlaybackService.ready()) PlaybackService.update("all", null); }
-
-    // 動画を videoTime へ寄せ、実到達後に timeline の該当拍からメトロノームをフィット（動画は再生継続）
+    // 鳴り出したら（Transport.running）自動的に解除。到達待ちの間だけ true。
+    function busy(){ if(jumpPending && Transport.running()) jumpPending = false; return jumpPending; }
+    // 動画位置 videoTime に一致する拍へフィット（無ければ動画だけ動かす）
     function fitAt(videoTime){
       ensureTimeline();
-      const aim = VideoSync.compensate(Math.max(0, videoTime));   // 実音が動画位置に重なるよう手前を狙う
-      const from = Math.max(0, aim - SNAP_LEAD);
+      const target = Math.max(0, videoTime);
+      const index = PlaybackService.indexAtVideo(target);   // ★真の動画時刻から引く（compensate 後ではない）
       Transport.halt();                    // run ループだけ止める（lamp は保持＝シークのちらつき防止）
-      busy = true; view.padUpdate();
-      try{ VideoGateway.seekTo(from, true); VideoGateway.play(); }
-      catch(err){ watch = null; fire(aim); return; }
-      watch = {target: aim, from, t0: ClockGateway.perf(), seeked: false, limit: (SNAP_LEAD + 8) * 1000};
-      ClockGateway.frame(poll);
-    }
-    function fire(videoTime){
-      busy = false; paused = false;
-      Transport.fitFromIndex(PlaybackService.indexAtVideo(Math.max(0, videoTime)));
-      view.padUpdate();
-    }
-    function poll(){
-      if(!watch) return;
-      let t = null;
-      try{ t = VideoGateway.time(); }catch(err){}
-      if(t != null && !isNaN(t)){
-        // seekTo 直後は getCurrentTime が古い位置を返すので、seek 先(from)まで実到達を確認してから目標到達を見る
-        if(!watch.seeked && t <= watch.from + 0.5) watch.seeked = true;
-        if(watch.seeked && t >= watch.target - 0.05){ const at = watch.target; watch = null; fire(at); return; }
+      if(PlaybackService.at(index)){
+        jumpPending = true;
+        VideoSync.startAtIndex(index);     // ボタンと同じ poll→beginPlayback 経路（index 指定・resume）
+      }else{                               // 対象拍なし（曲末尾より後）：動画だけ動かしメトロノームは止めたまま
+        jumpPending = false;
+        try{ VideoGateway.seekTo(target, true); }catch(err){}
       }
-      if(ClockGateway.perf() - watch.t0 > watch.limit){ const at = watch.target; watch = null; fire(at); return; }
-      ClockGateway.frame(poll);
+      view.padUpdate();
     }
 
     return {
       init(o){ if(o && o.view) view = o.view; },
       isPaused: () => paused,
-      isBusy: () => busy,
+      isBusy: () => busy(),
       ready: () => VideoGateway.ready(),
       // セッション中（再生 or 一時停止）で着地待ちでないときだけシーク/トグルを受ける
-      active: () => (Transport.running() || paused) && !busy,
+      active: () => (Transport.running() || paused) && !busy(),
       // 左右パッド：合算済みの量を1回で。現在動画位置 ± delta へ寄せてフィット。
       seekBy(deltaSec){
-        if(busy || !VideoGateway.ready()) return;
+        if(busy() || !VideoGateway.ready()) return;
         if(!Transport.running() && !paused) return;      // セッションが無いときは無視（開始は中央/ボタンで）
         let t = 0; try{ t = VideoGateway.time(); }catch(err){ return; }
         if(t == null || isNaN(t)) t = 0;
@@ -1709,11 +1698,12 @@
         let target = t + deltaSec;
         if(target < 0) target = 0;
         if(dur > 0 && target > dur - 0.1) target = Math.max(0, dur - 0.1);
+        paused = false;
         fitAt(target);
       },
       // 中央：一時停止／再開（動画マスター。メトロノームは付随）。停止中は現在位置から開始。
       togglePause(){
-        if(busy || !VideoGateway.ready()) return;
+        if(busy() || !VideoGateway.ready()) return;
         if(Transport.running() && !paused){              // 再生中 → 一時停止（動画もメトロノームも止める）
           Transport.halt();
           try{ VideoGateway.pause(); }catch(err){}
@@ -1723,6 +1713,7 @@
         }
         let t = 0; try{ t = VideoGateway.time(); }catch(err){}   // 一時停止中 / 停止中 → 現在位置から再開
         if(t == null || isNaN(t)) t = 0;
+        paused = false;
         fitAt(t);
       }
     };
