@@ -826,8 +826,8 @@
   })();
 
   /* ---------- BrowserService（ブラウザ境界の制御：離脱ガード & 画面スリープ防止。DOM の状態は持たない） ----------
-     ・離脱ガード：未保存の編集があるとき、リロード／タブ閉じ／戻る・進むで beforeunload のネイティブ確認を出す。
-       このアプリは単一ページ・履歴1エントリ（router なし）なので、これらはすべて実 unload になり 1本で統一的に効く。
+     ・離脱ガード：未保存の編集があるとき、戻る／進む・モバイルの戻るジェスチャは履歴番兵＋popstate＋confirm で、
+       リロード／タブ閉じ／URL 変更は beforeunload のネイティブ確認で止める（保存に成功すると解除）。
      ・画面スリープ防止：再生中は Screen Wake Lock を取得し、停止で解放。背面で自動解放されるため復帰時に再取得する。 */
   const BrowserService = (() => {
     /* --- 画面スリープ防止（Screen Wake Lock） --- */
@@ -847,15 +847,35 @@
     // 再生開始で true（取得）、停止で false（解放）
     function keepAwake(on){ wantAwake = on; on ? acquire() : release(); }
 
-    /* --- 離脱ガード（未保存の編集があるときだけ確認） --- */
-    let dirty = false;
+    /* --- 離脱ガード（未保存の編集があるときだけ確認） ---
+       戻る／進む・モバイルの「戻るジェスチャ」では beforeunload が発火しない環境が多い。
+       そこで履歴に番兵（sentinel）エントリを1つ積み、戻る操作で pop される popstate を捕まえて
+       confirm で止め、キャンセルなら番兵を積み直してその場にとどまる。
+       reload／タブ閉じ／URL 変更は popstate では拾えないため beforeunload も併用する。 */
+    const LEAVE_MSG = "編集中の内容が保存されていません。このページを離れてもよろしいですか？";
+    let dirty = false, bypass = false;
     function markDirty(){ dirty = true; }
     function markClean(){ dirty = false; }   // 保存成功時に呼ぶ
+    function armSentinel(){ history.pushState({__mnGuard: 1}, ""); }
+    function leave(){
+      bypass = true;               // 直後の beforeunload を黙らせて実際に離脱させる
+      history.back();
+      // 戻り先が無く離脱できなかったときのために、少し後でガード状態を復旧しておく
+      setTimeout(() => { bypass = false; if(dirty) armSentinel(); }, 100);
+    }
+    function onPopState(){
+      // 番兵が pop されて元のページに居る状態。未保存なら確認し、拒否なら押し戻す
+      if(dirty && !window.confirm(LEAVE_MSG)){ armSentinel(); return; }
+      leave();                     // 未編集、または離脱を了承 → 実際に前へ戻す
+    }
     function onBeforeUnload(e){
-      if(!dirty) return;
-      e.preventDefault(); e.returnValue = "";   // ネイティブ「このサイトを離れますか？」を出す
+      if(bypass || !dirty) return;
+      e.preventDefault(); e.returnValue = "";   // reload／タブ閉じ／URL 変更時のネイティブ確認
     }
     function bind(){
+      // 戻る1回で確実に popstate が発火するよう履歴に番兵を積む（reload では二重に積まない）
+      if(!(history.state && history.state.__mnGuard)) armSentinel();
+      window.addEventListener("popstate", onPopState);
       window.addEventListener("beforeunload", onBeforeUnload);
       // Wake Lock はタブが背面になると自動解放されるので、再生中に前面へ戻ったら取り直す
       document.addEventListener("visibilitychange", () => {
