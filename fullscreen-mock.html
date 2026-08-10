@@ -32,8 +32,19 @@
   .hud{position:fixed;inset:0;background:var(--ink);color:var(--panel);overflow:hidden;
     display:flex;flex-direction:column}
 
+  /* 左半分／右半分の大きなタップ領域（矢印ボタンに加えて）。上部バー・下部操作は z:2 で前面 */
+  .tapzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;width:50%;z-index:1;
+    border:none;background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent;
+    display:flex;align-items:center;justify-content:center}
+  .tapzone.left{left:0} .tapzone.right{right:0}
+  .tapzone:active{background:rgba(245,244,239,.05)}
+  .tapzone .tz-hint{font-family:var(--mono);font-size:clamp(20px,6dvh,26px);color:rgba(245,244,239,.14);transition:color 120ms ease}
+  .tapzone.left .tz-hint{margin-right:auto;padding-left:clamp(6px,2vw,18px)}
+  .tapzone.right .tz-hint{margin-left:auto;padding-right:clamp(6px,2vw,18px)}
+  .tapzone:active .tz-hint{color:rgba(245,244,239,.4)}
+
   /* ---- 上：セクションタイムライン ---- */
-  .top{flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
+  .top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
     padding:calc(env(safe-area-inset-top) + clamp(8px,2.4dvh,12px)) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
   .rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
@@ -97,7 +108,7 @@
   .beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
   /* ---- 下：操作系を集約 ---- */
-  .controls{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
+  .controls{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
     padding:clamp(4px,1.4dvh,8px) 16px calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px))}
   .ctl{display:flex;flex-direction:column;align-items:center;gap:clamp(3px,1dvh,5px);
     background:transparent;border:none;color:var(--panel);cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -121,7 +132,7 @@
     border-color:transparent transparent transparent currentColor;margin-left:clamp(3px,1dvh,4px)}
 
   /* シークフラッシュ（＋10秒 等）— 既存 .tap-flash 相当 */
-  .flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  .flash{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
     font-family:var(--display);font-size:72px;font-weight:700;color:#FFF;letter-spacing:.02em;
     text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
   .flash.show{opacity:1;transition:opacity 60ms ease}
@@ -145,6 +156,10 @@
 <body>
 
 <div class="hud" id="hud">
+
+  <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印に加えた大きなタップ領域） -->
+  <button class="tapzone left" id="tapL" aria-label="タップで5秒戻す"><span class="tz-hint">◁</span></button>
+  <button class="tapzone right" id="tapR" aria-label="タップで5秒送る"><span class="tz-hint">▷</span></button>
 
   <!-- 上：セクションタイムライン -->
   <div class="top">
@@ -310,10 +325,16 @@
   document.getElementById('btnBeat').addEventListener('click', stepBeat);
   document.getElementById('btnPause').addEventListener('click', togglePause);
   document.getElementById('play').addEventListener('click', togglePause);
-  document.getElementById('btnFlash').addEventListener('click', function(){
-    flash.textContent = '＋10秒'; flash.classList.add('show');
-    setTimeout(function(){ flash.classList.remove('show'); }, 700);
-  });
+  var flashTimer = null;
+  function showFlash(text){
+    flash.textContent = text; flash.classList.add('show');
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(function(){ flash.classList.remove('show'); }, 650);
+  }
+  document.getElementById('btnFlash').addEventListener('click', function(){ showFlash('＋10秒'); });
+  // 左半分／右半分タップ（デモ：フラッシュ表示。本番は VideoPadService.seekBy を呼ぶ）
+  document.getElementById('tapL').addEventListener('click', function(){ showFlash('−5秒'); });
+  document.getElementById('tapR').addEventListener('click', function(){ showFlash('＋5秒'); });
 
   window.addEventListener('resize', renderBar);
   renderBar();
