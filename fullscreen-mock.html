@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>全画面モード モック — Complex Song Metronome</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* ===== 既存 index.html と同じデザイントークン ===== */
+  :root{
+    --bg:#A9B0A2; --panel:#F5F4EF; --ink:#191C18; --rule:#C7CABC;
+    --signal:#C4362A; --brass:#8E7132; --dim:#6E7268;
+    --display:"Big Shoulders Display","Zen Kaku Gothic New",sans-serif;
+    --mono:"DM Mono",ui-monospace,monospace;
+    --body:"Zen Kaku Gothic New",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  [hidden]{display:none !important}
+  body{
+    min-height:100vh;background:var(--bg);color:var(--ink);font-family:var(--body);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ===================================================================
+     これは「本番でこう見える」ことを示すための静的モックです。
+     裏側の演奏ロジック・動画はつながっていません（見た目のみ）。
+     本実装では TapPadView / VideoPadService / TransportView を再利用します。
+     =================================================================== */
+
+  /* 全画面オーバーレイ（.device の外側に置く想定） */
+  .fs{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+    background:var(--ink);
+    color:var(--panel);
+    overflow:hidden;
+    /* iPhone のノッチ等を避ける */
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* 右上：全画面解除 */
+  .fs-close{
+    position:absolute; top:calc(env(safe-area-inset-top) + 10px); right:14px; z-index:5;
+    width:44px; height:44px; border:1px solid rgba(245,244,239,.4);
+    background:rgba(245,244,239,.06); color:var(--panel);
+    font-family:var(--mono); font-size:20px; line-height:1;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .fs-close:active{transform:translate(1px,1px)}
+
+  /* ===== 上段：再生パッド（透過） ===== */
+  .fs-pad{
+    position:relative;
+    flex:0 0 42%;
+    display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+    background:var(--ink);
+    touch-action:manipulation; user-select:none;
+    /* 下端に向けて透明化し、下段が「透けて見える」ようにする */
+    -webkit-mask-image:linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,.35) 88%, transparent 100%);
+            mask-image:linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,.35) 88%, transparent 100%);
+  }
+  .fs-zone{
+    border:none; background:transparent; color:var(--panel);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
+    cursor:pointer; font-family:var(--mono); -webkit-tap-highlight-color:transparent;
+    height:100%;
+  }
+  .fs-zone-glyph{font-size:40px; line-height:1; opacity:.92}
+  .fs-zone-sub{font-size:12px; letter-spacing:.12em; color:rgba(245,244,239,.62)}
+  .fs-zone:active{background:rgba(245,244,239,.05)}
+
+  .fs-pad-center{
+    width:110px; border:none; background:transparent; color:var(--panel); cursor:pointer;
+    display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent;
+    height:100%;
+  }
+  .fs-pad-icon{
+    width:84px; height:84px; border-radius:50%;
+    border:1.5px solid rgba(245,244,239,.5); background:rgba(245,244,239,.06);
+    display:flex; align-items:center; justify-content:center;
+    font-size:34px; line-height:1; transition:transform 90ms ease, background 120ms ease;
+  }
+  .fs-pad-center:active .fs-pad-icon{transform:scale(.92)}
+  /* 一時停止中：既存と同じ赤リング */
+  .fs-pad.is-paused .fs-pad-icon{border-color:var(--signal); background:rgba(196,54,42,.18); color:#FFF}
+
+  /* シーク時のフラッシュ（＋10秒 など）— 既存 .tap-flash 相当 */
+  .fs-flash{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    font-family:var(--display); font-size:64px; font-weight:700; color:#FFF; letter-spacing:.02em;
+    text-shadow:0 2px 14px rgba(0,0,0,.5); opacity:0; pointer-events:none; transition:opacity 140ms ease;
+  }
+  .fs-flash.show{opacity:1; transition:opacity 60ms ease}
+
+  /* ===== 下段：演奏情報 ===== */
+  .fs-info{
+    flex:1 1 auto;
+    display:flex; flex-direction:column;
+    padding:6px 24px calc(env(safe-area-inset-bottom) + 22px);
+    gap:0;
+  }
+
+  /* 今演奏中 ラベル */
+  .fs-label{
+    font-family:var(--mono); font-size:11px; letter-spacing:.28em; text-transform:uppercase;
+    color:var(--brass); margin-bottom:10px; display:flex; align-items:center; gap:8px;
+  }
+  .fs-label::before{content:""; width:3px; height:14px; background:var(--signal); display:inline-block}
+
+  /* 今のグループ（大・明るい） */
+  .fs-now{
+    position:relative;
+    display:flex; align-items:baseline; justify-content:space-between; gap:14px;
+    padding:14px 16px 14px 18px;
+    background:rgba(245,244,239,.05);
+    border:1px solid rgba(245,244,239,.14);
+  }
+  .fs-now::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--signal)}
+  .fs-now-name{
+    font-family:var(--display); font-weight:700; font-size:clamp(38px,13vw,60px); line-height:.9;
+    letter-spacing:.01em; color:var(--panel);
+  }
+  .fs-now-meta{display:flex; align-items:baseline; gap:12px; flex:0 0 auto}
+  .fs-now-sig{font-family:var(--mono); font-size:22px; color:var(--brass); font-variant-numeric:tabular-nums}
+  .fs-now-reps{font-family:var(--mono); font-size:18px; color:rgba(245,244,239,.75); font-variant-numeric:tabular-nums}
+
+  /* 次のグループ（控えめ・薄く） */
+  .fs-next{
+    display:flex; align-items:baseline; gap:12px;
+    padding:14px 18px 0;
+    color:var(--dim); opacity:.72;
+  }
+  .fs-next-tag{font-family:var(--mono); font-size:12px; letter-spacing:.16em; color:var(--dim)}
+  .fs-next-name{font-family:var(--display); font-weight:600; font-size:26px; line-height:1; color:rgba(245,244,239,.62)}
+  .fs-next-sig{font-family:var(--mono); font-size:14px; color:var(--dim); margin-left:auto; font-variant-numeric:tabular-nums}
+
+  /* pulse表示（下部）— 既存 .pulse / .beats を拡大 */
+  .fs-pulse-wrap{margin-top:auto; padding-top:22px}
+  .fs-pulse{
+    display:flex; align-items:baseline; gap:10px;
+    font-family:var(--mono); font-size:13px; letter-spacing:.08em; color:rgba(245,244,239,.55);
+    margin-bottom:16px;
+  }
+  .fs-pulse i{font-style:normal; color:var(--brass)}
+  .fs-beats{display:flex; flex-wrap:wrap; gap:14px; align-items:center}
+  .fs-beat{
+    width:22px; height:22px; border:1.5px solid rgba(245,244,239,.5); border-radius:50%;
+    transition:background 60ms linear, transform 60ms linear;
+  }
+  .fs-beat.first{border-color:var(--brass); box-shadow:inset 0 0 0 3px rgba(142,113,50,.32)}
+  .fs-beat.on{background:var(--signal); border-color:var(--signal); transform:scale(1.35)}
+  .fs-beat.first.on{background:var(--brass); border-color:var(--brass); box-shadow:none}
+
+  /* ===== モック操作用の小さなデモバー（本番では存在しない） ===== */
+  .demo-bar{
+    position:fixed; left:12px; top:calc(env(safe-area-inset-top) + 10px); z-index:20;
+    display:flex; gap:8px; align-items:center;
+    background:rgba(25,28,24,.82); border:1px solid rgba(245,244,239,.25);
+    padding:7px 10px; backdrop-filter:blur(4px);
+  }
+  .demo-bar span{font-family:var(--mono); font-size:9px; letter-spacing:.14em; color:rgba(245,244,239,.55); text-transform:uppercase}
+  .demo-bar button{
+    font-family:var(--mono); font-size:11px; color:var(--panel);
+    background:rgba(245,244,239,.08); border:1px solid rgba(245,244,239,.3);
+    padding:6px 10px; cursor:pointer;
+  }
+  .demo-bar button:active{transform:translateY(1px)}
+  @media (prefers-reduced-motion:reduce){.fs-beat,.fs-pad-icon,.fs-flash{transition:none}}
+</style>
+</head>
+<body>
+
+<!-- ============ 全画面ビュー（モック） ============ -->
+<div class="fs" id="fs">
+
+  <button class="fs-close" aria-label="全画面を解除">✕</button>
+
+  <!-- 上段：再生パッド（透過） -->
+  <div class="fs-pad" id="pad">
+    <button class="fs-zone" aria-label="5秒ずつ戻す">
+      <span class="fs-zone-glyph">⏪</span>
+      <span class="fs-zone-sub">5秒ずつ戻す</span>
+    </button>
+    <button class="fs-pad-center" aria-label="一時停止・再開">
+      <span class="fs-pad-icon" id="padIcon">⏸</span>
+    </button>
+    <button class="fs-zone" aria-label="5秒ずつ送る">
+      <span class="fs-zone-glyph">⏩</span>
+      <span class="fs-zone-sub">5秒ずつ送る</span>
+    </button>
+    <div class="fs-flash" id="flash">＋10秒</div>
+  </div>
+
+  <!-- 下段：演奏情報 -->
+  <div class="fs-info">
+
+    <div class="fs-label">今演奏中</div>
+
+    <div class="fs-now">
+      <div class="fs-now-name">A メロ</div>
+      <div class="fs-now-meta">
+        <span class="fs-now-sig">4/4</span>
+        <span class="fs-now-reps" id="reps">1/2</span>
+      </div>
+    </div>
+
+    <div class="fs-next">
+      <span class="fs-next-tag">次 ›</span>
+      <span class="fs-next-name">サ ビ</span>
+      <span class="fs-next-sig">3/4</span>
+    </div>
+
+    <div class="fs-pulse-wrap">
+      <div class="fs-pulse"><i>4/4</i> · 四分音符</div>
+      <div class="fs-beats" id="beats">
+        <div class="fs-beat first on"></div>
+        <div class="fs-beat"></div>
+        <div class="fs-beat"></div>
+        <div class="fs-beat"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============ モック操作用（本番には無い） ============ -->
+<div class="demo-bar">
+  <span>demo</span>
+  <button id="btnPlay">再生/一時停止</button>
+  <button id="btnBeat">拍を進める</button>
+  <button id="btnFlash">シーク表示</button>
+</div>
+
+<script>
+  /* このスクリプトはモックの状態切替デモ専用です（本番ロジックとは無関係）。
+     本実装では TransportView.setBeatDot / paintBeats・TapPadView などが担当します。 */
+  var pad = document.getElementById('pad');
+  var padIcon = document.getElementById('padIcon');
+  var beats = Array.prototype.slice.call(document.querySelectorAll('#beats .fs-beat'));
+  var flash = document.getElementById('flash');
+  var cur = 0, paused = false;
+
+  document.getElementById('btnPlay').addEventListener('click', function(){
+    paused = !paused;
+    pad.classList.toggle('is-paused', paused);
+    padIcon.textContent = paused ? '▶' : '⏸';
+  });
+
+  document.getElementById('btnBeat').addEventListener('click', function(){
+    beats[cur].classList.remove('on');
+    cur = (cur + 1) % beats.length;
+    beats.forEach(function(b,i){ b.classList.toggle('on', i === cur); });
+  });
+
+  document.getElementById('btnFlash').addEventListener('click', function(){
+    flash.textContent = '＋10秒';
+    flash.classList.add('show');
+    setTimeout(function(){ flash.classList.remove('show'); }, 700);
+  });
+</script>
+</body>
+</html>
