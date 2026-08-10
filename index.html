@@ -877,6 +877,84 @@
     };
   })();
 
+  /* ---------- BrowserService（ブラウザ境界の制御：離脱ガード & 画面スリープ防止。DOM の状態は持たない） ----------
+     ・離脱ガード：未保存の編集があるとき、戻る／進む・モバイルの戻るジェスチャは履歴番兵＋popstate＋confirm で、
+       リロード／タブ閉じ／URL 変更は beforeunload のネイティブ確認で止める（保存に成功すると解除）。
+     ・画面スリープ防止：再生中は Screen Wake Lock を取得し、停止で解放。背面で自動解放されるため復帰時に再取得する。 */
+  const BrowserService = (() => {
+    /* --- 画面スリープ防止（Screen Wake Lock） --- */
+    const canWake = ("wakeLock" in navigator);
+    let sentinel = null, wantAwake = false;
+    async function acquire(){
+      if(!canWake || !wantAwake || sentinel) return;
+      try{
+        sentinel = await navigator.wakeLock.request("screen");
+        sentinel.addEventListener("release", () => { sentinel = null; });
+      }catch(err){ /* 非セキュアコンテキスト／拒否／非表示などは黙って無視 */ }
+    }
+    async function release(){
+      const s = sentinel; sentinel = null;
+      if(s){ try{ await s.release(); }catch(err){} }
+    }
+    // 再生開始で true（取得）、停止で false（解放）
+    function keepAwake(on){ wantAwake = on; on ? acquire() : release(); }
+
+    /* --- 離脱ガード（未保存の編集があるときだけ、何度でも確認） ---
+       戻る／進む・モバイルの「戻るジェスチャ」では beforeunload が発火しない環境が多いので、
+       履歴に番兵（sentinel）を積み、戻るで pop される popstate を confirm で止める。
+
+       重要：Chrome 等の「履歴操作インターベンション」は “ユーザー操作なしで積んだ” 履歴エントリを
+       skippable として戻る時に読み飛ばす。そのため番兵は必ず編集ジェスチャ（markDirty＝クリック/入力の
+       同一タスク）内で積み、ユーザーアクティベーション付き＝skip されない状態にする。キャンセル直後に
+       積み直す番兵は操作なしのため一時的に skip 対象になり得るが、その番兵の上で続けて編集すると
+       アクティベーションが付いて skip されなくなる。よって「キャンセル→編集→また戻る」でも毎回止まる。
+       番兵は常に元のページの直上に1つだけ保ち履歴を汚さない。reload／タブ閉じ／URL 変更は beforeunload で補う。 */
+    const LEAVE_MSG = "編集中の内容が保存されていません。このページを離れてもよろしいですか？";
+    let dirty = false, bypass = false;
+    const onGuard = () => !!(history.state && history.state.__mnGuard);
+    // 「元のページ」の直上に番兵をちょうど1つだけ保つ（onGuard の時は積み増さない＝履歴を汚さない）
+    function armSentinel(){ if(!onGuard()) history.pushState({__mnGuard:1}, ""); }
+    function markClean(){ dirty = false; }   // 保存成功時に呼ぶ
+    // 編集ジェスチャ（クリック/入力）の同一タスク内で呼ばれるので、ここで積む番兵は
+    // ユーザーアクティベーション付き＝インターベンションの skip 対象にならない
+    function markDirty(){ dirty = true; armSentinel(); }
+    function leave(){
+      window.removeEventListener("popstate", onPopState);
+      bypass = true;               // 直後の beforeunload を黙らせて実際に離脱させる
+      history.back();
+      // 戻り先が無く離脱できなかったときのため、少し後でガードを復旧しておく
+      setTimeout(() => {
+        bypass = false;
+        window.addEventListener("popstate", onPopState);
+        if(dirty) armSentinel();
+      }, 150);
+    }
+    function onPopState(){
+      // 番兵が pop されて元のページに居る状態。未保存なら確認し、拒否ならその場に積み直す。
+      // 積み直した番兵は操作なしのため一時的に skip 対象になり得るが、続く編集の
+      // アクティベーションで解除され、次の「戻る」でも確実に止まる。
+      if(dirty && !window.confirm(LEAVE_MSG)){ history.pushState({__mnGuard:1}, ""); return; }
+      leave();                     // 未編集、または離脱を了承 → 実際に前へ戻す
+    }
+    function onBeforeUnload(e){
+      if(bypass || !dirty) return;
+      e.preventDefault(); e.returnValue = "";   // reload／タブ閉じ／URL 変更時のネイティブ確認
+    }
+    function bind(){
+      window.addEventListener("popstate", onPopState);
+      window.addEventListener("beforeunload", onBeforeUnload);
+      // bfcache 復帰などで番兵が失われても、編集中なら取り直す
+      window.addEventListener("pageshow", () => { if(dirty) armSentinel(); });
+      // Wake Lock はタブが背面になると自動解放されるので、再生中に前面へ戻ったら取り直す
+      document.addEventListener("visibilitychange", () => {
+        if(document.visibilityState !== "visible") return;
+        if(wantAwake) acquire();
+        if(dirty) armSentinel();
+      });
+    }
+    return { bind, keepAwake, markDirty, markClean, isDirty: () => dirty };
+  })();
+
 
   /* ========================================================================
      usecase … 操作インタフェースの集約と DTO⇔entity 変換。ui からはここだけを呼び、
@@ -2284,7 +2362,10 @@
     function status(text){ statusText.textContent = text; }
     function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
     // 空白（preroll）待機の表示
-    function setRunning(on){ document.body.classList.toggle("running", on); }
+    function setRunning(on){
+      document.body.classList.toggle("running", on);
+      BrowserService.keepAwake(on);          // 再生中は画面をスリープさせない（動画・刻みが止まらないように）
+    }
     function startWaiting(str){
       document.body.classList.add("waiting");
       leadEl.classList.add("counting");
@@ -2416,6 +2497,7 @@
       saveBtn.addEventListener("click", async ()=>{
         const r = await SequenceIO.save();
         if(r) say(r.message, r.bad);
+        if(r && !r.bad) BrowserService.markClean();   // 保存できたら離脱ガードを解除
       });
       loadBtn.addEventListener("click", async ()=>{
         try{ importAndSay(await FileGateway.open()); }
@@ -2549,6 +2631,7 @@
   TapPadView.bind();
   IoView.bind();
   VideoView.bind();
+  BrowserService.bind();
 
   /* ---------- 初期化 ---------- */
   SequenceView.render();
@@ -2557,6 +2640,10 @@
   SequenceView.updateHistory();
   TapPadView.update();
   SequenceService.setTempo(120);
+
+  // 初期化の副作用（上の setTempo など）を dirty に数えないよう、購読は最後に登録する。
+  // 以降の編集はすべて Store.apply 経由で emit されるため、未保存状態として離脱ガードが働く。
+  Store.subscribe(() => BrowserService.markDirty());
 })();
 </script>
 </body>
