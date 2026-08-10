@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>全画面モード モック — Complex Song Metronome</title>
+<title>全画面モード モック（横画面）— Complex Song Metronome</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
@@ -18,248 +18,256 @@
   }
   *{box-sizing:border-box;margin:0;padding:0}
   [hidden]{display:none !important}
-  body{
-    min-height:100vh;background:var(--bg);color:var(--ink);font-family:var(--body);
-    -webkit-font-smoothing:antialiased;
-  }
+  html,body{height:100%}
+  body{background:var(--ink);color:var(--panel);font-family:var(--body);-webkit-font-smoothing:antialiased;overflow:hidden}
 
   /* ===================================================================
-     これは「本番でこう見える」ことを示すための静的モックです。
-     裏側の演奏ロジック・動画はつながっていません（見た目のみ）。
-     本実装では TapPadView / VideoPadService / TransportView を再利用します。
+     横画面・全面z重ねの静的モック（見た目のみ）。
+     下レイヤー = リズムパターン(フォーカス帯) + pulse + グループ情報
+     上レイヤー = 映像なしの透過パッド操作（⏪/⏸/⏩）
+     本実装では TransportView / TapPadView / VideoPadService を再利用。
      =================================================================== */
 
-  /* 全画面オーバーレイ（.device の外側に置く想定） */
-  .fs{
-    position:fixed; inset:0;
-    display:flex; flex-direction:column;
-    background:var(--ink);
-    color:var(--panel);
-    overflow:hidden;
-    /* iPhone のノッチ等を避ける */
-    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  }
+  .hud{position:fixed;inset:0;background:var(--ink);color:var(--panel);overflow:hidden}
 
-  /* 右上：全画面解除 */
-  .fs-close{
-    position:absolute; top:calc(env(safe-area-inset-top) + 10px); right:14px; z-index:5;
-    width:44px; height:44px; border:1px solid rgba(245,244,239,.4);
-    background:rgba(245,244,239,.06); color:var(--panel);
-    font-family:var(--mono); font-size:20px; line-height:1;
-    display:flex; align-items:center; justify-content:center; cursor:pointer;
-    -webkit-tap-highlight-color:transparent;
-  }
-  .fs-close:active{transform:translate(1px,1px)}
+  /* ---- 下レイヤー：主コンテンツ（表示のみ・タップは透過） ---- */
+  .layer-content{position:absolute;inset:0;display:flex;flex-direction:column;pointer-events:none}
+  /* 帯＋pulse を中央に寄せ、下部は操作バンド用に空ける */
+  .center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:18px;padding-bottom:86px}
 
-  /* ===== 上段：再生パッド（透過） ===== */
-  .fs-pad{
-    position:relative;
-    flex:0 0 42%;
-    display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
-    background:var(--ink);
-    touch-action:manipulation; user-select:none;
-    /* 下端に向けて透明化し、下段が「透けて見える」ようにする */
-    -webkit-mask-image:linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,.35) 88%, transparent 100%);
-            mask-image:linear-gradient(to bottom, #000 0%, #000 62%, rgba(0,0,0,.35) 88%, transparent 100%);
-  }
-  .fs-zone{
-    border:none; background:transparent; color:var(--panel);
-    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px;
-    cursor:pointer; font-family:var(--mono); -webkit-tap-highlight-color:transparent;
-    height:100%;
-  }
-  .fs-zone-glyph{font-size:40px; line-height:1; opacity:.92}
-  .fs-zone-sub{font-size:12px; letter-spacing:.12em; color:rgba(245,244,239,.62)}
-  .fs-zone:active{background:rgba(245,244,239,.05)}
+  /* 上部バー：グループ名＋周回 */
+  .hud-top{display:flex;align-items:center;gap:14px;
+    padding:calc(env(safe-area-inset-top) + 14px) 20px 0 22px}
+  .hud-group{display:flex;align-items:center;gap:10px}
+  .hud-group .bar{width:4px;height:20px;background:var(--signal)}
+  .hud-group .name{font-family:var(--body);font-weight:700;font-size:17px;color:rgba(245,244,239,.9);letter-spacing:.02em}
+  .hud-rep{font-family:var(--mono);font-size:18px;color:var(--signal);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+  .hud-rep .of{color:rgba(245,244,239,.4)}
 
-  .fs-pad-center{
-    width:110px; border:none; background:transparent; color:var(--panel); cursor:pointer;
-    display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent;
-    height:100%;
-  }
-  .fs-pad-icon{
-    width:84px; height:84px; border-radius:50%;
-    border:1.5px solid rgba(245,244,239,.5); background:rgba(245,244,239,.06);
-    display:flex; align-items:center; justify-content:center;
-    font-size:34px; line-height:1; transition:transform 90ms ease, background 120ms ease;
-  }
-  .fs-pad-center:active .fs-pad-icon{transform:scale(.92)}
-  /* 一時停止中：既存と同じ赤リング */
-  .fs-pad.is-paused .fs-pad-icon{border-color:var(--signal); background:rgba(196,54,42,.18); color:#FFF}
+  /* ---- フォーカス帯（リズムパターン） ---- */
+  .strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;height:132px;overflow:hidden;
+    -webkit-mask-image:linear-gradient(to right,transparent 0,#000 20%,#000 80%,transparent 100%);
+            mask-image:linear-gradient(to right,transparent 0,#000 20%,#000 80%,transparent 100%)}
+  .track{display:flex;align-items:center;gap:16px;padding:0 50vw;
+    transition:transform 320ms cubic-bezier(.22,.61,.36,1);will-change:transform}
+  .fbar{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    border:1px solid rgba(245,244,239,.28);background:rgba(245,244,239,.04);
+    font-family:var(--mono);font-variant-numeric:tabular-nums;color:rgba(245,244,239,.55);
+    width:64px;height:60px;font-size:19px;transition:all 260ms ease}
+  .fbar .den{font-size:.62em;color:rgba(245,244,239,.4);margin-top:-2px}
+  .fbar.done{opacity:.34}
+  /* 現在小節：大きく・赤（既存 .chip.now 相当の色） */
+  .fbar.now{width:108px;height:108px;font-size:42px;color:#FFF;
+    background:var(--signal);border-color:var(--signal);box-shadow:0 6px 20px rgba(196,54,42,.32)}
+  .fbar.now .den{font-size:.5em;color:rgba(255,255,255,.8);margin-top:-4px}
 
-  /* シーク時のフラッシュ（＋10秒 など）— 既存 .tap-flash 相当 */
-  .fs-flash{
-    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    font-family:var(--display); font-size:64px; font-weight:700; color:#FFF; letter-spacing:.02em;
-    text-shadow:0 2px 14px rgba(0,0,0,.5); opacity:0; pointer-events:none; transition:opacity 140ms ease;
-  }
-  .fs-flash.show{opacity:1; transition:opacity 60ms ease}
+  /* ---- pulse（現在小節の拍） ---- */
+  .hud-pulse{display:flex;flex-direction:column;align-items:center;gap:12px;padding:2px 20px}
+  .hud-meter{font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:rgba(245,244,239,.5)}
+  .hud-meter i{font-style:normal;color:var(--brass)}
+  .beats{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center}
+  .beat{width:16px;height:16px;border:1.5px solid rgba(245,244,239,.45);border-radius:50%;
+    transition:background 60ms linear,transform 60ms linear}
+  .beat.first{border-color:var(--brass);box-shadow:inset 0 0 0 2.5px rgba(142,113,50,.32)}
+  .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.4)}
+  .beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
-  /* ===== 下段：演奏情報 ===== */
-  .fs-info{
-    flex:1 1 auto;
-    display:flex; flex-direction:column;
-    padding:6px 24px calc(env(safe-area-inset-bottom) + 22px);
-    gap:0;
-  }
+  /* 次グループ（右下・薄く） */
+  .hud-next{position:absolute;right:20px;bottom:calc(env(safe-area-inset-bottom) + 16px);
+    display:flex;align-items:baseline;gap:9px;color:var(--dim);opacity:.7}
+  .hud-next .tag{font-family:var(--mono);font-size:11px;letter-spacing:.14em}
+  .hud-next .nm{font-family:var(--body);font-weight:600;font-size:16px;color:rgba(245,244,239,.6)}
+  .hud-next .rp{font-family:var(--mono);font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
 
-  /* 今演奏中 ラベル */
-  .fs-label{
-    font-family:var(--mono); font-size:11px; letter-spacing:.28em; text-transform:uppercase;
-    color:var(--brass); margin-bottom:10px; display:flex; align-items:center; gap:8px;
-  }
-  .fs-label::before{content:""; width:3px; height:14px; background:var(--signal); display:inline-block}
+  /* ---- 上レイヤー：透過パッド操作（映像なし） ---- */
+  .layer-ctl{position:absolute;inset:0}
+  .tapzone{position:absolute;top:0;bottom:86px;width:26%;border:none;background:transparent;color:var(--panel);
+    display:flex;flex-direction:column;justify-content:center;gap:8px;cursor:pointer;
+    font-family:var(--mono);-webkit-tap-highlight-color:transparent}
+  .tapzone.left{left:0;align-items:flex-start;padding-left:16px}
+  .tapzone.right{right:0;align-items:flex-end;padding-right:16px}
+  .tapzone-glyph{font-size:32px;line-height:1;opacity:.5}
+  .tapzone-sub{font-size:10px;letter-spacing:.12em;color:rgba(245,244,239,.42)}
+  .tapzone:active{background:rgba(245,244,239,.05)}
 
-  /* 今のグループ（大・明るい） */
-  .fs-now{
-    position:relative;
-    display:flex; align-items:baseline; justify-content:space-between; gap:14px;
-    padding:14px 16px 14px 18px;
-    background:rgba(245,244,239,.05);
-    border:1px solid rgba(245,244,239,.14);
-  }
-  .fs-now::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--signal)}
-  .fs-now-name{
-    font-family:var(--display); font-weight:700; font-size:clamp(38px,13vw,60px); line-height:.9;
-    letter-spacing:.01em; color:var(--panel);
-  }
-  .fs-now-meta{display:flex; align-items:baseline; gap:12px; flex:0 0 auto}
-  .fs-now-sig{font-family:var(--mono); font-size:22px; color:var(--brass); font-variant-numeric:tabular-nums}
-  .fs-now-reps{font-family:var(--mono); font-size:18px; color:rgba(245,244,239,.75); font-variant-numeric:tabular-nums}
+  .hud-pause{position:absolute;left:50%;bottom:calc(env(safe-area-inset-bottom) + 14px);transform:translateX(-50%);
+    width:60px;height:60px;border-radius:50%;border:1.5px solid rgba(245,244,239,.5);
+    background:rgba(25,28,24,.35);backdrop-filter:blur(2px);color:var(--panel);
+    display:flex;align-items:center;justify-content:center;font-size:24px;line-height:1;cursor:pointer;
+    -webkit-tap-highlight-color:transparent;transition:transform 90ms ease,background 120ms ease}
+  .hud-pause:active{transform:translateX(-50%) scale(.93)}
+  .hud.is-paused .hud-pause{border-color:var(--signal);background:rgba(196,54,42,.2);color:#FFF}
 
-  /* 次のグループ（控えめ・薄く） */
-  .fs-next{
-    display:flex; align-items:baseline; gap:12px;
-    padding:14px 18px 0;
-    color:var(--dim); opacity:.72;
-  }
-  .fs-next-tag{font-family:var(--mono); font-size:12px; letter-spacing:.16em; color:var(--dim)}
-  .fs-next-name{font-family:var(--display); font-weight:600; font-size:26px; line-height:1; color:rgba(245,244,239,.62)}
-  .fs-next-sig{font-family:var(--mono); font-size:14px; color:var(--dim); margin-left:auto; font-variant-numeric:tabular-nums}
+  .hud-close{position:absolute;top:calc(env(safe-area-inset-top) + 12px);right:16px;
+    width:42px;height:42px;border:1px solid rgba(245,244,239,.4);background:rgba(245,244,239,.06);color:var(--panel);
+    font-family:var(--mono);font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .hud-close:active{transform:translate(1px,1px)}
 
-  /* pulse表示（下部）— 既存 .pulse / .beats を拡大 */
-  .fs-pulse-wrap{margin-top:auto; padding-top:22px}
-  .fs-pulse{
-    display:flex; align-items:baseline; gap:10px;
-    font-family:var(--mono); font-size:13px; letter-spacing:.08em; color:rgba(245,244,239,.55);
-    margin-bottom:16px;
-  }
-  .fs-pulse i{font-style:normal; color:var(--brass)}
-  .fs-beats{display:flex; flex-wrap:wrap; gap:14px; align-items:center}
-  .fs-beat{
-    width:22px; height:22px; border:1.5px solid rgba(245,244,239,.5); border-radius:50%;
-    transition:background 60ms linear, transform 60ms linear;
-  }
-  .fs-beat.first{border-color:var(--brass); box-shadow:inset 0 0 0 3px rgba(142,113,50,.32)}
-  .fs-beat.on{background:var(--signal); border-color:var(--signal); transform:scale(1.35)}
-  .fs-beat.first.on{background:var(--brass); border-color:var(--brass); box-shadow:none}
+  /* シークフラッシュ（＋10秒 等）— 既存 .tap-flash 相当 */
+  .hud-flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-family:var(--display);font-size:72px;font-weight:700;color:#FFF;letter-spacing:.02em;
+    text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
+  .hud-flash.show{opacity:1;transition:opacity 60ms ease}
 
-  /* ===== モック操作用の小さなデモバー（本番では存在しない） ===== */
-  .demo-bar{
-    position:fixed; left:12px; top:calc(env(safe-area-inset-top) + 10px); z-index:20;
-    display:flex; gap:8px; align-items:center;
-    background:rgba(25,28,24,.82); border:1px solid rgba(245,244,239,.25);
-    padding:7px 10px; backdrop-filter:blur(4px);
-  }
-  .demo-bar span{font-family:var(--mono); font-size:9px; letter-spacing:.14em; color:rgba(245,244,239,.55); text-transform:uppercase}
-  .demo-bar button{
-    font-family:var(--mono); font-size:11px; color:var(--panel);
-    background:rgba(245,244,239,.08); border:1px solid rgba(245,244,239,.3);
-    padding:6px 10px; cursor:pointer;
-  }
+  /* ===== モック操作用デモバー（本番には無い） ===== */
+  .demo-bar{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:30;
+    display:flex;gap:7px;align-items:center;background:rgba(25,28,24,.85);border:1px solid rgba(245,244,239,.25);padding:6px 9px}
+  .demo-bar span{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:rgba(245,244,239,.5);text-transform:uppercase}
+  .demo-bar button{font-family:var(--mono);font-size:10.5px;color:var(--panel);background:rgba(245,244,239,.08);border:1px solid rgba(245,244,239,.3);padding:5px 8px;cursor:pointer}
   .demo-bar button:active{transform:translateY(1px)}
-  @media (prefers-reduced-motion:reduce){.fs-beat,.fs-pad-icon,.fs-flash{transition:none}}
+
+  /* 縦向きのときは横向きを促す（本実装の回転案内イメージ） */
+  .rotate-hint{position:fixed;inset:0;z-index:40;background:var(--ink);color:rgba(245,244,239,.7);
+    display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:var(--mono);font-size:13px;letter-spacing:.1em}
+  .rotate-hint .ic{font-size:44px}
+  @media (orientation:portrait){ .rotate-hint{display:flex} }
+  @media (prefers-reduced-motion:reduce){.beat,.hud-pause,.hud-flash,.fbar,.track{transition:none}}
+  :focus-visible{outline:2px solid var(--signal);outline-offset:2px}
 </style>
 </head>
 <body>
 
-<!-- ============ 全画面ビュー（モック） ============ -->
-<div class="fs" id="fs">
+<div class="hud" id="hud">
 
-  <button class="fs-close" aria-label="全画面を解除">✕</button>
+  <!-- 下レイヤー：主コンテンツ（タップは透過） -->
+  <div class="layer-content">
 
-  <!-- 上段：再生パッド（透過） -->
-  <div class="fs-pad" id="pad">
-    <button class="fs-zone" aria-label="5秒ずつ戻す">
-      <span class="fs-zone-glyph">⏪</span>
-      <span class="fs-zone-sub">5秒ずつ戻す</span>
-    </button>
-    <button class="fs-pad-center" aria-label="一時停止・再開">
-      <span class="fs-pad-icon" id="padIcon">⏸</span>
-    </button>
-    <button class="fs-zone" aria-label="5秒ずつ送る">
-      <span class="fs-zone-glyph">⏩</span>
-      <span class="fs-zone-sub">5秒ずつ送る</span>
-    </button>
-    <div class="fs-flash" id="flash">＋10秒</div>
-  </div>
+    <div class="hud-top">
+      <div class="hud-group">
+        <span class="bar"></span>
+        <span class="name">A メロ</span>
+      </div>
+      <div class="hud-rep"><span id="repNow">7</span><span class="of"> / 9</span></div>
+    </div>
 
-  <!-- 下段：演奏情報 -->
-  <div class="fs-info">
+    <div class="center">
+      <div class="strip-wrap">
+        <div class="track" id="track"><!-- 小節タイルはJSで生成 --></div>
+      </div>
 
-    <div class="fs-label">今演奏中</div>
-
-    <div class="fs-now">
-      <div class="fs-now-name">A メロ</div>
-      <div class="fs-now-meta">
-        <span class="fs-now-sig">4/4</span>
-        <span class="fs-now-reps" id="reps">1/2</span>
+      <div class="hud-pulse">
+        <div class="beats" id="beats"><!-- 拍ドットはJSで生成 --></div>
+        <div class="hud-meter"><i id="meterSig">7/8</i> · <span id="meterName">八分音符</span></div>
       </div>
     </div>
 
-    <div class="fs-next">
-      <span class="fs-next-tag">次 ›</span>
-      <span class="fs-next-name">サ ビ</span>
-      <span class="fs-next-sig">3/4</span>
+    <div class="hud-next">
+      <span class="tag">次 ›</span>
+      <span class="nm">サビ前</span>
+      <span class="rp">×2</span>
     </div>
-
-    <div class="fs-pulse-wrap">
-      <div class="fs-pulse"><i>4/4</i> · 四分音符</div>
-      <div class="fs-beats" id="beats">
-        <div class="fs-beat first on"></div>
-        <div class="fs-beat"></div>
-        <div class="fs-beat"></div>
-        <div class="fs-beat"></div>
-      </div>
-    </div>
-
   </div>
+
+  <!-- 上レイヤー：透過パッド操作（映像なし） -->
+  <div class="layer-ctl">
+    <button class="tapzone left" aria-label="5秒ずつ戻す">
+      <span class="tapzone-glyph">⏪</span>
+      <span class="tapzone-sub">5秒ずつ戻す</span>
+    </button>
+    <button class="tapzone right" aria-label="5秒ずつ送る">
+      <span class="tapzone-glyph">⏩</span>
+      <span class="tapzone-sub">5秒ずつ送る</span>
+    </button>
+    <button class="hud-pause" id="pause" aria-label="一時停止・再開">⏸</button>
+    <button class="hud-close" aria-label="全画面を解除">✕</button>
+  </div>
+
+  <div class="hud-flash" id="flash">＋10秒</div>
 </div>
 
-<!-- ============ モック操作用（本番には無い） ============ -->
+<!-- 縦向き回転案内（本実装の回転ガードのイメージ） -->
+<div class="rotate-hint"><div class="ic">⟳</div><div>横向きにしてください</div></div>
+
+<!-- モック操作用（本番には無い） -->
 <div class="demo-bar">
   <span>demo</span>
-  <button id="btnPlay">再生/一時停止</button>
+  <button id="btnBar">小節を進める</button>
   <button id="btnBeat">拍を進める</button>
+  <button id="btnPause">一時停止</button>
   <button id="btnFlash">シーク表示</button>
 </div>
 
 <script>
-  /* このスクリプトはモックの状態切替デモ専用です（本番ロジックとは無関係）。
-     本実装では TransportView.setBeatDot / paintBeats・TapPadView などが担当します。 */
-  var pad = document.getElementById('pad');
-  var padIcon = document.getElementById('padIcon');
-  var beats = Array.prototype.slice.call(document.querySelectorAll('#beats .fs-beat'));
+  /* モックの状態切替デモ専用。本番では TransportView.highlight / setBeatDot /
+     paintBeats・TapPadView などが担当します。 */
+
+  // Aメロのリズムパターン（ダミー小節列）
+  var RHYTHMS = [
+    {num:4,den:4},{num:4,den:4},{num:4,den:4},{num:4,den:4},
+    {num:7,den:8},{num:8,den:8},{num:4,den:4},{num:4,den:4},{num:6,den:8}
+  ];
+  var NOTE_NAME = {2:"二分音符",4:"四分音符",8:"八分音符",16:"十六分音符"};
+
+  var track = document.getElementById('track');
+  var beatsEl = document.getElementById('beats');
+  var meterSig = document.getElementById('meterSig');
+  var meterName = document.getElementById('meterName');
+  var hud = document.getElementById('hud');
+  var pauseBtn = document.getElementById('pause');
   var flash = document.getElementById('flash');
-  var cur = 0, paused = false;
 
-  document.getElementById('btnPlay').addEventListener('click', function(){
-    paused = !paused;
-    pad.classList.toggle('is-paused', paused);
-    padIcon.textContent = paused ? '▶' : '⏸';
+  var curBar = 4;   // 現在小節（0始まり）
+  var curBeat = 0;  // 現在拍
+  var paused = false;
+
+  // 小節タイルを生成
+  RHYTHMS.forEach(function(r,i){
+    var el = document.createElement('div');
+    el.className = 'fbar';
+    el.setAttribute('data-bi', i);
+    el.innerHTML = '<span class="numer">'+r.num+'</span><span class="den">'+r.den+'</span>';
+    track.appendChild(el);
   });
+  var tiles = Array.prototype.slice.call(track.children);
 
-  document.getElementById('btnBeat').addEventListener('click', function(){
-    beats[cur].classList.remove('on');
-    cur = (cur + 1) % beats.length;
-    beats.forEach(function(b,i){ b.classList.toggle('on', i === cur); });
+  function renderBar(){
+    tiles.forEach(function(el,i){
+      el.classList.toggle('now', i === curBar);
+      el.classList.toggle('done', i < curBar);
+    });
+    // 現在小節を中央へ
+    var el = tiles[curBar];
+    var center = track.parentElement.clientWidth / 2;
+    var barCenter = el.offsetLeft + el.offsetWidth / 2;
+    track.style.transform = 'translateX(' + (center - barCenter) + 'px)';
+    // pulse を現在小節に合わせる
+    var r = RHYTHMS[curBar];
+    meterSig.textContent = r.num + '/' + r.den;
+    meterName.textContent = NOTE_NAME[r.den] || '';
+    curBeat = 0;
+    paintBeats(r.num);
+  }
+  function paintBeats(n){
+    beatsEl.innerHTML = '';
+    for (var i=0;i<n;i++){
+      var b = document.createElement('div');
+      b.className = 'beat' + (i===0?' first':'') + (i===curBeat?' on':'');
+      beatsEl.appendChild(b);
+    }
+  }
+  function stepBeat(){
+    var dots = beatsEl.children;
+    if (!dots.length) return;
+    dots[curBeat].classList.remove('on');
+    curBeat = (curBeat + 1) % dots.length;
+    dots[curBeat].classList.toggle('on', true);
+    dots[curBeat].classList.toggle('first', curBeat===0);
+  }
+
+  document.getElementById('btnBar').addEventListener('click', function(){
+    curBar = (curBar + 1) % RHYTHMS.length; renderBar();
   });
-
+  document.getElementById('btnBeat').addEventListener('click', stepBeat);
+  function togglePause(){ paused = !paused; hud.classList.toggle('is-paused', paused); pauseBtn.textContent = paused ? '▶' : '⏸'; }
+  document.getElementById('btnPause').addEventListener('click', togglePause);
+  pauseBtn.addEventListener('click', togglePause);
   document.getElementById('btnFlash').addEventListener('click', function(){
-    flash.textContent = '＋10秒';
-    flash.classList.add('show');
+    flash.textContent = '＋10秒'; flash.classList.add('show');
     setTimeout(function(){ flash.classList.remove('show'); }, 700);
   });
+
+  window.addEventListener('resize', renderBar);
+  renderBar();
 </script>
 </body>
 </html>
