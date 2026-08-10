@@ -274,7 +274,23 @@
     display:flex;flex-direction:column;overflow:hidden;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 
-  .fs-top{flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
+  /* 画面の左半分／右半分を大きなタップゾーンに（矢印ボタンに加えて）。
+     上部バー（タイムライン・✕）と下部の操作ボタンは z:2 で前面に置き、タップを取り合わない */
+  .fs-tapzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;width:50%;z-index:1;
+    border:none;background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent;
+    display:flex;align-items:center;justify-content:center}
+  .fs-tapzone.left{left:0} .fs-tapzone.right{right:0}
+  .fs-tapzone:active{background:rgba(245,244,239,.05)}
+  /* タップ可能なことを示す控えめなヒント矢印（中央のパターンと重ならないよう外側に薄く） */
+  .fs-tapzone .fs-hint{font-family:var(--mono);font-size:clamp(20px,6dvh,26px);color:rgba(245,244,239,.14);
+    transition:color 120ms ease}
+  .fs-tapzone.left .fs-hint{margin-right:auto;padding-left:clamp(6px,2vw,18px)}
+  .fs-tapzone.right .fs-hint{margin-left:auto;padding-right:clamp(6px,2vw,18px)}
+  .fs-tapzone:active .fs-hint{color:rgba(245,244,239,.4)}
+  .fs-overlay.no-seek .fs-tapzone{pointer-events:none}
+  .fs-overlay.no-seek .fs-tapzone .fs-hint{display:none}
+
+  .fs-top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
     padding:clamp(8px,2.4dvh,12px) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
   .fs-rep{flex:0 0 auto;font-family:var(--mono);font-size:clamp(12px,3.6dvh,15px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
@@ -325,7 +341,7 @@
   .fs-beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.4)}
   .fs-beat.first.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
-  .fs-controls{flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
+  .fs-controls{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;justify-content:center;gap:clamp(18px,5vw,30px);
     padding:clamp(4px,1.4dvh,8px) 16px clamp(8px,2.6dvh,14px)}
   .fs-ctl{display:flex;flex-direction:column;align-items:center;gap:clamp(3px,1dvh,5px);
     background:transparent;border:none;color:var(--panel);cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -347,7 +363,7 @@
     border-width:clamp(9px,2.7dvh,13px) 0 clamp(9px,2.7dvh,13px) clamp(15px,4.5dvh,22px);
     border-color:transparent transparent transparent currentColor;margin-left:clamp(3px,1dvh,4px)}
 
-  .fs-flash{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  .fs-flash{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;
     font-family:var(--display);font-size:clamp(44px,14dvh,72px);font-weight:700;color:#FFF;letter-spacing:.02em;
     text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
   .fs-flash.show{opacity:1;transition:opacity 60ms ease}
@@ -484,6 +500,10 @@
 
 <!-- ============ 全画面モード（横画面 練習HUD）。裏側は既存の Transport / VideoPadService を再利用 ============ -->
 <div class="fs-overlay" id="fsOverlay" hidden>
+  <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印ボタンに加えた大きなタップ領域） -->
+  <button class="fs-tapzone left" id="fsTapL" type="button" aria-label="タップで5秒戻す"><span class="fs-hint">◁</span></button>
+  <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
+
   <div class="fs-top">
     <div class="fs-rep" id="fsRep"></div>
     <div class="fs-timeline" id="fsTimeline"></div>
@@ -2547,6 +2567,7 @@
       el.beats=$("fsBeats"); el.meter=$("fsMeter"); el.rep=$("fsRep");
       el.play=$("fsPlay"); el.playGlyph=$("fsPlayGlyph"); el.playSub=$("fsPlaySub");
       el.seekL=$("fsSeekL"); el.seekR=$("fsSeekR"); el.flash=$("fsFlash");
+      el.tapL=$("fsTapL"); el.tapR=$("fsTapR");
       el.close=$("fsClose"); el.btn=$("fsBtn");
     }
     // いま表示すべき文脈：再生中は現在グループ／小節、停止中は選択（or 先頭）グループのプレビュー
@@ -2623,6 +2644,7 @@
       const canSeek = hasVideo && VideoPadService.active();
       el.seekL.classList.toggle("disabled", !canSeek);
       el.seekR.classList.toggle("disabled", !canSeek);
+      el.overlay.classList.toggle("no-seek", !canSeek);   // 左右ハーフのタップも同時に有効/無効
     }
     // タイムライン・フォーカス帯・周回を現在状態に同期（毎バー・開いた時に呼ばれる）
     function sync(){
@@ -2700,6 +2722,8 @@
       el.close.addEventListener("click", close);
       el.seekL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });
       el.seekR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });
+      el.tapL.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(-1); });   // 左半分タップ
+      el.tapR.addEventListener("pointerdown", e=>{ e.preventDefault(); seek(1); });    // 右半分タップ
       el.play.addEventListener("pointerdown", e=>{ e.preventDefault(); center(); });
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
       window.addEventListener("resize", ()=>{ if(opened) centerCurrent(Transport.running() ? Transport.cur().bar : 0); });
