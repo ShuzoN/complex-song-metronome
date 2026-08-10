@@ -179,14 +179,13 @@
   .g-reps{display:flex;align-items:center;gap:6px}
   .g-reps .x{font-family:var(--display);font-size:20px;color:var(--brass);line-height:1}
   .g-reps input{width:58px;height:32px;font-size:13px}
-  /* 「グループ再生 | 5秒前再生」ペア。展開したカード内。フラットベージュで等幅、隣接罫線が区切り「|」に */
-  .g-play{margin-top:2px;margin-bottom:0;display:grid;grid-template-columns:1fr 1fr;gap:0}
-  .g-solo,.g-lead{height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
+  /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・全幅 */
+  .g-play{margin-top:2px;margin-bottom:0}
+  .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
     font-family:var(--mono);font-size:12px;letter-spacing:.04em}
-  .g-lead{border-left:none}
-  .g-solo.on,.g-lead.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
-  .g-solo:disabled,.g-lead:disabled{opacity:.35;cursor:default}
-  .g-solo:not(:disabled):active,.g-lead:not(:disabled):active{transform:translateY(1px)}
+  .g-solo.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
+  .g-solo:disabled{opacity:.35;cursor:default}
+  .g-solo:not(:disabled):active{transform:translateY(1px)}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
@@ -230,7 +229,7 @@
 
   body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
-  /* 選択中（グループ単体再生／5秒前再生の対象）カードの表示 */
+  /* 選択中（グループ単体再生の対象）カードの表示 */
   .group.selected{border-color:var(--signal)}
   .group.selected::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--signal)}
 
@@ -2166,20 +2165,14 @@
         body.appendChild(PatternView.bars(g));
         body.appendChild(PatternView.picker(g));
 
-        /* 「グループ再生 | 5秒前再生」を常にペアで表示。展開したこのグループを対象に再生し、再生中も
-           このカードは畳まず、同じボタンで停止できるトグルにする（対象＝soloTarget()=activeId＝このグループ）。
-           5秒前再生は動画＋記録位置（cue）があるときだけ有効。裏側は全体再生と同じ Transport。 */
+        /* グループ再生（solo）トグル。展開したこのグループを対象に再生し、再生中もこのカードは畳まず、
+           同じボタンで停止できる（対象＝soloTarget()=activeId＝このグループ）。裏側は全体再生と同じ Transport。 */
         const prow = document.createElement("div");
         prow.className = "g-row g-play";
         const hasBars = g.pattern.rhythms.length > 0;
-        const arm = Transport.armKind();
-        const busy = running || !!arm;                       // 何か再生／準備中
-        const cued = VideoGateway.ready() && g.cue != null;
-        // このカード（＝activeId のグループ）が solo / lead で稼働中か。稼働中はボタンを「停止」トグルに
-        const soloOn = (running && Transport.mode() === "solo" && Transport.soloId() === g.id) || arm === "solo";
-        const leadOn = (running && Transport.mode() === "lead" && Transport.soloId() === g.id) || arm === "lead";
-        const toggle = kind => Transport.armKind() ? Transport.armCancel()
-                             : (Transport.running() ? Transport.stop(false) : Transport.start(kind));
+        const busy = running || !!Transport.armKind();       // 何か再生／準備中
+        // このカード（＝activeId のグループ）が solo で稼働中か。稼働中はボタンを「停止」トグルに
+        const soloOn = (running && Transport.mode() === "solo" && Transport.soloId() === g.id) || Transport.armKind() === "solo";
 
         const solo = document.createElement("button");
         solo.type = "button"; solo.className = "g-solo";
@@ -2187,21 +2180,9 @@
         solo.classList.toggle("on", soloOn);
         solo.disabled = soloOn ? false : (busy || !hasBars);
         solo.title = soloOn ? "停止" : hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
-        solo.addEventListener("click", ()=> toggle("solo"));
+        solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel()
+                             : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
         prow.appendChild(solo);
-
-        const lead = document.createElement("button");
-        lead.type = "button"; lead.className = "g-lead";
-        lead.textContent = leadOn ? "停止" : "5秒前再生";
-        lead.classList.toggle("on", leadOn);
-        lead.disabled = leadOn ? false : (busy || !hasBars || !cued);
-        lead.title = leadOn ? "停止"
-          : !hasBars ? "拍子を1つ以上追加してください"
-          : !VideoGateway.ready() ? "動画を読み込むと使えます"
-          : g.cue == null ? "このグループに動画位置が記録されていません（全体レックで記録）"
-          : "記録位置の5秒前から流して、記録位置でメトロノームを開始します";
-        lead.addEventListener("click", ()=> toggle("lead"));
-        prow.appendChild(lead);
         body.appendChild(prow);
         card.appendChild(body);
       }
