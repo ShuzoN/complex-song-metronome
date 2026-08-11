@@ -166,13 +166,13 @@
   .g-title{flex:1 1 90px;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .g-times{font-family:var(--mono);font-size:11.5px;color:var(--brass);white-space:nowrap;letter-spacing:.04em}
   .group.playing .g-times{color:var(--signal)}
-  /* 折りたたみ時、カード右上に BPM バッジを表示（可変BPM曲の区間判別用）。再生回数(×N)は従来位置のまま */
+  /* 折りたたみ時、タイトルと同じヘッダー行に BPM バッジを右寄せ表示（可変BPM曲の区間判別用）。
+     flex 行に置くので、タイトルと横（右寄せ）だけでなく縦（中央）も揃う。再生回数(×N)は従来位置のまま */
   /* 固有BPM／基準追従で見た目は変えない（値は同じ箱表示）。own クラスは追従更新の判定用にのみ使う */
-  .g-bpm-tag{position:absolute;top:8px;right:10px;display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.02em;white-space:nowrap}
+  .g-bpm-tag{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.02em;white-space:nowrap}
   .g-bpm-tag .v{border:1px solid var(--rule);background:#FAF9F5;padding:1px 5px;font-size:11px;font-weight:400;color:var(--ink)}   /* 値は箱（枠）で囲む */
   .group.playing .g-bpm-tag{color:var(--signal)}
   .group.playing .g-bpm-tag .v{border-color:var(--signal);color:var(--signal)}
-  .group:not(.active) .g-head{padding-right:78px}          /* 右上バッジのぶんだけ名前側に余白を確保 */
 
   .g-sub{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 9px 9px 41px}
   .g-sub .g-times{margin-left:auto;font-size:12px}
@@ -2179,6 +2179,18 @@
         title.className = "g-title";
         title.textContent = g.name;
         head.appendChild(title);
+
+        // このブロックの実効BPM（g.bpm があればそれ、無ければ基準テンポに追従）をタイトルと同じ行に右寄せ表示。
+        // ヘッダーの flex 行に入れることで、タイトルと横（右寄せ）だけでなく縦（中央）も揃う
+        const own = g.bpm != null;
+        const bpmTag = document.createElement("span");
+        bpmTag.className = "g-bpm-tag" + (own ? " own" : "");
+        bpmTag.dataset.role = "bpm";
+        bpmTag.title = own ? "このグループ固有のBPM" : "基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従中のBPM";
+        const bpmLabel = document.createElement("span"); bpmLabel.textContent = "bpm";
+        const bpmVal = document.createElement("b"); bpmVal.className = "v"; bpmVal.textContent = Fmt.bpm(Domain.effectiveBpm(g, st.bpm));
+        bpmTag.append(bpmLabel, bpmVal);
+        head.appendChild(bpmTag);
       }
       card.appendChild(head);
 
@@ -2199,17 +2211,6 @@
         times.textContent = Fmt.times(g);
         sub.appendChild(times);          // ×N は従来どおり拍子チップ行に右寄せ（変更なし）
         card.appendChild(sub);
-
-        // このブロックの実効BPM（g.bpm があればそれ、無ければ基準テンポに追従）をカード右上にバッジ表示
-        const own = g.bpm != null;
-        const bpmTag = document.createElement("span");
-        bpmTag.className = "g-bpm-tag" + (own ? " own" : "");
-        bpmTag.dataset.role = "bpm";
-        bpmTag.title = own ? "このグループ固有のBPM" : "基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従中のBPM";
-        const bpmLabel = document.createElement("span"); bpmLabel.textContent = "bpm";
-        const bpmVal = document.createElement("b"); bpmVal.className = "v"; bpmVal.textContent = Fmt.bpm(Domain.effectiveBpm(g, st.bpm));
-        bpmTag.append(bpmLabel, bpmVal);
-        card.appendChild(bpmTag);        // card 直下＝右上へ絶対配置
       }
 
       /* active body */
