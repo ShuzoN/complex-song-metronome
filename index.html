@@ -295,10 +295,16 @@
 
   /* 画面の左半分／右半分を大きなタップゾーンに（矢印ボタンに加えて）。
      上部バー（タイムライン・✕）と下部の操作ボタンは z:2 で前面に置き、タップを取り合わない */
-  .fs-tapzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;width:50%;z-index:1;
+  /* 左右のシークは画面端の 1/3 ずつに絞る（中央 1/3 は帯スクロール専用ゾーンに譲る）。 */
+  .fs-tapzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;width:33.333%;z-index:1;
     border:none;background:transparent;cursor:pointer;-webkit-tap-highlight-color:transparent;
     display:flex;align-items:center;justify-content:center}
   .fs-tapzone.left{left:0} .fs-tapzone.right{right:0}
+  /* 中央 1/3（全高）：帯（カルーセル）を横ドラッグでスクロールする専用ゾーン。左右のシークと領域が重ならない。 */
+  .fs-scrollzone{position:absolute;top:calc(env(safe-area-inset-top) + clamp(40px,11dvh,52px));bottom:0;
+    left:33.333%;width:33.334%;z-index:1;background:transparent;cursor:grab;
+    touch-action:none;-webkit-tap-highlight-color:transparent}
+  .fs-scrollzone:active{cursor:grabbing}
   .fs-tapzone:active{background:rgba(245,244,239,.05)}
   /* タップ可能なことを示す控えめなヒント矢印（中央のパターンと重ならないよう外側に薄く） */
   .fs-tapzone .fs-hint{font-family:var(--mono);font-size:clamp(20px,6dvh,26px);color:rgba(245,244,239,.14);
@@ -344,11 +350,9 @@
 
   .fs-center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;
     gap:clamp(8px,2.6dvh,16px);min-height:0;overflow:hidden}
-  /* 帯は横スワイプでスクロールできるカルーセル。タップゾーン（z:1）より前面に置き、
-     指のパンを受け取る。スクロールバーは隠し、両端はマスクでフェード。 */
-  .fs-strip-wrap{flex:0 0 auto;position:relative;z-index:2;display:flex;align-items:center;
-    height:clamp(84px,34dvh,150px);overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
-    scroll-snap-type:x proximity;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+  /* 帯は表示専用（操作は中央スクロールゾーンが担当）。スクロールバーは隠し、両端はマスクでフェード。 */
+  .fs-strip-wrap{flex:0 0 auto;position:relative;z-index:2;display:flex;align-items:center;pointer-events:none;
+    height:clamp(84px,34dvh,150px);overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:none;
     -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
             mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
   .fs-strip-wrap::-webkit-scrollbar{display:none}
@@ -555,9 +559,10 @@
   <!-- ✕ はオーバーレイ直下に置き、常に最前面（z:60）で固定表示する -->
   <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
 
-  <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印ボタンに加えた大きなタップ領域） -->
+  <!-- 左1/3＝5秒戻す／右1/3＝5秒送る／中央1/3（全高）＝帯（カルーセル）の横スクロール専用 -->
   <button class="fs-tapzone left" id="fsTapL" type="button" aria-label="タップで5秒戻す"><span class="fs-hint">◁</span></button>
   <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
+  <div class="fs-scrollzone" id="fsScroll" aria-hidden="true"></div>
 
   <div class="fs-top">
     <div class="fs-timeline" id="fsTimeline"></div>
@@ -2806,7 +2811,7 @@
       el.beats=$("fsBeats"); el.meter=$("fsMeter"); el.rep=$("fsRep");
       el.play=$("fsPlay"); el.playGlyph=$("fsPlayGlyph"); el.playSub=$("fsPlaySub");
       el.seekL=$("fsSeekL"); el.seekR=$("fsSeekR"); el.flash=$("fsFlash");
-      el.tapL=$("fsTapL"); el.tapR=$("fsTapR");
+      el.tapL=$("fsTapL"); el.tapR=$("fsTapR"); el.scrollZone=$("fsScroll");
       el.close=$("fsClose"); el.rotateClose=$("fsRotateClose"); el.btn=$("fsBtn");
     }
     // いま表示すべき文脈：再生中は現在グループ／小節、停止中は選択（or 先頭）グループのプレビュー
@@ -2880,6 +2885,20 @@
       const left = Math.max(0, t.offsetLeft + t.offsetWidth/2 - wrap.clientWidth/2);
       try{ wrap.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
       catch(_){ wrap.scrollLeft = left; }
+    }
+    // ドラッグ終了時、中央に一番近い小節タイルへ吸着（カルーセルのスナップ）
+    function snapNearest(){
+      const wrap = el.track.parentElement;
+      const mid = wrap.scrollLeft + wrap.clientWidth/2;
+      let best = null, bestD = Infinity;
+      [...el.track.children].forEach(t=>{
+        if(!t.classList.contains("fs-fbar")) return;
+        const c = t.offsetLeft + t.offsetWidth/2, d = Math.abs(c - mid);
+        if(d < bestD){ bestD = d; best = t; }
+      });
+      if(!best) return;
+      const left = Math.max(0, best.offsetLeft + best.offsetWidth/2 - wrap.clientWidth/2);
+      try{ wrap.scrollTo({left, behavior:"smooth"}); }catch(_){ wrap.scrollLeft = left; }
     }
     // 上部タイムライン（セクションバー）を、現在セクションが見えるように横スクロール。手動スワイプ中は止める。
     function scrollTimeline(force, instant){
@@ -3026,25 +3045,26 @@
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
-      // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
-      // 動かさずに軽くタップした時だけ（左半分＝5秒戻す／右半分＝5秒送る）シークにフォールバックする。
+      // 中央 1/3 ゾーンを横ドラッグ → 帯（カルーセル）をスクロール。左右 1/3 のシークとは
+      // 領域が分かれるので、スワイプがシークに吸われない。手で動かしている間は自動追従を一時停止し、
+      // 指を離したら中央に一番近い小節へ吸着する。
       const strip = el.track.parentElement;
-      let tap = null;
+      let drag = null;
       const holdBrowse = ()=>{ userBrowseUntil = performance.now() + 3500; };
-      strip.addEventListener("wheel", holdBrowse, {passive:true});
-      strip.addEventListener("scroll", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointerdown", e=>{ tap = {x:e.clientX, y:e.clientY, t:performance.now()}; holdBrowse(); });
-      strip.addEventListener("pointermove", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointercancel", ()=>{ tap = null; });   // ネイティブのパン開始でキャンセル＝スワイプ扱い
-      strip.addEventListener("pointerup", e=>{
-        if(!tap) return;
-        const dx = Math.abs(e.clientX - tap.x), dy = Math.abs(e.clientY - tap.y), dt = performance.now() - tap.t;
-        tap = null;
-        if(dx < 8 && dy < 8 && dt < 300){          // 動いていない＝タップ → シーク（追従もすぐ戻す）
-          userBrowseUntil = 0;
-          seek(e.clientX < window.innerWidth/2 ? -1 : 1);
-        }
+      el.scrollZone.addEventListener("pointerdown", e=>{
+        drag = {x:e.clientX, sl:strip.scrollLeft};
+        holdBrowse();
+        try{ el.scrollZone.setPointerCapture(e.pointerId); }catch(_){}
       });
+      el.scrollZone.addEventListener("pointermove", e=>{
+        if(!drag) return;
+        strip.scrollLeft = drag.sl - (e.clientX - drag.x);
+        holdBrowse();
+      });
+      const endDrag = ()=>{ if(!drag) return; drag = null; holdBrowse(); snapNearest(); };
+      el.scrollZone.addEventListener("pointerup", endDrag);
+      el.scrollZone.addEventListener("pointercancel", endDrag);
+      el.scrollZone.addEventListener("wheel", e=>{ strip.scrollLeft += (e.deltaX || e.deltaY); holdBrowse(); }, {passive:true});
 
       // 上部タイムライン（セクションバー）も横スワイプで移動でき、手で動かした直後は追従を止める。
       // 軽いタップ（＝そのグループへジャンプ）は click ハンドラで処理するため、ここでは抑止しない。
