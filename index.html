@@ -2059,6 +2059,13 @@
         if(t == null || isNaN(t)) t = 0;
         paused = false;
         fitAt(t);
+      },
+      // 全画面のタイムライン・タップ用：指定した動画位置(cue)から全体再生(all)で通し再生する。
+      // 呼び出し側で直前に Transport.stop 済み（timeline クリア）なので、fitAt が all を作り直し、その位置へ寄せて刻み出す。
+      playFrom(videoTime){
+        if(!VideoGateway.ready()) return;
+        paused = false;
+        fitAt(videoTime);
       }
     };
   })();
@@ -2911,15 +2918,20 @@
       if(VideoGateway.ready()) VideoPadService.togglePause();          // 動画あり：tap-pad と同じ統括
       else Transport.running() ? Transport.stop(false) : Transport.start("all");   // 動画なし：全体再生の開始/停止
     }
-    // タイムラインのグループをタップ → そのグループの先頭から再生（現状の「グループ再生」と同じヘッド）。
-    // 全画面を閉じずにグループ間を飛べる。再生中なら一旦止めてから当該グループで開始する。
+    // タイムラインのグループをタップ → そのグループの cue から全体再生(all)で通し再生（以降のグループへ連続）。
+    // 動画なし／cue 未記録のグループは従来どおり単体（solo）で再生。全画面を閉じずにグループ間を飛べる。
     function playGroup(id){
       const g = findGroup(id);
       if(!g || !g.pattern.rhythms.length) return;                     // 空グループは無視
       SoundGateway.ensure();
       if(Transport.running() || Transport.armKind()) Transport.stop(false);
-      Store.apply({activeId: id}, {});                                // solo 対象＝このグループ（stop の後に設定）
-      Transport.start("solo");
+      const cue = (typeof g.cue === "number") ? g.cue : null;
+      if(VideoGateway.ready() && cue != null){
+        VideoPadService.playFrom(cue);                                // cue から全体再生（通し・動画マスター）
+      }else{
+        Store.apply({activeId: id}, {});                              // フォールバック：単体（solo）
+        Transport.start("solo");
+      }
     }
     function open(){
       if(opened) return;
