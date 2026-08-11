@@ -190,6 +190,8 @@
   .g-solo.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
   .g-solo:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active{transform:translateY(1px)}
+  /* × [N] 左の現在周回カウンタ（1 × 8 の形）。solo 再生中はライブ更新（highlight） */
+  .g-repnow{font-family:var(--mono);font-size:13px;color:var(--ink);min-width:14px;text-align:right}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
@@ -2211,12 +2213,18 @@
         lab.className = "g-label"; lab.textContent = "再生回数";
         const reps = document.createElement("div");
         reps.className = "g-reps";
+        // × [N] の左に現在の周回。停止中は「1」、solo 再生中は highlight() がライブ更新（1 × 8 の形）
+        const now = document.createElement("span");
+        now.className = "g-repnow"; now.dataset.role = "repnow";
+        now.title = "現在の周回";
+        const soloNow = running && Transport.mode() === "solo" && Transport.soloId() === g.id;
+        now.textContent = soloNow ? (Transport.cur().rep + 1) : 1;
         const x = document.createElement("span"); x.className="x"; x.textContent="×";
         const rin = document.createElement("input");
         rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
         rin.setAttribute("aria-label","再生回数");
         rin.addEventListener("change", ()=>GroupService.setReps(g.id, rin.value));
-        reps.append(x, rin);
+        reps.append(now, x, rin);
         row.append(lab, reps);
         body.appendChild(row);
 
@@ -2442,6 +2450,9 @@
         if(t && g){
           t.textContent = on ? (cur.rep+1) + " / " + g.reps : Fmt.times(g);
         }
+        // 展開カードの × [N] 左の現在周回も同期。solo 再生中だけ周回を進める
+        const rn = card.querySelector('[data-role="repnow"]');
+        if(rn && g) rn.textContent = on ? cur.rep+1 : 1;
       });
     }
     function syncIdle(){
