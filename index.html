@@ -2886,7 +2886,7 @@
       try{ wrap.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
       catch(_){ wrap.scrollLeft = left; }
     }
-    // ドラッグ終了時、中央に一番近い小節タイルへ吸着（カルーセルのスナップ）
+    // ドラッグ終了時、中央に一番近い小節タイルへ吸着（カルーセルのスナップ）。対象タイルを返す
     function snapNearest(){
       const wrap = el.track.parentElement;
       const mid = wrap.scrollLeft + wrap.clientWidth/2;
@@ -2896,9 +2896,26 @@
         const c = t.offsetLeft + t.offsetWidth/2, d = Math.abs(c - mid);
         if(d < bestD){ bestD = d; best = t; }
       });
-      if(!best) return;
+      if(!best) return null;
       const left = Math.max(0, best.offsetLeft + best.offsetWidth/2 - wrap.clientWidth/2);
       try{ wrap.scrollTo({left, behavior:"smooth"}); }catch(_){ wrap.scrollLeft = left; }
+      return best;
+    }
+    // カルーセルが止まった位置のグループに再生位置（現在グループ）も合わせる。
+    //   再生中／準備中 … そのグループへ頭出しして再生を続ける（タイムラインのタップと同じ）
+    //   停止中        … そのグループを選択（次の再生ヘッド）し、HUD プレビューを先頭へ寄せ直す
+    function jumpToTile(tile){
+      if(!tile) return;
+      const gid = tile.dataset.gid;
+      if(!gid) return;
+      if(Transport.running() || Transport.armKind()){
+        if(Transport.running() && Transport.cur() && Transport.cur().gid === gid) return;   // 同じグループなら再スタートしない
+        playGroup(gid);
+      } else {
+        if(Store.getState().activeId !== gid) Store.apply({activeId: gid}, {render:true});
+        userBrowseUntil = 0;   // 追従を解除し、選択グループの先頭へ寄せ直す
+        sync();
+      }
     }
     // 上部タイムライン（セクションバー）を、現在セクションが見えるように横スクロール。手動スワイプ中は止める。
     function scrollTimeline(force, instant){
@@ -3061,10 +3078,14 @@
         strip.scrollLeft = drag.sl - (e.clientX - drag.x);
         holdBrowse();
       });
-      const endDrag = ()=>{ if(!drag) return; drag = null; holdBrowse(); snapNearest(); };
+      const endDrag = ()=>{ if(!drag) return; drag = null; holdBrowse(); jumpToTile(snapNearest()); };
       el.scrollZone.addEventListener("pointerup", endDrag);
       el.scrollZone.addEventListener("pointercancel", endDrag);
-      el.scrollZone.addEventListener("wheel", e=>{ strip.scrollLeft += (e.deltaX || e.deltaY); holdBrowse(); }, {passive:true});
+      let wheelTimer = null;
+      el.scrollZone.addEventListener("wheel", e=>{
+        strip.scrollLeft += (e.deltaX || e.deltaY); holdBrowse();
+        clearTimeout(wheelTimer); wheelTimer = setTimeout(()=>jumpToTile(snapNearest()), 220);
+      }, {passive:true});
 
       // 上部タイムライン（セクションバー）も横スワイプで移動でき、手で動かした直後は追従を止める。
       // 軽いタップ（＝そのグループへジャンプ）は click ハンドラで処理するため、ここでは抑止しない。
