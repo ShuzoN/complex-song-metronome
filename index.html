@@ -1556,6 +1556,14 @@
         while(lo < hi){ const mid = (lo + hi) >> 1; if(ev[mid].vt < vtq) lo = mid + 1; else hi = mid; }
         return lo;
       },
+      // gid の最初のイベント index（そのグループの先頭拍）。無ければ -1。
+      // vt 探索と違い、記録 cue のズレに関係なくタップしたグループの先頭へ確実に着地する。
+      indexOfGroup(gid){
+        if(!frame) return -1;
+        const ev = frame.events;
+        for(let i = 0; i < ev.length; i++){ if(ev[i].gid === gid) return i; }
+        return -1;
+      },
       plan
     };
   })();
@@ -1663,10 +1671,12 @@
     // パッド用：timeline の index 番目の拍（その動画位置 vt）へ寄せ、実到達後に beginPlayback(index) で刻み出す。
     // ボタン再生と同じ pollCue／beginPlayback を共有（空白判定＝実再生フレーム待ち・遅延補正・overshoot 前倒し）。
     const SNAP_LEAD = 0.4;
-    function startAtIndex(index){
+    // anchorVt を渡すと、その動画位置（＝グループの記録 cue）へ厳密に頭出しする。
+    // 省略時は従来どおり timeline の vt（BPM積算値）を使う（パッドの任意位置シーク用）。
+    function startAtIndex(index, anchorVt){
       const ev = PlaybackService.at(index);
       if(!ev){ Transport.clearArm(); return; }   // 対象拍なし（曲末尾より後）→ 動画だけ動かしメトロノームは止めたまま
-      const aim = compensate(ev.vt);
+      const aim = compensate(anchorVt != null ? anchorVt : ev.vt);
       const from = Math.max(0, aim - SNAP_LEAD);
       try{
         VideoGateway.seekTo(from, true);
@@ -2060,12 +2070,21 @@
         paused = false;
         fitAt(t);
       },
-      // 全画面のタイムライン・タップ用：指定した動画位置(cue)から全体再生(all)で通し再生する。
-      // 呼び出し側で直前に Transport.stop 済み（timeline クリア）なので、fitAt が all を作り直し、その位置へ寄せて刻み出す。
-      playFrom(videoTime){
+      // 全画面のタイムライン・タップ用：そのグループの先頭拍から全体再生(all)で通し再生する。
+      // solo と同じく記録 cue へ厳密に頭出しし（vt 探索ではなく gid で先頭拍を引く）、以降のグループへ連続再生する。
+      // 呼び出し側で直前に Transport.stop 済み（timeline クリア）→ ensureTimeline が all を作り直す。
+      playFromGroup(gid){
         if(!VideoGateway.ready()) return;
+        const g = Store.findGroup(gid);
+        if(!g || typeof g.cue !== "number" || !g.pattern.rhythms.length) return;
+        ensureTimeline();                                  // all の timeline を用意
+        const index = PlaybackService.indexOfGroup(gid);   // そのグループの先頭拍（vt 探索より確実）
+        if(index < 0) return;
+        Transport.halt();
         paused = false;
-        fitAt(videoTime);
+        jumpPending = true;
+        VideoSync.startAtIndex(index, g.cue);              // 記録 cue へ寄せ、その index から通し再生
+        view.padUpdate();
       }
     };
   })();
@@ -2927,7 +2946,7 @@
       if(Transport.running() || Transport.armKind()) Transport.stop(false);
       const cue = (typeof g.cue === "number") ? g.cue : null;
       if(VideoGateway.ready() && cue != null){
-        VideoPadService.playFrom(cue);                                // cue から全体再生（通し・動画マスター）
+        VideoPadService.playFromGroup(id);                            // そのグループの先頭拍から全体再生（通し・動画マスター）
       }else{
         Store.apply({activeId: id}, {});                              // フォールバック：単体（solo）
         Transport.start("solo");
