@@ -912,6 +912,30 @@
     frame(fn){ return requestAnimationFrame(fn); }
   };
 
+  /* ---------- VideoClock（動画位置の平滑推定。#36 C1） ----------
+     getCurrentTime は更新が粗く（実測で数百ms粒度）ジッタもあるため、生読みをそのまま追従に使うと
+     発音が暴れる。ここで v(a) = v0 + rate*(a − a0) の線形モデルに低ゲインで位相同期し、連続値を返す。
+     audioTimeFor(vp)=「動画が vp に達する音声時刻」を Follower が先読み予約に使う。observe で実測へ寄せる。 */
+  const VideoClock = (() => {
+    let a0 = 0, v0 = 0, rate = 1, ready = false, lastV = null;
+    const GAIN = 0.2;                                   // 位置補正ゲイン（新しいサンプルごとに err の一部を寄せる）
+    function reset(audioNow, videoPos){ a0 = audioNow; v0 = videoPos; rate = 1; ready = true; lastV = videoPos; }
+    function positionAt(a){ return v0 + rate * (a - a0); }
+    function audioTimeFor(vp){ return a0 + (vp - v0) / rate; }
+    // getCurrentTime は数百ms粒度のサンプルホールド。値が変わった“新しいサンプル”のときだけ補正し、
+    // 間は rate で内挿する（毎tick の階段追いを避け、サブ粒度精度に）。実測で steady 誤差 ~27ms。
+    function observe(audioNow, videoNow){
+      if(!ready){ reset(audioNow, videoNow); return; }
+      if(lastV != null && Math.abs(videoNow - lastV) < 1e-4) return;   // 未更新サンプルは無視
+      lastV = videoNow;
+      const err = videoNow - positionAt(audioNow);      // 実測 − 予測（+ で動画が先行）
+      v0 = positionAt(audioNow) + err * GAIN;           // 予測を実測側へ一部だけ寄せ、基準を now に取り直す
+      a0 = audioNow;                                     // rate は 1 固定（YouTube はほぼ等速。offset 補正で吸収）
+    }
+    function clear(){ ready = false; lastV = null; }
+    return { reset, positionAt, audioTimeFor, observe, clear, isReady: () => ready };
+  })();
+
   /* ---------- FileGateway（保存／読込のブラウザ境界。文字列とやり取りし、DOM メッセージは呼ばない） ---------- */
   const FileGateway = (() => {
     const canSavePicker = typeof window.showSaveFilePicker === "function";
@@ -1378,31 +1402,73 @@
       if(Transport.running() && Transport.isSolo()){ return targetGroups(Transport.mode(), Transport.soloId()); }
       return targetGroups("all", null);
     }
+    // cue駆動 Timeline（再設計 #36 / dev/playback/timeline.mjs で検証済み）。
+    // pass1 で off（基準テンポ累積）と各拍の拍長 dur・rep頭の生cue を敷き、pass2 で vt を cue駆動で写像。
+    // vt は各 rep 頭の記録cueへ寄せ、区間 [cue_n, cue_{n+1}] を音価比で満たす（rep内も動画実時間に沿う）。
+    // 逆順・非増加の記録cueは実効cueを単調クランプ（vt が後退せず indexAtVideo の二分探索が保たれる）。
     function build(groups, bpm){
-      const events = [];
-      let off = 0, vt = 0;                      // off=先頭からの累積秒, vt=動画タイムコード
+      // ---- pass 1: 平坦ビート列（off/dur/gbpm/anchor=rep頭の生cue） ----
+      const beats = [];
+      let off = 0;
       groups.forEach(g => {
         const rc = Array.isArray(g.repCues) ? g.repCues : null;
         const rhythms = g.pattern.rhythms;
-        // gbpm=このグループの個別 BPM（null=基準追従）。off/vt は実効 BPM で積算し、
-        // イベントには gbpm（上書き値 or null）を焼き込む＝スケジューラ側でテンポ追従を保つため
-        const gbpm = (g.bpm != null) ? g.bpm : null;
+        const gbpm = (g.bpm != null) ? g.bpm : null;   // グループ個別 BPM（null=基準追従）。スケジューラの拍長算出用
         const ebpm = Domain.effectiveBpm(g, bpm);
         for(let rep = 0; rep < g.reps; rep++){
-          // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
-          const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-          if(anc != null) vt = Math.max(vt, anc);
+          const rawCue = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
-            const span = Domain.rhythmSeconds(m.den, ebpm);
+            const dur = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
-              events.push(Object.freeze({off, vt, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
-              off += span; vt += span;
+              beats.push({ off, dur, vt: 0, anchor: (bar === 0 && beat === 0) ? rawCue : null,
+                           gid: g.id, gbpm, rep, bar, beat, meter: m, accent: (beat === 0) });
+              off += dur;
             }
           }
         }
       });
-      return Object.freeze({events: Object.freeze(events), dur: off});
+      layVt(beats);
+      const events = beats.map(b => Object.freeze({
+        off: b.off, vt: b.vt, anchor: b.anchor,
+        gid: b.gid, gbpm: b.gbpm, rep: b.rep, bar: b.bar, beat: b.beat, meter: b.meter, accent: b.accent
+      }));
+      return Object.freeze({ events: Object.freeze(events), dur: off });
+    }
+    // ---- pass 2: cue駆動で vt を敷く（rep頭の生cue→単調な実効cue→区間を音価比で配分） ----
+    function layVt(beats){
+      const raw = [];
+      for(let i = 0; i < beats.length; i++) if(beats[i].anchor != null) raw.push({ idx: i, cue: beats[i].anchor });
+      if(raw.length === 0){                                  // cue 皆無：純粋 BPM（vt=off。動画0起点の best effort）
+        for(const b of beats) b.vt = b.off;
+        return;
+      }
+      const anchors = [];                                    // 単調な実効cueへ正規化
+      let prevIdx = raw[0].idx, prevEff = raw[0].cue;
+      beats[prevIdx].anchor = prevEff;
+      anchors.push({ idx: prevIdx, cue: prevEff });
+      for(let k = 1; k < raw.length; k++){
+        const { idx, cue } = raw[k];
+        const bpmDur = beats[idx].off - beats[prevIdx].off;  // 前アンカーからの基準テンポ経過
+        const eff = (cue > prevEff) ? cue : (prevEff + bpmDur);   // 前進しない記録cueは基準テンポで前へ
+        beats[idx].anchor = eff;
+        anchors.push({ idx, cue: eff });
+        prevIdx = idx; prevEff = eff;
+      }
+      const a0 = anchors[0];                                 // 先頭アンカーより前：先頭cueから基準テンポで逆算
+      for(let i = 0; i < a0.idx; i++) beats[i].vt = a0.cue - (beats[a0.idx].off - beats[i].off);
+      for(let k = 0; k < anchors.length - 1; k++){           // アンカー間：実時間 span を音価比で配分
+        const a = anchors[k], b = anchors[k + 1];
+        const span = b.cue - a.cue, totalDur = beats[b.idx].off - beats[a.idx].off;
+        const forward = span > 0 && totalDur > 0;
+        let acc = 0;
+        for(let i = a.idx; i < b.idx; i++){
+          beats[i].vt = forward ? (a.cue + span * (acc / totalDur)) : (a.cue + (beats[i].off - beats[a.idx].off));
+          acc += beats[i].dur;
+        }
+      }
+      const aN = anchors[anchors.length - 1];                // 末尾アンカー以降：基準テンポで外挿
+      for(let i = aN.idx; i < beats.length; i++) beats[i].vt = aN.cue + (beats[i].off - beats[aN.idx].off);
     }
     return {
       // ---- ライフサイクル（書けるのはここだけ） ----
@@ -1428,9 +1494,13 @@
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
     let nextTime = 0, i = 0, finished = false, endTime = 0;
+    // Follower（#36 Stage4）：動画同期時に各拍を「その拍の動画位置(vt)へ達する音声時刻」へ寄せる関数。
+    // Transport が VideoClock 越しに注入する。null なら従来どおり BPM で純粋累積（音のみ／録音）。
+    let followFn = null;
     // イベントの拍長。gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
     // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）
     const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, (e.gbpm != null) ? e.gbpm : Store.getState().bpm);
+    function setFollow(fn){ followFn = (typeof fn === "function") ? fn : null; }
     function resetPointer(){ i = 0; finished = false; }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
@@ -1444,6 +1514,10 @@
       if(!n){ finished = true; endTime = nextTime; return; }
       while(!finished && nextTime < limit){
         const e = PlaybackService.at(i);
+        // 動画追従：この拍の vt へ動画が達する音声時刻へ寄せる（cue駆動 vt を平滑クロックで写像）。
+        // 予測ではなく“いまの動画実位置”基準なので、レート差・バッファがあっても各拍で合い直る。
+        // 読めない/未準備なら寄せず、下の nextTime+=span（BPM）にフォールバック。過去への予約は避ける。
+        if(followFn){ const target = followFn(e.vt); if(target != null) nextTime = Math.max(target, ClockGateway.now() + 0.005); }
         const span = beatSeconds(e);
         SoundGateway.click(e.accent, nextTime, span);
         queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
@@ -1453,7 +1527,7 @@
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump,
+      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump, setFollow,
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
@@ -1461,7 +1535,7 @@
 
   /* ---------- VideoSync（動画の頭出し／助走／cue 記録。VideoGateway を駆動し、頭出し完了で Transport へ戻す） ---------- */
   const VideoSync = (() => {
-    let topWatch = null, cueWatch = null;
+    let cueWatch = null;
     let view = {};
     // 動画同期の遅延補正（秒）。メトロノームの発音は「音声出力遅延 − 動画出力遅延」ぶん
     // 動画より遅れて聞こえるため、記録位置より少し手前を狙って刻み出す＝実音が cue に重なる。
@@ -1475,106 +1549,63 @@
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
     function compensate(cue){ return Math.max(0, cue - CUE_LATENCY); }
-    function cancel(){ topWatch = null; cueWatch = null; }
+    function cancel(){ cueWatch = null; }
 
-    function startFromTop(kind){
-      try{
-        VideoGateway.seekTo(0, true);
-        VideoGateway.play();
-      }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      topWatch = {kind, t0: ClockGateway.perf()};
-      view.status("頭出し中");
-      view.videoMsg("先頭に戻しています…", false);
-      ClockGateway.frame(pollTop);
-    }
-    function pollTop(){
-      if(!topWatch) return;
-      let st = -1, t = null;
-      try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
-      // 先頭から実際に動き出したことを確認してから刻み始める（ここで空白が効く）
-      if(st === 1 && t != null && t > 0.02 && t < 2){
-        const kind = topWatch.kind;
-        topWatch = null; Transport.clearArm();
-        view.videoMsg("", false);
-        Transport.beginPlayback(kind);
-        return;
-      }
-      if(ClockGateway.perf() - topWatch.t0 > 6000){
-        const kind = topWatch.kind;
-        topWatch = null; Transport.clearArm();
-        view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
-        Transport.beginPlayback(kind);
-        return;
-      }
-      ClockGateway.frame(pollTop);
-    }
-    function startAtCue(kind, cue){
-      // aim=実音を cue に重ねる補正位置。fire=そこからカウントイン(前グループ末尾の1〜2小節)ぶん
-      // 手前＝助走の刻み出し位置。
-      const aim = compensate(cue);
-      const fire = Math.max(0, aim - Transport.countInFor(Transport.soloTarget()).dur);
-      const from = fire;
-      try{
-        VideoGateway.seekTo(from, true);     // カウントイン開始点へ頭出し
-        VideoGateway.play();
-      }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
-      cueWatch = {target: fire, from, kind, index: 0, countIn: true, resume: false, jump: false,
-                  t0: ClockGateway.perf(), limit: 6000};
-      view.status("頭出し中");
-      view.videoMsg("頭出し中…", false);
-      ClockGateway.frame(pollCue);
-    }
-    // パッド用：timeline の index 番目の拍（その動画位置 vt）へ寄せ、実到達後に beginPlayback(index) で刻み出す。
-    // ボタン再生と同じ pollCue／beginPlayback を共有（空白判定＝実再生フレーム待ち・遅延補正・overshoot 前倒し）。
-    const SNAP_LEAD = 0.4;
-    function startAtIndex(index){
-      const ev = PlaybackService.at(index);
-      if(!ev){ Transport.clearArm(); return; }   // 対象拍なし（曲末尾より後）→ 動画だけ動かしメトロノームは止めたまま
-      const aim = compensate(ev.vt);
-      const from = Math.max(0, aim - SNAP_LEAD);
+    const HEAD_LEAD = 3.0;   // 全体再生：曲頭の手前へ寄せる余白（実到達を検知するため）
+    const SNAP_LEAD = 0.4;   // パッド／グループ：シーク先の手前余白
+    // 単一の頭出しプリミティブ（#36 I2）：動画を target の手前 lead へ寄せ、実到達を確認してから beginPlayback。
+    // target は「beginPlayback を発火させる動画時刻」＝発音遅延補正・助走ぶんを織り込み済み。全体/グループ/パッド共有。
+    function seekAndArrive(o){
+      const target = Math.max(0, o.target);
+      const from = Math.max(0, target - (o.lead || 0));
+      const index = o.index || 0;
       try{
         VideoGateway.seekTo(from, true);
         VideoGateway.play();
-      }catch(err){ Transport.clearArm(); Transport.beginPlayback("all", {skipWait:true, index, resume:true}); return; }
-      cueWatch = {target: aim, from, kind: "all", index, countIn: false, resume: true, jump: true,
-                  t0: ClockGateway.perf(), limit: (SNAP_LEAD + 8) * 1000};
+      }catch(err){ Transport.clearArm(); Transport.beginPlayback(o.kind, {skipWait:true, index, resume:!!o.resume}); return; }
+      cueWatch = { target, from, kind:o.kind, index, countIn:!!o.countIn, resume:!!o.resume, seeked:false,
+                   t0: ClockGateway.perf(), limit: ((o.lead||0) + 8) * 1000 };
       view.status("頭出し中");
-      view.videoMsg("位置を合わせています…", false);
+      view.videoMsg(o.msg || "頭出し中…", false);
       ClockGateway.frame(pollCue);
     }
+    // 全体再生：曲頭cue（無ければ0／録音中は0＝素で先頭から）へ。cueRaw は生の記録cue。
+    function startAtHead(kind, cueRaw){
+      seekAndArrive({ kind, target: compensate(cueRaw || 0), lead: HEAD_LEAD, index:0, resume:false, msg:"先頭に合わせています…" });
+    }
+    // グループ再生：cue−助走ぶん手前で発火（beginPlayback の countIn が cue まで埋める）。
+    function startAtCue(kind, cue){
+      const target = Math.max(0, compensate(cue) - Transport.countInFor(Transport.soloTarget()).dur);
+      seekAndArrive({ kind, target, lead: SNAP_LEAD, index:0, countIn:true, resume:false });
+    }
+    // パッド：timeline の index 番目の拍（その動画位置 vt）へ。
+    function startAtIndex(index){
+      const ev = PlaybackService.at(index);
+      if(!ev){ Transport.clearArm(); return; }   // 対象拍なし（曲末尾より後）→ 動画だけ動かしメトロノームは止めたまま
+      seekAndArrive({ kind:"all", target: compensate(ev.vt), lead: SNAP_LEAD, index, resume:true, msg:"位置を合わせています…" });
+    }
+    // 単一の到達検知：手前(from)へ寄せて実到達を確認 → target で beginPlayback（overshoot 前倒し）。
+    // seekTo 直後は getCurrentTime が旧位置（キャッシュ）を返すため、from 近傍(±0.5)＋発行から200ms猶予で信頼。
     function pollCue(){
       if(!cueWatch) return;
-      let st = -1, t = null;
-      try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
-
-      if(cueWatch.jump){
-        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（lead＝5秒手前 / パッド＝SNAP_LEAD 手前）。
-        // seekTo 直後は getCurrentTime が「移動前の位置」を数フレーム返すため、from まで実到達を確認してから計測。
-        if(t != null && !isNaN(t)){
-          if(!cueWatch.seeked && t <= cueWatch.from + 0.5) cueWatch.seeked = true;
-          if(cueWatch.seeked){
-            const remain = cueWatch.target - t;
-            if(remain <= 0){
-              const w = cueWatch; const over = Math.min(-remain, 0.05);
-              cueWatch = null; Transport.clearArm();
-              view.videoMsg("", false);
-              Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index, resume:w.resume});
-              return;
-            }
-            view.videoMsg("あと " + remain.toFixed(1) + " 秒で開始", false);
-          }else{
-            view.videoMsg("頭出し中…", false);   // まだ寄せ先まで到達していない
+      let t = null;
+      try{ t = VideoGateway.time(); }catch(err){}
+      if(t != null && !isNaN(t)){
+        const settled = (ClockGateway.perf() - cueWatch.t0) > 200;
+        if(!cueWatch.seeked && settled && Math.abs(t - cueWatch.from) <= 0.5) cueWatch.seeked = true;
+        if(cueWatch.seeked){
+          const remain = cueWatch.target - t;
+          if(remain <= 0){
+            const w = cueWatch; const over = Math.min(-remain, 0.05);
+            cueWatch = null; Transport.clearArm();
+            view.videoMsg("", false);
+            Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index, resume:w.resume});
+            return;
           }
+          view.videoMsg("あと " + remain.toFixed(1) + " 秒で開始", false);
+        }else{
+          view.videoMsg("頭出し中…", false);   // まだ寄せ先まで到達していない
         }
-      }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
-        // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
-        const w = cueWatch;
-        const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
-        cueWatch = null; Transport.clearArm();
-        view.videoMsg("", false);
-        Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index});   // 行き過ぎたぶんだけ前倒し
-        return;
       }
       if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
         const w = cueWatch;
@@ -1598,7 +1629,7 @@
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
     }
-    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
+    return { init(o){ view = o.view || view; }, compensate, cancel, startAtHead, startAtCue, startAtIndex, stampCue };
   })();
 
   /* ---------- Transport（再生ステートマシン：all/solo・preroll・全REC・動画同期を統括） ----------
@@ -1615,6 +1646,7 @@
     let mode = "all", soloId = null;          // "all"=全体 / "solo"=選択グループのみ
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
     let recording = false;                    // 全体レック（各 rep の頭で repCues を記録）
+    let following = false;                     // 動画追従中（VideoClock で各拍を動画実位置へ寄せる）
     let resumeActiveId = null;                // 再生前にアクティブだったグループ
     let firstBeatTime = 0;                    // 最初の1打が鳴る時刻（空白があるとき）
     let cur = {gid:null, bar:-1, rep:0};
@@ -1664,6 +1696,8 @@
     }
 
     function schedulerTick(){
+      // 動画追従中は、まず動画実位置を観測して VideoClock を平滑更新（低ゲイン）。以降の pump がそこへ寄せる。
+      if(following){ let v = null; try{ v = VideoGateway.time(); }catch(err){} if(v != null && !isNaN(v)) VideoClock.observe(ClockGateway.now(), v); }
       // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
       const limit = ClockGateway.now() + (ClockGateway.hidden() ? 1.2 : PlaybackScheduler.AHEAD);
       if(PlaybackScheduler.finished() && ClockGateway.now() >= PlaybackScheduler.endTime()){ stop(true); return; }
@@ -1730,6 +1764,18 @@
       // 先読みマージンは最小限に。さらに setInterval の初回発火（約25ms先）を待たず、
       // prime 直後に一度だけ同期でスケジュールすることで「頭出し確定 → 発音」の固定遅延を詰める。
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
+      // 動画追従（#36 Stage4）：動画同期かつ非録音のときだけ、各拍を「その拍の vt へ動画が達する音声時刻」へ
+      // 寄せる。頭出し直後（＝いま動画は target 付近）で VideoClock を初期化し、pump にフォロー関数を注入。
+      // 録音は素で流して真の位置を記録するため follow しない。音のみは followFn=null で従来どおり BPM 自走。
+      following = VideoGateway.armed() && !recording;
+      if(following){
+        let v = null; try{ v = VideoGateway.time(); }catch(err){}
+        VideoClock.reset(ClockGateway.now(), (v != null && !isNaN(v)) ? v : 0);
+        PlaybackScheduler.setFollow(vt => VideoClock.isReady() ? VideoClock.audioTimeFor(VideoSync.compensate(vt)) : null);
+      }else{
+        VideoClock.clear();
+        PlaybackScheduler.setFollow(null);
+      }
       const t0 = ClockGateway.now();
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
       PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
@@ -1752,11 +1798,12 @@
     function halt(){
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
-      running = false; firstBeatTime = 0;
+      running = false; following = false; firstBeatTime = 0;   // 追従停止（再開時は beginPlayback で張り直す）
       view.clearBeats();
     }
     function stop(completed, fromVideo){
       running = false;
+      following = false; VideoClock.clear(); PlaybackScheduler.setFollow(null);   // 追従を止め、平滑クロックを破棄
       armKind = null; VideoSync.cancel();
       recording = false;
       if(!fromVideo) VideoGateway.pause();
@@ -1782,12 +1829,11 @@
     function start(kind){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
-      if(VideoGateway.armed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
+      if(VideoGateway.armed() && kind === "all"){       // 全体再生：曲頭cue（録音中は0）へ寄せ、到達検知でロック
         armKind = kind;
         view.updateTransport();
-        // 即時再生：タップ直後に動画を鳴らさず約1秒おき、その間に停止も受けられる（timeline 更新はこの後の beginPlayback で通る）
-        view.videoMsg("準備中…", false);
-        setTimeout(()=>{ if(armKind === kind && !running) VideoSync.startFromTop(kind); }, IMMEDIATE_LEAD * 1000);
+        const headCue = recording ? 0 : (cueOf(kind) != null ? cueOf(kind) : 0);
+        VideoSync.startAtHead(kind, headCue);
         return;
       }
       const cue = cueOf(kind);
