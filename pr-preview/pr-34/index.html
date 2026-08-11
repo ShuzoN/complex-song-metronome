@@ -190,6 +190,8 @@
   .g-solo.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
   .g-solo:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active{transform:translateY(1px)}
+  /* × [N] 左の現在周回カウンタ（1 × 8 の形）。solo 再生中はライブ更新（highlight） */
+  .g-repnow{font-family:var(--mono);font-size:13px;color:var(--ink);min-width:14px;text-align:right}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
@@ -1372,15 +1374,17 @@
         const ebpm = Domain.effectiveBpm(g, bpm);
         for(let rep = 0; rep < g.reps; rep++){
           // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
-          const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-          if(anc != null) vt = Math.max(vt, anc);
+          const rawAnc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
+          if(rawAnc != null) vt = Math.max(vt, rawAnc);
+          // 記録cueを持つ rep 先頭には、クランプ済みの vt をアンカーとして焼き込む（bar0/beat0 のみ）。
+          // 動画同期の全体再生で、この rep を記録cueの動画位置へ寄せ直す（累積ドリフト補正）。
+          // raw ではなく単調クランプ後の vt を使うので、逆順cueでも頭が過去へ飛ばない。無記録なら null。
+          const ancVt = (rawAnc != null) ? vt : null;
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
             const span = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
-              // anc は rep 先頭（bar0/beat0）にだけ焼き込む。動画同期の全体再生で、この rep を
-              // 記録cueの動画位置へ寄せ直す（累積ドリフト補正）ためのアンカー。無記録なら null。
-              const evAnc = (bar === 0 && beat === 0) ? anc : null;
+              const evAnc = (bar === 0 && beat === 0) ? ancVt : null;
               events.push(Object.freeze({off, vt, anc:evAnc, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
               off += span; vt += span;
             }
@@ -1486,7 +1490,10 @@
       PlaybackService.update("all", null);        // 曲頭cueを引くため timeline を用意（beginPlayback 側で resume:false により再構築される）
       const head = PlaybackService.at(0);
       if(!head){ Transport.clearArm(); return; }
-      const aim = compensate(head.anc != null ? head.anc : head.vt);   // 曲頭を狙う動画位置（cueあれば発音遅延ぶん手前）
+      // 通常の全体再生は曲頭cue（記録位置）へ寄せる。全体レック中は cue を無視して動画の先頭(0)から流し、
+      // 各グループの真の位置を録り直す（キャッシュ位置へ吸われないように）。
+      const headVt = Transport.recording() ? 0 : (head.anc != null ? head.anc : head.vt);
+      const aim = compensate(headVt);              // 狙う動画位置（cueあれば発音遅延ぶん手前）
       const from = Math.max(0, aim - HEAD_LEAD);
       try{
         VideoGateway.seekTo(from, true);          // 曲頭の手前へ頭出し
@@ -1540,10 +1547,14 @@
       try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
 
       if(cueWatch.jump){
-        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（lead＝5秒手前 / パッド＝SNAP_LEAD 手前）。
+        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（全体再生＝HEAD_LEAD 手前／パッド＝SNAP_LEAD 手前）。
         // seekTo 直後は getCurrentTime が「移動前の位置」を数フレーム返すため、from まで実到達を確認してから計測。
         if(t != null && !isNaN(t)){
-          if(!cueWatch.seeked && t <= cueWatch.from + 0.5) cueWatch.seeked = true;
+          // シーク実到達の確認。seekTo 直後は getCurrentTime が旧位置（キャッシュ）を数フレーム返すため、
+          // 「from 近傍(±0.5)に入り」かつ「発行から少し猶予が経った」ことの両方を満たしてから信頼する。
+          // 旧判定 t<=from+0.5 は、直前位置がたまたま from 以下だと旧位置で誤検知して頭がズレていた。
+          const settled = (ClockGateway.perf() - cueWatch.t0) > 200;
+          if(!cueWatch.seeked && settled && Math.abs(t - cueWatch.from) <= 0.5) cueWatch.seeked = true;
           if(cueWatch.seeked){
             const remain = cueWatch.target - t;
             if(remain <= 0){
@@ -1725,7 +1736,9 @@
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
       // 全体再生（＝all。パッドのシーク再生も含む）かつ動画同期のときだけ、各 rep 先頭を記録cueへ
       // 寄せ直す（累積ドリフト補正）。グループ再生・動画なしは従来どおり純粋累積のまま。
-      PlaybackScheduler.setAnchor(mode === "all" && VideoGateway.armed());
+      // 全体レック中は必ず切る：録音は動画を素で流して真の位置を記録するため、
+      // 過去に録った cue へ寄せてしまうと位置がフィードバックでずれる（キャッシュされた頭に吸われる）。
+      PlaybackScheduler.setAnchor(mode === "all" && VideoGateway.armed() && !recording);
       PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
@@ -2221,12 +2234,18 @@
         lab.className = "g-label"; lab.textContent = "再生回数";
         const reps = document.createElement("div");
         reps.className = "g-reps";
+        // × [N] の左に現在の周回。停止中は「1」、solo 再生中は highlight() がライブ更新（1 × 8 の形）
+        const now = document.createElement("span");
+        now.className = "g-repnow"; now.dataset.role = "repnow";
+        now.title = "現在の周回";
+        const soloNow = running && Transport.mode() === "solo" && Transport.soloId() === g.id;
+        now.textContent = soloNow ? (Transport.cur().rep + 1) : 1;
         const x = document.createElement("span"); x.className="x"; x.textContent="×";
         const rin = document.createElement("input");
         rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
         rin.setAttribute("aria-label","再生回数");
         rin.addEventListener("change", ()=>GroupService.setReps(g.id, rin.value));
-        reps.append(x, rin);
+        reps.append(now, x, rin);
         row.append(lab, reps);
         body.appendChild(row);
 
@@ -2452,6 +2471,9 @@
         if(t && g){
           t.textContent = on ? (cur.rep+1) + " / " + g.reps : Fmt.times(g);
         }
+        // 展開カードの × [N] 左の現在周回も同期。solo 再生中だけ周回を進める
+        const rn = card.querySelector('[data-role="repnow"]');
+        if(rn && g) rn.textContent = on ? cur.rep+1 : 1;
       });
     }
     function syncIdle(){
