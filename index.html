@@ -1369,31 +1369,73 @@
       if(Transport.running() && Transport.isSolo()){ return targetGroups(Transport.mode(), Transport.soloId()); }
       return targetGroups("all", null);
     }
+    // cue駆動 Timeline（再設計 #36 / dev/playback/timeline.mjs で検証済み）。
+    // pass1 で off（基準テンポ累積）と各拍の拍長 dur・rep頭の生cue を敷き、pass2 で vt を cue駆動で写像。
+    // vt は各 rep 頭の記録cueへ寄せ、区間 [cue_n, cue_{n+1}] を音価比で満たす（rep内も動画実時間に沿う）。
+    // 逆順・非増加の記録cueは実効cueを単調クランプ（vt が後退せず indexAtVideo の二分探索が保たれる）。
     function build(groups, bpm){
-      const events = [];
-      let off = 0, vt = 0;                      // off=先頭からの累積秒, vt=動画タイムコード
+      // ---- pass 1: 平坦ビート列（off/dur/gbpm/anchor=rep頭の生cue） ----
+      const beats = [];
+      let off = 0;
       groups.forEach(g => {
         const rc = Array.isArray(g.repCues) ? g.repCues : null;
         const rhythms = g.pattern.rhythms;
-        // gbpm=このグループの個別 BPM（null=基準追従）。off/vt は実効 BPM で積算し、
-        // イベントには gbpm（上書き値 or null）を焼き込む＝スケジューラ側でテンポ追従を保つため
-        const gbpm = (g.bpm != null) ? g.bpm : null;
+        const gbpm = (g.bpm != null) ? g.bpm : null;   // グループ個別 BPM（null=基準追従）。スケジューラの拍長算出用
         const ebpm = Domain.effectiveBpm(g, bpm);
         for(let rep = 0; rep < g.reps; rep++){
-          // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
-          const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-          if(anc != null) vt = Math.max(vt, anc);
+          const rawCue = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
-            const span = Domain.rhythmSeconds(m.den, ebpm);
+            const dur = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
-              events.push(Object.freeze({off, vt, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
-              off += span; vt += span;
+              beats.push({ off, dur, vt: 0, anchor: (bar === 0 && beat === 0) ? rawCue : null,
+                           gid: g.id, gbpm, rep, bar, beat, meter: m, accent: (beat === 0) });
+              off += dur;
             }
           }
         }
       });
-      return Object.freeze({events: Object.freeze(events), dur: off});
+      layVt(beats);
+      const events = beats.map(b => Object.freeze({
+        off: b.off, vt: b.vt, anchor: b.anchor,
+        gid: b.gid, gbpm: b.gbpm, rep: b.rep, bar: b.bar, beat: b.beat, meter: b.meter, accent: b.accent
+      }));
+      return Object.freeze({ events: Object.freeze(events), dur: off });
+    }
+    // ---- pass 2: cue駆動で vt を敷く（rep頭の生cue→単調な実効cue→区間を音価比で配分） ----
+    function layVt(beats){
+      const raw = [];
+      for(let i = 0; i < beats.length; i++) if(beats[i].anchor != null) raw.push({ idx: i, cue: beats[i].anchor });
+      if(raw.length === 0){                                  // cue 皆無：純粋 BPM（vt=off。動画0起点の best effort）
+        for(const b of beats) b.vt = b.off;
+        return;
+      }
+      const anchors = [];                                    // 単調な実効cueへ正規化
+      let prevIdx = raw[0].idx, prevEff = raw[0].cue;
+      beats[prevIdx].anchor = prevEff;
+      anchors.push({ idx: prevIdx, cue: prevEff });
+      for(let k = 1; k < raw.length; k++){
+        const { idx, cue } = raw[k];
+        const bpmDur = beats[idx].off - beats[prevIdx].off;  // 前アンカーからの基準テンポ経過
+        const eff = (cue > prevEff) ? cue : (prevEff + bpmDur);   // 前進しない記録cueは基準テンポで前へ
+        beats[idx].anchor = eff;
+        anchors.push({ idx, cue: eff });
+        prevIdx = idx; prevEff = eff;
+      }
+      const a0 = anchors[0];                                 // 先頭アンカーより前：先頭cueから基準テンポで逆算
+      for(let i = 0; i < a0.idx; i++) beats[i].vt = a0.cue - (beats[a0.idx].off - beats[i].off);
+      for(let k = 0; k < anchors.length - 1; k++){           // アンカー間：実時間 span を音価比で配分
+        const a = anchors[k], b = anchors[k + 1];
+        const span = b.cue - a.cue, totalDur = beats[b.idx].off - beats[a.idx].off;
+        const forward = span > 0 && totalDur > 0;
+        let acc = 0;
+        for(let i = a.idx; i < b.idx; i++){
+          beats[i].vt = forward ? (a.cue + span * (acc / totalDur)) : (a.cue + (beats[i].off - beats[a.idx].off));
+          acc += beats[i].dur;
+        }
+      }
+      const aN = anchors[anchors.length - 1];                // 末尾アンカー以降：基準テンポで外挿
+      for(let i = aN.idx; i < beats.length; i++) beats[i].vt = aN.cue + (beats[i].off - beats[aN.idx].off);
     }
     return {
       // ---- ライフサイクル（書けるのはここだけ） ----
