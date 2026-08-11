@@ -1423,37 +1423,33 @@
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
     let nextTime = 0, i = 0, finished = false, endTime = 0;
-    // 動画同期の再アンカー基準：開始拍の「動画位置(anc優先→vt)」と「音声予約時刻」を対応づけ、
-    // 以降 anc を持つ rep 先頭を base からの相対時刻へ寄せ直す。anchorOn=false のときは従来どおり純粋累積。
-    let anchorBase = null, anchorOn = false;
+    // 動画同期のクローズドループ再アンカー。anchorFn は Transport が注入する関数で、記録cueを渡すと
+    // 「動画がその cue（補正込み）に到達する音声時刻」を返す（＝その場の動画実位置を読む）。null なら無効。
+    // これで各グループ先頭を毎回“実際の動画位置”へ合わせ直す（グループ再生の着地検知と同等・シーク無し）。
+    let anchorFn = null;
     // イベントの拍長。gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
     // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）
     const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, (e.gbpm != null) ? e.gbpm : Store.getState().bpm);
-    // 開始拍を基準点にする。base.v は開始拍の動画位置（anc があればそれ、無ければ vt）
-    function setBase(startTime){
-      const ev = PlaybackService.at(i);
-      anchorBase = ev ? { T: startTime, v: (ev.anc != null ? ev.anc : ev.vt) } : null;
-    }
-    function setAnchor(on){ anchorOn = !!on; }
+    function setAnchor(fn){ anchorFn = (typeof fn === "function") ? fn : null; }
     function resetPointer(){ i = 0; finished = false; }
-    function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; setBase(startTime); }
+    function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
     function primeAtIndex(startTime, index){
       const n = PlaybackService.count();
       i = Math.max(0, Math.min(index|0, n));     // n（末尾＝以降イベント無し）まで許容
       finished = (i >= n); queue.length = 0; nextTime = startTime;
-      setBase(startTime);
     }
     function pump(limit){
       const n = PlaybackService.count();
       if(!n){ finished = true; endTime = nextTime; return; }
       while(!finished && nextTime < limit){
         const e = PlaybackService.at(i);
-        // 動画同期時：記録cueを持つ rep 先頭で、その cue の動画位置に対応する時刻へ寄せ直す。
-        // base からの相対 (e.anc − base.v) が動画側の経過。過去への予約だけは避ける（微小なフラム許容）。
-        if(anchorOn && anchorBase && e.anc != null){
-          const target = anchorBase.T + (e.anc - anchorBase.v);
-          nextTime = Math.max(target, ClockGateway.now() + 0.005);
+        // 動画同期時：記録cueを持つ rep 先頭で、いまの動画実位置から算出した到達時刻へ寄せ直す。
+        // 予測ではなく実位置基準なので、再生レート差・バッファリングがあっても各境界で合い直る。
+        // 過去への予約だけは避ける（微小なフラム許容）。
+        if(anchorFn && e.anc != null){
+          const target = anchorFn(e.anc);
+          if(target != null) nextTime = Math.max(target, ClockGateway.now() + 0.005);
         }
         const span = beatSeconds(e);
         SoundGateway.click(e.accent, nextTime, span);
@@ -1740,11 +1736,17 @@
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
       const t0 = ClockGateway.now();
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
-      // 全体再生（＝all。パッドのシーク再生も含む）かつ動画同期のときだけ、各 rep 先頭を記録cueへ
-      // 寄せ直す（累積ドリフト補正）。グループ再生・動画なしは従来どおり純粋累積のまま。
-      // 全体レック中は必ず切る：録音は動画を素で流して真の位置を記録するため、
-      // 過去に録った cue へ寄せてしまうと位置がフィードバックでずれる（キャッシュされた頭に吸われる）。
-      PlaybackScheduler.setAnchor(mode === "all" && VideoGateway.armed() && !recording);
+      // 全体再生（＝all。パッドのシーク再生も含む）かつ動画同期のときだけ、各グループ先頭を「その場の
+      // 動画実位置」から算出した到達時刻へ寄せ直すクローズドループ補正を有効化（＝グループ再生の着地検知を
+      // 各境界に効かせる・シーク無し）。グループ再生・動画なしは従来どおり純粋累積。
+      // 全体レック中は必ず切る：録音は動画を素で流して真の位置を記録するため、過去の cue へ寄せると
+      // 位置がフィードバックでずれる（キャッシュされた頭に吸われる）。
+      const anchorOn = (mode === "all" && VideoGateway.armed() && !recording);
+      PlaybackScheduler.setAnchor(anchorOn ? (cue) => {
+        let v = null; try{ v = VideoGateway.time(); }catch(err){}
+        if(v == null || isNaN(v)) return null;                 // 読めないときは寄せ直さず自走に任せる
+        return ClockGateway.now() + (VideoSync.compensate(cue) - v);   // 動画が compensate(cue) に達する音声時刻
+      } : null);
       PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
