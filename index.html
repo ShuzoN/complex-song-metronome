@@ -316,8 +316,15 @@
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .fs-rep .of{color:rgba(245,244,239,.4)}
   .fs-rep .u{color:rgba(245,244,239,.45);font-size:.8em;margin-left:2px}
-  .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
-  .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
+  /* セクション（リズムグループ）バーは横スクロール可能に。グループが多くても ✕ の下や画面外に
+     はみ出さず（overflow でボックス内にクリップ）、スワイプで全グループへ到達できる。
+     少数グループのときは flex-grow で従来どおり幅いっぱいに広げる。 */
+  .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px);
+    overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+    scroll-snap-type:x proximity;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .fs-timeline::-webkit-scrollbar{display:none}
+  .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:clamp(52px,14vw,74px);display:flex;align-items:center;justify-content:center;
+    scroll-snap-align:center;
     border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;cursor:pointer;
     font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap;
     -webkit-tap-highlight-color:transparent}
@@ -2792,7 +2799,7 @@
   const FullscreenView = (() => {
     const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
     let opened = false, lastStripKey = "", lastTLKey = "", flashTimer = null;
-    let userBrowseUntil = 0, instantNext = false;   // 手動スワイプ中は自動追従を止める／次の中央寄せを即時にする
+    let userBrowseUntil = 0, tlBrowseUntil = 0, instantNext = false;   // 手動スワイプ中は自動追従を止める（帯／タイムライン別）／次の中央寄せを即時にする
     const el = {};
     function cache(){
       el.overlay=$("fsOverlay"); el.top=$("fsRep"); el.timeline=$("fsTimeline"); el.track=$("fsTrack");
@@ -2863,18 +2870,25 @@
     }
     // 現在（再生中）／プレビュー（停止中）の小節を帯の中央へ寄せる（横スクロール位置を動かす）。
     // ユーザーがスワイプ中（userBrowseUntil）は追従を止め、覗き見を邪魔しない（force で無視）。
-    function centerCurrent(force){
+    function centerCurrent(force, instant){
       const ctx = context();
       if(!ctx.g) return;
       if(!force && performance.now() < userBrowseUntil) return;
       const t = findTile(ctx.g.id, ctx.bar) || findTile(ctx.g.id, 0);
       if(!t) return;
       const wrap = el.track.parentElement;
-      const target = Math.max(0, t.offsetLeft + t.offsetWidth/2 - wrap.clientWidth/2);
-      const behavior = instantNext ? "auto" : "smooth";
-      instantNext = false;
-      try{ wrap.scrollTo({left: target, behavior}); }
-      catch(_){ wrap.scrollLeft = target; }
+      const left = Math.max(0, t.offsetLeft + t.offsetWidth/2 - wrap.clientWidth/2);
+      try{ wrap.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
+      catch(_){ wrap.scrollLeft = left; }
+    }
+    // 上部タイムライン（セクションバー）を、現在セクションが見えるように横スクロール。手動スワイプ中は止める。
+    function scrollTimeline(force, instant){
+      if(!force && performance.now() < tlBrowseUntil) return;
+      const seg = el.timeline.querySelector(".fs-seg.cur");
+      if(!seg) return;
+      const left = Math.max(0, seg.offsetLeft + seg.offsetWidth/2 - el.timeline.clientWidth/2);
+      try{ el.timeline.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
+      catch(_){ el.timeline.scrollLeft = left; }
     }
     function paintBeats(n){
       if(!opened) return;
@@ -2916,6 +2930,7 @@
       buildStrip();
       if(!ctx.g){ el.rep.innerHTML=""; return; }
       const gi = groups.indexOf(ctx.g);
+      const inst = instantNext; instantNext = false;   // この同期での中央寄せを即時にするか（開いた直後・リサイズ時）
       // フォーカス帯：全グループを連結した帯の中で、現在小節=大・赤／再生済み=薄く
       const idxOf = {}; groups.forEach((g,i)=>{ idxOf[g.id]=i; });
       [...el.track.children].forEach(t=>{
@@ -2924,7 +2939,7 @@
         t.classList.toggle("now", t.dataset.gid===ctx.g.id && tb===bar);
         t.classList.toggle("done", ctx.running && (tgi < gi || (tgi===gi && tb < bar)));
       });
-      centerCurrent();
+      centerCurrent(false, inst);
       // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
       [...el.timeline.children].forEach((seg,i)=>{
         seg.classList.toggle("cur", i===gi);
@@ -2938,6 +2953,7 @@
           fill.style.width = Math.round((done/total)*100) + "%";
         }
       });
+      scrollTimeline(false, inst);   // 現在セクションが ✕ より左に見えるよう追従スクロール
       // 周回カウンタ
       el.rep.innerHTML = '<span>'+(ctx.running ? ctx.rep+1 : 1)+'</span><span class="of"> / '+ctx.g.reps+'</span><span class="u">周</span>';
       // 停止中プレビューは pulse も自前で描く（再生中は Transport の描画フックが担当）
@@ -3008,7 +3024,7 @@
         if(seg && seg.dataset.id) playGroup(seg.dataset.id);
       });
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
-      window.addEventListener("resize", ()=>{ if(opened){ instantNext = true; centerCurrent(true); } });
+      window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
       // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
       // 動かさずに軽くタップした時だけ（左半分＝5秒戻す／右半分＝5秒送る）シークにフォールバックする。
@@ -3029,6 +3045,15 @@
           seek(e.clientX < window.innerWidth/2 ? -1 : 1);
         }
       });
+
+      // 上部タイムライン（セクションバー）も横スワイプで移動でき、手で動かした直後は追従を止める。
+      // 軽いタップ（＝そのグループへジャンプ）は click ハンドラで処理するため、ここでは抑止しない。
+      let tlTap = null;
+      el.timeline.addEventListener("wheel", ()=>{ tlBrowseUntil = performance.now() + 3500; }, {passive:true});
+      el.timeline.addEventListener("pointerdown", e=>{ tlTap = {x:e.clientX, y:e.clientY}; });
+      el.timeline.addEventListener("pointermove", e=>{ if(tlTap && (Math.abs(e.clientX-tlTap.x) > 8 || Math.abs(e.clientY-tlTap.y) > 8)) tlBrowseUntil = performance.now() + 3500; }, {passive:true});
+      el.timeline.addEventListener("pointerup", ()=>{ tlTap = null; });
+      el.timeline.addEventListener("pointercancel", ()=>{ tlTap = null; tlBrowseUntil = performance.now() + 3500; });
     }
     return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
   })();
