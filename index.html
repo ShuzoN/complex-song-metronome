@@ -1643,15 +1643,18 @@
     function startAtCue(kind, cue){
       // aim=実音を cue に重ねる補正位置。fire=そこからカウントイン(前グループ末尾の1〜2小節)ぶん
       // 手前＝助走の刻み出し位置。
+      // グループ再生は前グループ末尾の助走を挟む。全体再生は助走なし（先頭グループの頭出しのみ）
       const aim = compensate(cue);
-      const fire = Math.max(0, aim - Transport.countInFor(Transport.soloTarget()).dur);
+      const useCountIn = (kind !== "all");
+      const ciDur = useCountIn ? Transport.countInFor(Transport.soloTarget()).dur : 0;
+      const fire = Math.max(0, aim - ciDur);
       const from = fire;
       try{
         VideoGateway.seekTo(from, true);     // カウントイン開始点へ頭出し
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
       // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
-      cueWatch = {target: fire, from, kind, index: 0, countIn: true, resume: false, jump: false,
+      cueWatch = {target: fire, from, kind, index: 0, countIn: useCountIn, resume: false, jump: false,
                   t0: ClockGateway.perf(), limit: 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
@@ -1914,16 +1917,16 @@
     function start(kind){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
-      if(VideoGateway.armed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
+      const cue = cueOf(kind);
+      // 全体レック／cue 未記録の全体再生は先頭(0秒)から（従来どおり・preroll あり）。頭出しへは即入る（0.15s の間は廃止）
+      if(VideoGateway.armed() && kind === "all" && (recording || cue == null)){
         armKind = kind;
         view.updateTransport();
-        // 即時再生：タップ直後に動画を鳴らさず約1秒おき、その間に停止も受けられる（timeline 更新はこの後の beginPlayback で通る）
-        view.videoMsg("準備中…", false);
-        setTimeout(()=>{ if(armKind === kind && !running) VideoSync.startFromTop(kind); }, IMMEDIATE_LEAD * 1000);
+        VideoSync.startFromTop(kind);
         return;
       }
-      const cue = cueOf(kind);
-      if(VideoGateway.armed() && cue != null){          // グループ再生は記録した位置から合わせる
+      // 全体（cue記録済み）／グループ再生は記録した位置から合わせる（cue−補正へ寄せ、実到達フレームで刻む）
+      if(VideoGateway.armed() && cue != null){
         armKind = kind;
         view.updateTransport();
         VideoSync.startAtCue(kind, cue);
