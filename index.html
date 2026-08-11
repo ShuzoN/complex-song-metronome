@@ -1528,9 +1528,14 @@
     const isSoloMode = m => m === "solo";
     let frame = null;                          // 唯一の timeline state（singleton）
     // 対象グループ列（solo/lead は該当グループのみ、他は拍子を持つ全グループ）
-    function targetGroups(mode, soloId){
+    // tail=true のとき、solo は「該当グループから末尾まで」の拍子ありグループを返す（全画面の連続再生用）
+    function targetGroups(mode, soloId, tail){
       const groups = Store.getState().groups;
       if(isSoloMode(mode) && soloId){
+        if(tail){
+          const start = groups.findIndex(g => g.id === soloId);
+          return (start < 0 ? [] : groups.slice(start)).filter(g => g.pattern.rhythms.length);
+        }
         return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
       }
       return groups.filter(g => g.pattern.rhythms.length);
@@ -1568,7 +1573,7 @@
     }
     return {
       // ---- ライフサイクル（書けるのはここだけ） ----
-      update(mode, soloId){ frame = build(targetGroups(mode, soloId), Store.getState().bpm); return frame; },
+      update(mode, soloId, tail){ frame = build(targetGroups(mode, soloId, tail), Store.getState().bpm); return frame; },
       clear(){ frame = null; },
       // ---- 読み取り専用 ----
       ready: () => !!frame,
@@ -1773,6 +1778,7 @@
     const IMMEDIATE_LEAD = 0.15;
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo"=選択グループのみ
+    let soloTail = false;                     // solo 起点から末尾まで連続再生（全画面のグループ再生用。終端で止めず次グループへ）
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
     let recording = false;                    // 全体レック（各 rep の頭で repCues を記録）
     let resumeActiveId = null;                // 再生前にアクティブだったグループ
@@ -1870,7 +1876,7 @@
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
       running = true; shown = "";             // 先に running を立て、下の再描画でトグル（停止）状態を反映する
       if(!o.resume){
-        PlaybackService.update(mode, soloId); // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
+        PlaybackService.update(mode, soloId, soloTail); // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
         resumeActiveId = Store.getState().activeId;
         // グループ再生／5秒前は対象グループを展開したまま（アクティブ維持）。全体再生は全グループ非アクティブに
         Store.apply({activeId: isSoloMode(mode) ? soloId : null});
@@ -1931,7 +1937,7 @@
       view.setRunning(false);
       view.clearWaiting();
       firstBeatTime = 0;
-      mode = "all"; soloId = null;
+      mode = "all"; soloId = null; soloTail = false;
       view.status(completed ? "完了" : "停止中");
       PlaybackScheduler.resetPointer();
       view.syncIdle();
@@ -1939,9 +1945,10 @@
       view.padUpdate();
     }
     /* --- 再生の入口：動画があれば、動画が実際に鳴り出してから刻み始める --- */
-    function start(kind){
+    function start(kind, opts){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
+      soloTail = !!(opts && opts.tail) && kind !== "all";   // solo 起点から末尾まで連続（全画面のグループ再生）
       const cue = cueOf(kind);
       // 全体レック／cue 未記録の全体再生は先頭(0秒)から（従来どおり・preroll あり）。頭出しへは即入る（0.15s の間は廃止）
       if(VideoGateway.armed() && kind === "all" && (recording || cue == null)){
@@ -1973,7 +1980,7 @@
     }
     function armCancel(){
       armKind = null; VideoSync.cancel(); pendingKind = null;
-      recording = false;
+      recording = false; soloTail = false;
       clearTimeout(waitTimer);
       VideoGateway.pause();
       view.videoMsg("", false);
@@ -2987,7 +2994,7 @@
       SoundGateway.ensure();
       if(Transport.running() || Transport.armKind()) Transport.stop(false);
       Store.apply({activeId: id}, {});                                // solo 対象＝このグループ（stop の後に設定）
-      Transport.start("solo");
+      Transport.start("solo", {tail:true});                           // 全画面は終端で止めず、次のリズムグループへ連続再生
     }
     function open(){
       if(opened) return;
