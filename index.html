@@ -1790,7 +1790,7 @@
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
       endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
-      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}
+      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
     };
     const isSoloMode = m => m === "solo";
     const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
@@ -1938,6 +1938,7 @@
       view.clearWaiting();
       firstBeatTime = 0;
       mode = "all"; soloId = null; soloTail = false;
+      view.padReset();                             // 停止時もパッドの一時停止状態を解除して UI と整合させる
       view.status(completed ? "完了" : "停止中");
       PlaybackScheduler.resetPointer();
       view.syncIdle();
@@ -1949,6 +1950,9 @@
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
       soloTail = !!(opts && opts.tail) && kind !== "all";   // solo 起点から末尾まで連続（全画面のグループ再生）
+      // 新規セッション開始（ボタン／グループ再生／全画面）では、パッド由来の一時停止状態を必ず解除する。
+      // これを怠ると paused が残り、再生中なのに再生バー／HUD が「再開」表示のまま同期しなくなる。
+      view.padReset();
       const cue = cueOf(kind);
       // 全体レック／cue 未記録の全体再生は先頭(0秒)から（従来どおり・preroll あり）。頭出しへは即入る（0.15s の間は廃止）
       if(VideoGateway.armed() && kind === "all" && (recording || cue == null)){
@@ -2060,6 +2064,8 @@
     return {
       init(o){ if(o && o.view) view = o.view; },
       isPaused: () => paused,
+      // Transport 側で新規セッションを開始／停止したときに呼ばれ、パッド由来の一時停止・着地待ち状態を解除する。
+      clearPause(){ paused = false; jumpPending = false; },
       isBusy: () => busy(),
       ready: () => VideoGateway.ready(),
       // セッション中（再生 or 一時停止）で着地待ちでないときだけシーク/トグルを受ける
@@ -3178,7 +3184,8 @@
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
     stampCueView: GroupView.stampCueView,
-    padUpdate: () => { PlaybarView.update(); FullscreenView.updatePlay(); }
+    padUpdate: () => { PlaybarView.update(); FullscreenView.updatePlay(); },
+    padReset: () => { VideoPadService.clearPause(); }
   };
   // Store の変更を meta フラグに応じて各ビューへ配る
   function dispatch(meta){
