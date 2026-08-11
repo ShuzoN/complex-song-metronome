@@ -75,6 +75,11 @@
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
   .apply{height:40px;padding:0 14px;background:var(--ink);color:var(--panel);border:1px solid var(--ink);font-size:12px}
 
+  /* volume */
+  .vol{padding:6px 18px 16px}
+  .vol-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
+  .vol-val{font-family:var(--mono);font-size:15px;color:var(--brass);font-variant-numeric:tabular-nums;letter-spacing:.04em}
+
   /* youtube */
   .yt{border-top:1px solid var(--ink);padding:14px 14px 15px}
   .yt-top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
@@ -430,6 +435,14 @@
     <input type="number" id="tempoInput" min="50" max="250" step="0.1" value="120" inputmode="decimal">
     <button class="apply" type="submit">設定</button>
   </form>
+
+  <section class="vol">
+    <div class="vol-top">
+      <span class="g-label">メトロノームの音量</span>
+      <span class="vol-val" id="volVal">50%</span>
+    </div>
+    <input type="range" id="volRange" min="0" max="100" step="1" value="50" aria-label="メトロノームの音量">
+  </section>
 
   <section class="yt">
     <div class="yt-top">
@@ -882,25 +895,30 @@
   /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
   const SoundGateway = (() => {
     let ctx = null;
+    // 音量係数。スライダー50%＝1.0（既定音量）、0%＝0.0（無音）、100%＝2.0（最大）。
+    let vol = 1;
     function ensure(){
       if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
       if(ctx.state === "suspended") ctx.resume();
       return ctx;
     }
     function now(){ return ctx ? ctx.currentTime : 0; }
+    function setVolume(factor){ vol = Math.max(0, factor); }
     function click(accent, time, span){
+      const peak = (accent ? 0.35 : 0.22) * vol;
+      if(peak < 0.0002) return;   // 無音（スライダー0%付近）なら発音しない
       const decay = Math.min(0.045, span * 0.55);
       const osc = ctx.createOscillator(), gain = ctx.createGain();
       osc.type = "square";
       osc.frequency.value = accent ? 1760 : 880;
       // 立ち上がりの2msランプ（＝冒頭の空白）をなくし、time ちょうどで最大音量から鳴らす。
       // これがあると発音が数ms遅れて「少しズレて」聞こえていた。
-      gain.gain.setValueAtTime(accent ? 0.35 : 0.22, time);
+      gain.gain.setValueAtTime(peak, time);
       gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
       osc.connect(gain).connect(ctx.destination);
       osc.start(time); osc.stop(time + decay + 0.015);
     }
-    return { ensure, now, click, get ready(){ return !!ctx; } };
+    return { ensure, now, click, setVolume, get ready(){ return !!ctx; } };
   })();
 
   /* ---------- ClockGateway（タイミング源。刻みは AudioContext 時刻、UI 更新は rAF、先読みは setInterval） ---------- */
@@ -2459,6 +2477,21 @@
     return { render, bind };
   })();
 
+  /* ---------- VolumeView（メトロノーム音量。スライダー50%＝既定、0-100%で調整） ---------- */
+  const VolumeView = (() => {
+    const slider = $("volRange"), valView = $("volVal");
+    function apply(pct){
+      SoundGateway.setVolume(pct / 50);              // 50%→1.0（既定）、0%→0、100%→2.0
+      valView.textContent = pct + "%";
+      slider.style.setProperty("--p", pct + "%");    // 塗り（トラック）を値に合わせる
+    }
+    function bind(){
+      slider.addEventListener("input", e => apply(Number(e.target.value)));
+      apply(Number(slider.value));                   // 初期値（50%）を反映
+    }
+    return { bind };
+  })();
+
   /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
   const TransportView = (() => {
     function paintBeats(n){
@@ -2954,6 +2987,7 @@
   VideoPadService.init({ view });
   Store.subscribe(dispatch);
   TempoView.bind();
+  VolumeView.bind();
   SequenceView.bind();
   TransportView.bind();
   PlaybarView.bind();
