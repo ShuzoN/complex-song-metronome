@@ -114,6 +114,9 @@
   .hist button:disabled{opacity:.25;cursor:default}
   .hist button.wide{width:auto;padding:0 8px;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em}
   .hist button.wide.open{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+  /* 未保存（ファイル未書き出し）の間だけ保存ボタンを強調 */
+  #saveBtn.unsaved{border-color:var(--signal);color:var(--signal);font-weight:700}
+  #saveBtn.unsaved::before{content:"●";font-size:8px;margin-right:4px;vertical-align:1px}
 
   .hist label.wide{display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 8px;border:1px solid var(--rule);background:var(--panel);font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;cursor:pointer}
   .hist label.wide:hover{border-color:var(--ink);background:#EAE9E2}
@@ -863,6 +866,44 @@
     return { scalarStr, parse, stringify };
   })();
 
+  /* ---------- DraftGateway（下書きの永続化境界。localStorage を安全に叩く純粋アダプタ。
+     Safari プライベートや QuotaExceeded でも例外を投げず、使えなければ黙って no-op に倒す） ---------- */
+  const DraftGateway = (() => {
+    const PREFIX = "csm:draft:";              // 曲名ごとの下書き（localStorage は origin 単位なので識別子は自前で付ける）
+    const POINTER = "csm:draft.active";       // 直近に編集していた曲名（起動時復元の手がかり）
+    // 実書き込みで使用可否を一度だけ判定（getItem だけでは Safari プライベートを見抜けない）
+    const available = (() => {
+      try{
+        const k = "csm:draft.probe";
+        window.localStorage.setItem(k, "1");
+        window.localStorage.removeItem(k);
+        return true;
+      }catch(_){ return false; }
+    })();
+    const keyFor = name => PREFIX + name;
+    function read(name){
+      if(!available) return null;
+      try{ return window.localStorage.getItem(keyFor(name)); }catch(_){ return null; }
+    }
+    function write(name, text){
+      if(!available) return false;
+      try{ window.localStorage.setItem(keyFor(name), text); return true; }catch(_){ return false; }
+    }
+    function remove(name){
+      if(!available) return;
+      try{ window.localStorage.removeItem(keyFor(name)); }catch(_){}
+    }
+    function setActive(name){
+      if(!available) return;
+      try{ name == null ? window.localStorage.removeItem(POINTER) : window.localStorage.setItem(POINTER, name); }catch(_){}
+    }
+    function getActive(){
+      if(!available) return null;
+      try{ return window.localStorage.getItem(POINTER); }catch(_){ return null; }
+    }
+    return { available, read, write, remove, setActive, getActive };
+  })();
+
   /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
   const SoundGateway = (() => {
     let ctx = null;
@@ -1334,7 +1375,85 @@
       const bars = Domain.totalBars(sequence.groups);
       return ["読み込みました：" + sequence.groups.length + " グループ / " + bars + " 小節"].concat(notes).join("\n");
     }
-    return { fileName, save, importText };
+    return { fileName, currentSequence, save, importText };
+  })();
+
+  /* ---------- DraftService（未保存の編集を localStorage に自動退避し、離脱時に警告）----------
+     ・canonical … 「保存されるのと同じ YAML テキスト」。生成は決定論的（キー順固定・toFixed(2) 正規化）
+                   なので、文字列比較だけで差分＝未保存判定ができる（deepEqual 不要）。
+     ・baseline  … 最後にファイル保存/読込した時点の canonical。これと違えば「未保存」。
+     ・下書きは未保存のときだけ localStorage に置き、保存/一致で消す（＝下書きの存在＝未保存）。
+     ・キーは曲名。リネーム時は旧キーを消して新キーへ移す。 */
+  const DraftService = (() => {
+    let baseline = "";        // 最後に保存/読込した時点の canonical YAML
+    let dirty = false;
+    let activeName = null;    // 現在 draft を書いているキー名（リネーム追従用）
+    let timer = null;
+    let onDirtyChange = () => {};
+
+    function canonical(){
+      return Yaml.stringify(SequenceMapper.toDto(SequenceIO.currentSequence()));
+    }
+    function setDirty(v){
+      if(dirty === v) return;
+      dirty = v;
+      try{ onDirtyChange(v); }catch(_){}
+    }
+    // 現在状態を評価して下書きを書く/消す（debounce 先の実体）
+    function persist(){
+      const name = Store.getState().seqName;
+      const cur = canonical();
+      const nowDirty = (cur !== baseline);
+      if(activeName != null && activeName !== name) DraftGateway.remove(activeName);  // リネーム追従：旧キー掃除
+      if(nowDirty){
+        DraftGateway.write(name, cur);
+        DraftGateway.setActive(name);
+        activeName = name;
+      }else if(activeName != null){
+        DraftGateway.remove(activeName);
+        DraftGateway.setActive(null);
+        activeName = null;
+      }
+      setDirty(nowDirty);
+    }
+    // Store 購読フック。名前やテンポはキーストロークごとに来るので debounce
+    function schedule(){
+      clearTimeout(timer);
+      timer = setTimeout(persist, 300);
+    }
+    // 保存/読込の成功時：今の状態を基準に据え直し、下書きを片付ける（＝クリーン）
+    function markClean(){
+      clearTimeout(timer);
+      if(activeName != null) DraftGateway.remove(activeName);
+      DraftGateway.remove(Store.getState().seqName);
+      DraftGateway.setActive(null);
+      activeName = null;
+      baseline = canonical();
+      setDirty(false);
+    }
+    function isDirty(){ return dirty; }
+
+    // 起動時：直近アクティブな下書きがあれば復元し、未保存として扱う。復元したら true
+    function init(opts){
+      onDirtyChange = (opts && opts.onDirtyChange) || (() => {});
+      baseline = canonical();                       // 既定（初期）状態を基準に
+      let restored = false;
+      const name = DraftGateway.getActive();
+      if(name != null){
+        const text = DraftGateway.read(name);
+        if(text){
+          try{
+            SequenceIO.importText(text);            // ファイル読込と同じ経路で復元
+            activeName = name;
+            setDirty(true);                          // baseline（初期状態）と違う＝未保存
+            restored = true;
+          }catch(_){ DraftGateway.remove(name); DraftGateway.setActive(null); }
+        }
+      }
+      Store.subscribe(schedule);                    // 以後の編集を自動退避
+      return restored;
+    }
+    return { init, markClean, isDirty, persist };
   })();
 
   /* ---------- PlaybackService（再生タイムラインの唯一の所有者・singleton） ----------
@@ -2334,7 +2453,9 @@
       seqSum.textContent = c.groups + " グループ ・ 全 " + c.bars + " 小節";
     }
     function applyTitle(){
-      document.title = (state().seqName.trim() || "無題のシーケンス") + " — メトロノーム";
+      const unsaved = DraftService.isDirty();
+      document.title = (unsaved ? "*" : "") + (state().seqName.trim() || "無題のシーケンス") + " — メトロノーム";
+      saveBtn.classList.toggle("unsaved", unsaved);
     }
     function updateHistory(){
       undoBtn.disabled = !HistoryService.canUndo() || Transport.running();
@@ -2777,13 +2898,13 @@
       msgTimer = setTimeout(()=>{ ioMsg.hidden = true; }, bad ? 9000 : 5000);
     }
     function importAndSay(text){
-      try{ say(SequenceIO.importText(text), false); }
+      try{ const msg = SequenceIO.importText(text); DraftService.markClean(); say(msg, false); }
       catch(err){ say("読み込めませんでした：" + err.message, true); }
     }
     function bind(){
       saveBtn.addEventListener("click", async ()=>{
         const r = await SequenceIO.save();
-        if(r) say(r.message, r.bad);
+        if(r){ if(!r.bad) DraftService.markClean(); say(r.message, r.bad); }
       });
       loadBtn.addEventListener("click", async ()=>{
         try{ importAndSay(await FileGateway.open()); }
@@ -2927,6 +3048,16 @@
   PlaybarView.update();
   FullscreenView.updateEntry();
   SequenceService.setTempo(120);
+
+  /* ---------- 下書きの自動退避・復元・離脱警告 ---------- */
+  const restoredDraft = DraftService.init({ onDirtyChange: () => SequenceView.applyTitle() });
+  if(restoredDraft) IoView.say("前回の未保存の編集を復元しました（ファイルにはまだ保存されていません）", false);
+  // 未保存のままページを離れようとしたら確認（PC は有効／モバイルはベストエフォート。保全は下書きが担保）
+  window.addEventListener("beforeunload", (e)=>{
+    if(!DraftService.isDirty()) return;
+    e.preventDefault();
+    e.returnValue = "";   // 仕様上これで確認ダイアログ（文言はブラウザ既定・カスタム不可）
+  });
 })();
 </script>
 </body>
