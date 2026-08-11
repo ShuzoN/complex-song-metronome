@@ -1584,6 +1584,15 @@
       i = Math.max(0, Math.min(index|0, n));     // n（末尾＝以降イベント無し）まで許容
       finished = (i >= n); queue.length = 0; nextTime = startTime;
     }
+    // ② 走行中の静かな再同期：予約済みの発音時刻(nextTime)は保持し、発音ポインタだけ index へ寄せる。
+    // 刻みのタイミングは連続（無音や二重発音を作らず）で、拍/小節の割り当てだけ動画位置へ合わせ直す。
+    function resyncTo(index){
+      const n = PlaybackService.count();
+      if(!n) return;
+      i = Math.max(0, Math.min(index|0, n));
+      finished = (i >= n);
+      queue.length = 0;                 // 表示キューは作り直す（nextTime は保持）
+    }
     function pump(limit){
       const n = PlaybackService.count();
       if(!n){ finished = true; endTime = nextTime; return; }
@@ -1591,14 +1600,14 @@
         const e = PlaybackService.at(i);
         const span = beatSeconds(e);
         SoundGateway.click(e.accent, nextTime, span);
-        queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
+        queue.push({time:nextTime, vt:e.vt, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
         nextTime += span;
         i++;
         if(i >= n){ finished = true; endTime = nextTime; }
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump,
+      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, resyncTo, pump,
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
@@ -1743,7 +1752,7 @@
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
     }
-    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
+    return { init(o){ view = o.view || view; }, compensate, latency: () => CUE_LATENCY, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
   })();
 
   /* ---------- Transport（再生ステートマシン：all/solo・preroll・全REC・動画同期を統括） ----------
@@ -1814,6 +1823,23 @@
       if(PlaybackScheduler.finished() && ClockGateway.now() >= PlaybackScheduler.endTime()){ stop(true); return; }
       PlaybackScheduler.pump(limit);
     }
+    // ② 走行中の再同期（動画マスター）。刻みが動画と閾値以上ズレたら、発音ポインタを動画位置へ静かに寄せる（動画はシークしない）。
+    // 全体再生で BPM クロックと動画実時間の微差が長区間で累積するのを、各拍で監視して静かに補正する。
+    const RESYNC_THRESH = 0.20, RESYNC_EVERY = 1.0;   // 秒。0.20 超のズレを 1 秒に 1 回だけ補正
+    let lastResync = 0;
+    function maybeResync(now, vt){
+      if(mode !== "all" || !VideoGateway.syncOn()) return;   // 全体再生＋動画同期 ON のときだけ
+      if(PlaybackScheduler.finished()) return;
+      if(now - lastResync < RESYNC_EVERY) return;
+      let st = -1, P = null;
+      try{ st = VideoGateway.stateCode(); P = VideoGateway.time(); }catch(err){}
+      if(st !== 1 || P == null || isNaN(P)) return;           // 動画が実再生中でなければ触らない
+      lastResync = now;
+      const drift = P - (vt - VideoSync.latency());           // 動画位置 − この拍の狙い動画位置
+      if(Math.abs(drift) <= RESYNC_THRESH) return;
+      const target = PlaybackService.indexAtVideo(P + VideoSync.latency());
+      if(PlaybackService.at(target)) PlaybackScheduler.resyncTo(target);
+    }
     function draw(){
       if(!running) return;
       const now = ClockGateway.now();
@@ -1823,8 +1849,10 @@
         view.endWaiting(baseStatus());
       }
       const queue = PlaybackScheduler.queue;
+      let lastVt = null;
       while(queue.length && queue[0].time <= now){
         const e = queue.shift();
+        lastVt = e.vt;
         const key = e.gid + ":" + e.rep + ":" + e.bar;
         if(key !== shown){
           shown = key;
@@ -1838,6 +1866,7 @@
         }
         view.setBeatDot(e.beat);
       }
+      if(lastVt != null) maybeResync(now, lastVt);   // ② 動画マスターとのズレを静かに補正
       if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ stop(true); return; }
       ClockGateway.frame(draw);
     }
@@ -1854,6 +1883,7 @@
       soloId = (mode === "all") ? null : Store.getState().activeId;
       const ciTarget = soloTarget();          // カウントイン基準（activeId を消す前に取得）
       running = true; shown = "";             // 先に running を立て、下の再描画でトグル（停止）状態を反映する
+      lastResync = ClockGateway.now() + 0.5;  // ② 頭出し直後は動かさない（最初の再同期チェックは約1.5秒後）
       if(!o.resume){
         PlaybackService.update(mode, soloId); // 更新：再生のたびに timeline を丸ごと作り直す（singleton を差し替え）
         resumeActiveId = Store.getState().activeId;
