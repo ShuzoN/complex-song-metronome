@@ -309,14 +309,22 @@
   .fs-overlay.no-seek .fs-tapzone{pointer-events:none}
   .fs-overlay.no-seek .fs-tapzone .fs-hint{display:none}
 
+  /* 右上に固定表示する ✕ のぶんだけ右パディングを確保し、タイムラインが下に潜り込まないようにする */
   .fs-top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
-    padding:clamp(8px,2.4dvh,12px) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
+    padding:clamp(8px,2.4dvh,12px) calc(clamp(12px,2vw,16px) + 48px) 0 clamp(12px,2vw,18px)}
   .fs-rep{font-family:var(--mono);font-size:clamp(11px,3dvh,13px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .fs-rep .of{color:rgba(245,244,239,.4)}
   .fs-rep .u{color:rgba(245,244,239,.45);font-size:.8em;margin-left:2px}
-  .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px)}
-  .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:26px;display:flex;align-items:center;justify-content:center;
+  /* セクション（リズムグループ）バーは横スクロール可能に。グループが多くても ✕ の下や画面外に
+     はみ出さず（overflow でボックス内にクリップ）、スワイプで全グループへ到達できる。
+     少数グループのときは flex-grow で従来どおり幅いっぱいに広げる。 */
+  .fs-timeline{position:relative;flex:1 1 auto;display:flex;gap:3px;height:clamp(24px,7.5dvh,32px);
+    overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+    scroll-snap-type:x proximity;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .fs-timeline::-webkit-scrollbar{display:none}
+  .fs-seg{position:relative;flex-grow:1;flex-basis:0;min-width:clamp(52px,14vw,74px);display:flex;align-items:center;justify-content:center;
+    scroll-snap-align:center;
     border:1px solid rgba(245,244,239,.2);background:rgba(245,244,239,.03);overflow:hidden;cursor:pointer;
     font-family:var(--body);font-size:clamp(9px,2.7dvh,11px);letter-spacing:.02em;color:rgba(245,244,239,.5);white-space:nowrap;
     -webkit-tap-highlight-color:transparent}
@@ -325,22 +333,30 @@
   .fs-seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
   .fs-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(196,54,42,.32);z-index:0;transition:width .3s ease}
   .fs-lbl{position:relative;z-index:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis}
-  .fs-close{flex:0 0 auto;width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
-    background:rgba(245,244,239,.06);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
-    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  /* ✕ は常にオーバーレイの最前面（フラッシュ z:3・回転案内 z:5 より上）に固定表示し、必ずタップできるようにする */
+  .fs-close{position:absolute;z-index:60;
+    top:calc(env(safe-area-inset-top) + clamp(8px,2.4dvh,12px));right:calc(env(safe-area-inset-right) + clamp(12px,2vw,16px));
+    width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
+    background:rgba(25,28,24,.72);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;
+    -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
   .fs-close:active{transform:translate(1px,1px)}
 
   .fs-center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;
     gap:clamp(8px,2.6dvh,16px);min-height:0;overflow:hidden}
-  .fs-strip-wrap{flex:0 0 auto;position:relative;display:flex;align-items:center;
-    height:clamp(84px,34dvh,150px);overflow:hidden;
+  /* 帯は横スワイプでスクロールできるカルーセル。タップゾーン（z:1）より前面に置き、
+     指のパンを受け取る。スクロールバーは隠し、両端はマスクでフェード。 */
+  .fs-strip-wrap{flex:0 0 auto;position:relative;z-index:2;display:flex;align-items:center;
+    height:clamp(84px,34dvh,150px);overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+    scroll-snap-type:x proximity;touch-action:pan-x;-webkit-overflow-scrolling:touch;scrollbar-width:none;
     -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
             mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
-  .fs-track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw;
-    transition:transform 320ms cubic-bezier(.22,.61,.36,1);will-change:transform}
+  .fs-strip-wrap::-webkit-scrollbar{display:none}
+  .fs-track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw}
   .fs-fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
     width:clamp(42px,15dvh,66px);height:clamp(42px,16dvh,64px);font-size:clamp(13px,4.4dvh,20px);
+    scroll-snap-align:center;
     transition:width .26s ease,height .26s ease,font-size .26s ease,opacity .26s ease,background .26s ease}
   .fs-fbar.done{opacity:.32}
   .fs-fbar.now{width:clamp(80px,30dvh,112px);height:clamp(80px,30dvh,112px);font-size:clamp(26px,9.5dvh,40px);
@@ -351,6 +367,13 @@
   .fs-fr .fs-line{width:1em;height:0;border-top:.09em solid rgba(245,244,239,.4);margin:.16em 0}
   .fs-fbar.now .fs-fr{color:#FFF}
   .fs-fbar.now .fs-fr .fs-line{border-top-color:rgba(255,255,255,.85)}
+  /* 全リズムグループを1本の帯に連結。境界に区切り線＋グループ名（縦書き）を置き、
+     どこからどのグループかを見分けられるようにする（横スクロールで曲全体を辿れる） */
+  .fs-gsep{flex:0 0 auto;display:flex;align-items:center;gap:clamp(3px,0.9vw,6px);align-self:center;
+    height:clamp(52px,20dvh,84px);margin:0 clamp(2px,0.7vw,8px);padding-left:clamp(4px,1vw,8px);
+    border-left:1px solid rgba(245,244,239,.18)}
+  .fs-gsep-name{writing-mode:vertical-rl;text-orientation:mixed;max-height:100%;overflow:hidden;
+    font-family:var(--body);font-size:clamp(8px,2.2dvh,10px);letter-spacing:.06em;color:rgba(245,244,239,.34)}
 
   .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
   /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
@@ -529,13 +552,15 @@
 
 <!-- ============ 全画面モード（横画面 練習HUD）。裏側は既存の Transport / VideoPadService を再利用 ============ -->
 <div class="fs-overlay" id="fsOverlay" hidden>
+  <!-- ✕ はオーバーレイ直下に置き、常に最前面（z:60）で固定表示する -->
+  <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
+
   <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印ボタンに加えた大きなタップ領域） -->
   <button class="fs-tapzone left" id="fsTapL" type="button" aria-label="タップで5秒戻す"><span class="fs-hint">◁</span></button>
   <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
 
   <div class="fs-top">
     <div class="fs-timeline" id="fsTimeline"></div>
-    <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
   </div>
 
   <div class="fs-center">
@@ -2773,7 +2798,8 @@
      syncIdle）経由で受け取り、この HUD にも反映する。 */
   const FullscreenView = (() => {
     const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
-    let opened = false, lastGid = null, lastTLKey = "", flashTimer = null;
+    let opened = false, lastStripKey = "", lastTLKey = "", flashTimer = null;
+    let userBrowseUntil = 0, tlBrowseUntil = 0, instantNext = false;   // 手動スワイプ中は自動追従を止める（帯／タイムライン別）／次の中央寄せを即時にする
     const el = {};
     function cache(){
       el.overlay=$("fsOverlay"); el.top=$("fsRep"); el.timeline=$("fsTimeline"); el.track=$("fsTrack");
@@ -2808,24 +2834,61 @@
         el.timeline.appendChild(seg);
       });
     }
-    function buildStrip(g){
+    // 帯の構造キー：グループの並び・名前・拍子。これが変わった時だけ帯を作り直す
+    function stripKey(){
+      return state().groups
+        .map(g=>g.id+":"+g.name+":"+g.pattern.rhythms.map(r=>r.num+"/"+r.den).join(","))
+        .join("|");
+    }
+    // 全グループの拍子を1本の帯に連結（境界にグループ名入りの区切り）。横スクロールで曲全体を辿れる
+    function buildStrip(){
+      const key = stripKey();
+      if(key === lastStripKey) return;
+      lastStripKey = key;
       el.track.innerHTML = "";
-      if(!g) return;
-      g.pattern.rhythms.forEach((r,i)=>{
-        const t=document.createElement("div");
-        t.className="fs-fbar"; t.dataset.bi=i;
-        t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
-        el.track.appendChild(t);
+      state().groups.forEach((g,gi)=>{
+        if(gi > 0){
+          const sep=document.createElement("div");
+          sep.className="fs-gsep";
+          const nm=document.createElement("span");
+          nm.className="fs-gsep-name"; nm.textContent=g.name;
+          sep.appendChild(nm);
+          el.track.appendChild(sep);
+        }
+        g.pattern.rhythms.forEach((r,i)=>{
+          const t=document.createElement("div");
+          t.className="fs-fbar"; t.dataset.gid=g.id; t.dataset.bi=i;
+          t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
+          el.track.appendChild(t);
+        });
       });
     }
-    function centerCurrent(bar){
-      const tiles = el.track.children;
-      if(!tiles.length) return;
-      const idx = Math.max(0, Math.min(bar, tiles.length-1));
-      const t = tiles[idx];
-      const center = el.track.parentElement.clientWidth / 2;
-      const barCenter = t.offsetLeft + t.offsetWidth/2;
-      el.track.style.transform = "translateX(" + (center - barCenter) + "px)";
+    // 連結した帯の中から、あるグループの指定小節タイルを探す（区切りは飛ばす）
+    function findTile(gid, bar){
+      return [...el.track.children].find(t=>
+        t.classList.contains("fs-fbar") && t.dataset.gid===gid && +t.dataset.bi===bar) || null;
+    }
+    // 現在（再生中）／プレビュー（停止中）の小節を帯の中央へ寄せる（横スクロール位置を動かす）。
+    // ユーザーがスワイプ中（userBrowseUntil）は追従を止め、覗き見を邪魔しない（force で無視）。
+    function centerCurrent(force, instant){
+      const ctx = context();
+      if(!ctx.g) return;
+      if(!force && performance.now() < userBrowseUntil) return;
+      const t = findTile(ctx.g.id, ctx.bar) || findTile(ctx.g.id, 0);
+      if(!t) return;
+      const wrap = el.track.parentElement;
+      const left = Math.max(0, t.offsetLeft + t.offsetWidth/2 - wrap.clientWidth/2);
+      try{ wrap.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
+      catch(_){ wrap.scrollLeft = left; }
+    }
+    // 上部タイムライン（セクションバー）を、現在セクションが見えるように横スクロール。手動スワイプ中は止める。
+    function scrollTimeline(force, instant){
+      if(!force && performance.now() < tlBrowseUntil) return;
+      const seg = el.timeline.querySelector(".fs-seg.cur");
+      if(!seg) return;
+      const left = Math.max(0, seg.offsetLeft + seg.offsetWidth/2 - el.timeline.clientWidth/2);
+      try{ el.timeline.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
+      catch(_){ el.timeline.scrollLeft = left; }
     }
     function paintBeats(n){
       if(!opened) return;
@@ -2864,16 +2927,20 @@
       if(!opened) return;
       const ctx = context(), groups = state().groups, bar = ctx.bar;
       buildTimeline();
-      if(!ctx.g){ el.track.innerHTML=""; lastGid=null; el.rep.innerHTML=""; return; }
-      if(ctx.g.id !== lastGid){ lastGid = ctx.g.id; buildStrip(ctx.g); }
-      // フォーカス帯：現在小節=大・赤／済み=薄く
-      [...el.track.children].forEach((t,i)=>{
-        t.classList.toggle("now", i===bar);
-        t.classList.toggle("done", ctx.running && i<bar);
-      });
-      centerCurrent(bar);
-      // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
+      buildStrip();
+      if(!ctx.g){ el.rep.innerHTML=""; return; }
       const gi = groups.indexOf(ctx.g);
+      const inst = instantNext; instantNext = false;   // この同期での中央寄せを即時にするか（開いた直後・リサイズ時）
+      // フォーカス帯：全グループを連結した帯の中で、現在小節=大・赤／再生済み=薄く
+      const idxOf = {}; groups.forEach((g,i)=>{ idxOf[g.id]=i; });
+      [...el.track.children].forEach(t=>{
+        if(!t.classList.contains("fs-fbar")) return;
+        const tgi = idxOf[t.dataset.gid], tb = +t.dataset.bi;
+        t.classList.toggle("now", t.dataset.gid===ctx.g.id && tb===bar);
+        t.classList.toggle("done", ctx.running && (tgi < gi || (tgi===gi && tb < bar)));
+      });
+      centerCurrent(false, inst);
+      // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
       [...el.timeline.children].forEach((seg,i)=>{
         seg.classList.toggle("cur", i===gi);
         seg.classList.toggle("done", i<gi);
@@ -2886,6 +2953,7 @@
           fill.style.width = Math.round((done/total)*100) + "%";
         }
       });
+      scrollTimeline(false, inst);   // 現在セクションが ✕ より左に見えるよう追従スクロール
       // 周回カウンタ
       el.rep.innerHTML = '<span>'+(ctx.running ? ctx.rep+1 : 1)+'</span><span class="of"> / '+ctx.g.reps+'</span><span class="u">周</span>';
       // 停止中プレビューは pulse も自前で描く（再生中は Transport の描画フックが担当）
@@ -2923,7 +2991,8 @@
     }
     function open(){
       if(opened) return;
-      opened = true; lastGid = null; lastTLKey = "";
+      opened = true; lastStripKey = ""; lastTLKey = "";
+      userBrowseUntil = 0; instantNext = true;   // 開いた直後は現在小節へ即時に寄せる
       el.overlay.hidden = false;
       document.body.classList.add("fs-lock");
       try{ if(el.overlay.requestFullscreen) el.overlay.requestFullscreen().catch(()=>{}); }catch(err){}
@@ -2955,7 +3024,36 @@
         if(seg && seg.dataset.id) playGroup(seg.dataset.id);
       });
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
-      window.addEventListener("resize", ()=>{ if(opened) centerCurrent(Transport.running() ? Transport.cur().bar : 0); });
+      window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
+
+      // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
+      // 動かさずに軽くタップした時だけ（左半分＝5秒戻す／右半分＝5秒送る）シークにフォールバックする。
+      const strip = el.track.parentElement;
+      let tap = null;
+      const holdBrowse = ()=>{ userBrowseUntil = performance.now() + 3500; };
+      strip.addEventListener("wheel", holdBrowse, {passive:true});
+      strip.addEventListener("scroll", ()=>{ if(tap) holdBrowse(); }, {passive:true});
+      strip.addEventListener("pointerdown", e=>{ tap = {x:e.clientX, y:e.clientY, t:performance.now()}; holdBrowse(); });
+      strip.addEventListener("pointermove", ()=>{ if(tap) holdBrowse(); }, {passive:true});
+      strip.addEventListener("pointercancel", ()=>{ tap = null; });   // ネイティブのパン開始でキャンセル＝スワイプ扱い
+      strip.addEventListener("pointerup", e=>{
+        if(!tap) return;
+        const dx = Math.abs(e.clientX - tap.x), dy = Math.abs(e.clientY - tap.y), dt = performance.now() - tap.t;
+        tap = null;
+        if(dx < 8 && dy < 8 && dt < 300){          // 動いていない＝タップ → シーク（追従もすぐ戻す）
+          userBrowseUntil = 0;
+          seek(e.clientX < window.innerWidth/2 ? -1 : 1);
+        }
+      });
+
+      // 上部タイムライン（セクションバー）も横スワイプで移動でき、手で動かした直後は追従を止める。
+      // 軽いタップ（＝そのグループへジャンプ）は click ハンドラで処理するため、ここでは抑止しない。
+      let tlTap = null;
+      el.timeline.addEventListener("wheel", ()=>{ tlBrowseUntil = performance.now() + 3500; }, {passive:true});
+      el.timeline.addEventListener("pointerdown", e=>{ tlTap = {x:e.clientX, y:e.clientY}; });
+      el.timeline.addEventListener("pointermove", e=>{ if(tlTap && (Math.abs(e.clientX-tlTap.x) > 8 || Math.abs(e.clientY-tlTap.y) > 8)) tlBrowseUntil = performance.now() + 3500; }, {passive:true});
+      el.timeline.addEventListener("pointerup", ()=>{ tlTap = null; });
+      el.timeline.addEventListener("pointercancel", ()=>{ tlTap = null; tlBrowseUntil = performance.now() + 3500; });
     }
     return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
   })();
