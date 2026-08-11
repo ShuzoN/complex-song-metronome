@@ -183,19 +183,17 @@
   .g-hbpm{display:inline-flex;align-items:center;gap:4px;flex:none}
   .g-hbpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
   .g-hbpm input{width:54px;height:30px;font-size:13px}
-  /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・ボタン2/3＋rep数1/3 */
-  .g-play{margin-top:2px;margin-bottom:0;display:flex;gap:8px;align-items:stretch}
-  .g-solo{flex:2 1 0;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
+  /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・全幅 */
+  .g-play{margin-top:2px;margin-bottom:0}
+  .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
     font-family:var(--mono);font-size:12px;letter-spacing:.04em}
   .g-solo.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
   .g-solo:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active{transform:translateY(1px)}
-  /* rep数（1/3幅）。現在／総の周回をモノスペースで。solo 再生中はライブ更新（highlight） */
-  .g-solo-rep{flex:1 1 0;height:38px;display:flex;align-items:center;justify-content:center;gap:4px;
-    border:1px solid var(--rule);background:var(--panel);
-    font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--dim)}
-  .g-solo-rep .n{color:var(--ink)}
-  .g-solo-rep .u{font-size:10px;color:var(--dim)}
+  /* 「再生回数」ラベル横の現在／総 周回カウンタ。solo 再生中はライブ更新（highlight） */
+  .g-labwrap{display:inline-flex;align-items:baseline}
+  .g-repnow{margin-left:8px;font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--dim)}
+  .g-repnow .n{color:var(--ink)}
   .mini{width:28px;height:28px;background:transparent;border:1px solid var(--rule);font-size:11px;line-height:1;display:grid;place-items:center;color:var(--ink)}
   .mini:hover:not(:disabled){background:#EFEEE7;border-color:var(--ink)}
   .mini:disabled{opacity:.25;cursor:default}
@@ -2215,6 +2213,16 @@
         row.className = "g-row";
         const lab = document.createElement("span");
         lab.className = "g-label"; lab.textContent = "再生回数";
+        // ラベル横に現在の周回／総回数。停止中は「1/N」、solo 再生中は highlight() がライブ更新
+        const now = document.createElement("span");
+        now.className = "g-repnow"; now.dataset.role = "repnow";
+        now.title = "現在の周回 / 総回数";
+        const soloNow = running && Transport.mode() === "solo" && Transport.soloId() === g.id;
+        const curRep = soloNow ? (Transport.cur().rep + 1) : 1;
+        now.innerHTML = '<span class="n">'+curRep+'</span>/'+g.reps;
+        const labwrap = document.createElement("span");
+        labwrap.className = "g-labwrap";
+        labwrap.append(lab, now);
         const reps = document.createElement("div");
         reps.className = "g-reps";
         const x = document.createElement("span"); x.className="x"; x.textContent="×";
@@ -2223,7 +2231,7 @@
         rin.setAttribute("aria-label","再生回数");
         rin.addEventListener("change", ()=>GroupService.setReps(g.id, rin.value));
         reps.append(x, rin);
-        row.append(lab, reps);
+        row.append(labwrap, reps);
         body.appendChild(row);
 
         body.appendChild(PatternView.bars(g));
@@ -2247,17 +2255,6 @@
         solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel()
                              : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
         prow.appendChild(solo);
-
-        /* rep数（現在／総の周回）。ボタン横に1/3幅で。停止中は「1/N 回」、
-           solo 再生中は highlight() が周回をライブ更新する。 */
-        const solorep = document.createElement("div");
-        solorep.className = "g-solo-rep";
-        solorep.dataset.role = "soloreps";
-        solorep.title = "再生回数（現在 / 総数）";
-        const curRep = soloOn && running ? (Transport.cur().rep + 1) : 1;
-        solorep.innerHTML = '<span class="n">'+curRep+'/'+g.reps+'</span><span class="u">回</span>';
-        prow.appendChild(solorep);
-
         body.appendChild(prow);
         card.appendChild(body);
       }
@@ -2459,11 +2456,11 @@
         if(t && g){
           t.textContent = on ? (cur.rep+1) + " / " + g.reps : Fmt.times(g);
         }
-        // 展開カードのグループ再生行の rep数（現在／総）も同期。solo 再生中だけ周回を進める
-        const sr = card.querySelector('[data-role="soloreps"]');
-        if(sr && g){
-          const nn = sr.querySelector(".n");
-          if(nn) nn.textContent = (on ? cur.rep+1 : 1) + "/" + g.reps;
+        // 展開カードの「再生回数」ラベル横の現在周回も同期。solo 再生中だけ周回を進める
+        const rn = card.querySelector('[data-role="repnow"]');
+        if(rn && g){
+          const nn = rn.querySelector(".n");
+          if(nn) nn.textContent = on ? cur.rep+1 : 1;
         }
       });
     }
