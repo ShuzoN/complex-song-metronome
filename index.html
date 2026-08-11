@@ -309,8 +309,9 @@
   .fs-overlay.no-seek .fs-tapzone{pointer-events:none}
   .fs-overlay.no-seek .fs-tapzone .fs-hint{display:none}
 
+  /* 右上に固定表示する ✕ のぶんだけ右パディングを確保し、タイムラインが下に潜り込まないようにする */
   .fs-top{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:clamp(8px,1.6vw,12px);
-    padding:clamp(8px,2.4dvh,12px) clamp(12px,2vw,16px) 0 clamp(12px,2vw,18px)}
+    padding:clamp(8px,2.4dvh,12px) calc(clamp(12px,2vw,16px) + 48px) 0 clamp(12px,2vw,18px)}
   .fs-rep{font-family:var(--mono);font-size:clamp(11px,3dvh,13px);color:var(--signal);
     font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap}
   .fs-rep .of{color:rgba(245,244,239,.4)}
@@ -325,9 +326,13 @@
   .fs-seg.cur{border-color:var(--signal);background:rgba(196,54,42,.16);color:#FFF;font-weight:700}
   .fs-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(196,54,42,.32);z-index:0;transition:width .3s ease}
   .fs-lbl{position:relative;z-index:1;padding:0 6px;overflow:hidden;text-overflow:ellipsis}
-  .fs-close{flex:0 0 auto;width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
-    background:rgba(245,244,239,.06);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
-    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  /* ✕ は常にオーバーレイの最前面（フラッシュ z:3・回転案内 z:5 より上）に固定表示し、必ずタップできるようにする */
+  .fs-close{position:absolute;z-index:60;
+    top:calc(env(safe-area-inset-top) + clamp(8px,2.4dvh,12px));right:calc(env(safe-area-inset-right) + clamp(12px,2vw,16px));
+    width:40px;height:30px;border:1px solid rgba(245,244,239,.4);
+    background:rgba(25,28,24,.72);color:var(--panel);font-family:var(--mono);font-size:17px;line-height:1;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent;
+    -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
   .fs-close:active{transform:translate(1px,1px)}
 
   .fs-center{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;
@@ -351,6 +356,13 @@
   .fs-fr .fs-line{width:1em;height:0;border-top:.09em solid rgba(245,244,239,.4);margin:.16em 0}
   .fs-fbar.now .fs-fr{color:#FFF}
   .fs-fbar.now .fs-fr .fs-line{border-top-color:rgba(255,255,255,.85)}
+  /* 全リズムグループを1本の帯に連結。境界に区切り線＋グループ名（縦書き）を置き、
+     どこからどのグループかを見分けられるようにする（横スクロールで曲全体を辿れる） */
+  .fs-gsep{flex:0 0 auto;display:flex;align-items:center;gap:clamp(3px,0.9vw,6px);align-self:center;
+    height:clamp(52px,20dvh,84px);margin:0 clamp(2px,0.7vw,8px);padding-left:clamp(4px,1vw,8px);
+    border-left:1px solid rgba(245,244,239,.18)}
+  .fs-gsep-name{writing-mode:vertical-rl;text-orientation:mixed;max-height:100%;overflow:hidden;
+    font-family:var(--body);font-size:clamp(8px,2.2dvh,10px);letter-spacing:.06em;color:rgba(245,244,239,.34)}
 
   .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
   /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
@@ -529,13 +541,15 @@
 
 <!-- ============ 全画面モード（横画面 練習HUD）。裏側は既存の Transport / VideoPadService を再利用 ============ -->
 <div class="fs-overlay" id="fsOverlay" hidden>
+  <!-- ✕ はオーバーレイ直下に置き、常に最前面（z:60）で固定表示する -->
+  <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
+
   <!-- 左半分＝5秒戻す／右半分＝5秒送る（下部の矢印ボタンに加えた大きなタップ領域） -->
   <button class="fs-tapzone left" id="fsTapL" type="button" aria-label="タップで5秒戻す"><span class="fs-hint">◁</span></button>
   <button class="fs-tapzone right" id="fsTapR" type="button" aria-label="タップで5秒送る"><span class="fs-hint">▷</span></button>
 
   <div class="fs-top">
     <div class="fs-timeline" id="fsTimeline"></div>
-    <button class="fs-close" id="fsClose" type="button" aria-label="全画面を閉じる">✕</button>
   </div>
 
   <div class="fs-center">
@@ -2773,7 +2787,7 @@
      syncIdle）経由で受け取り、この HUD にも反映する。 */
   const FullscreenView = (() => {
     const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
-    let opened = false, lastGid = null, lastTLKey = "", flashTimer = null;
+    let opened = false, lastStripKey = "", lastTLKey = "", flashTimer = null;
     const el = {};
     function cache(){
       el.overlay=$("fsOverlay"); el.top=$("fsRep"); el.timeline=$("fsTimeline"); el.track=$("fsTrack");
@@ -2808,21 +2822,46 @@
         el.timeline.appendChild(seg);
       });
     }
-    function buildStrip(g){
+    // 帯の構造キー：グループの並び・名前・拍子。これが変わった時だけ帯を作り直す
+    function stripKey(){
+      return state().groups
+        .map(g=>g.id+":"+g.name+":"+g.pattern.rhythms.map(r=>r.num+"/"+r.den).join(","))
+        .join("|");
+    }
+    // 全グループの拍子を1本の帯に連結（境界にグループ名入りの区切り）。横スクロールで曲全体を辿れる
+    function buildStrip(){
+      const key = stripKey();
+      if(key === lastStripKey) return;
+      lastStripKey = key;
       el.track.innerHTML = "";
-      if(!g) return;
-      g.pattern.rhythms.forEach((r,i)=>{
-        const t=document.createElement("div");
-        t.className="fs-fbar"; t.dataset.bi=i;
-        t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
-        el.track.appendChild(t);
+      state().groups.forEach((g,gi)=>{
+        if(gi > 0){
+          const sep=document.createElement("div");
+          sep.className="fs-gsep";
+          const nm=document.createElement("span");
+          nm.className="fs-gsep-name"; nm.textContent=g.name;
+          sep.appendChild(nm);
+          el.track.appendChild(sep);
+        }
+        g.pattern.rhythms.forEach((r,i)=>{
+          const t=document.createElement("div");
+          t.className="fs-fbar"; t.dataset.gid=g.id; t.dataset.bi=i;
+          t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
+          el.track.appendChild(t);
+        });
       });
     }
-    function centerCurrent(bar){
-      const tiles = el.track.children;
-      if(!tiles.length) return;
-      const idx = Math.max(0, Math.min(bar, tiles.length-1));
-      const t = tiles[idx];
+    // 連結した帯の中から、あるグループの指定小節タイルを探す（区切りは飛ばす）
+    function findTile(gid, bar){
+      return [...el.track.children].find(t=>
+        t.classList.contains("fs-fbar") && t.dataset.gid===gid && +t.dataset.bi===bar) || null;
+    }
+    // 現在（再生中）／プレビュー（停止中）の小節を帯の中央に寄せる
+    function centerCurrent(){
+      const ctx = context();
+      if(!ctx.g) return;
+      const t = findTile(ctx.g.id, ctx.bar) || findTile(ctx.g.id, 0);
+      if(!t) return;
       const center = el.track.parentElement.clientWidth / 2;
       const barCenter = t.offsetLeft + t.offsetWidth/2;
       el.track.style.transform = "translateX(" + (center - barCenter) + "px)";
@@ -2864,16 +2903,19 @@
       if(!opened) return;
       const ctx = context(), groups = state().groups, bar = ctx.bar;
       buildTimeline();
-      if(!ctx.g){ el.track.innerHTML=""; lastGid=null; el.rep.innerHTML=""; return; }
-      if(ctx.g.id !== lastGid){ lastGid = ctx.g.id; buildStrip(ctx.g); }
-      // フォーカス帯：現在小節=大・赤／済み=薄く
-      [...el.track.children].forEach((t,i)=>{
-        t.classList.toggle("now", i===bar);
-        t.classList.toggle("done", ctx.running && i<bar);
-      });
-      centerCurrent(bar);
-      // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
+      buildStrip();
+      if(!ctx.g){ el.rep.innerHTML=""; return; }
       const gi = groups.indexOf(ctx.g);
+      // フォーカス帯：全グループを連結した帯の中で、現在小節=大・赤／再生済み=薄く
+      const idxOf = {}; groups.forEach((g,i)=>{ idxOf[g.id]=i; });
+      [...el.track.children].forEach(t=>{
+        if(!t.classList.contains("fs-fbar")) return;
+        const tgi = idxOf[t.dataset.gid], tb = +t.dataset.bi;
+        t.classList.toggle("now", t.dataset.gid===ctx.g.id && tb===bar);
+        t.classList.toggle("done", ctx.running && (tgi < gi || (tgi===gi && tb < bar)));
+      });
+      centerCurrent();
+      // タイムライン：現在セクション＝赤＋進捗フィル／済み＝薄く
       [...el.timeline.children].forEach((seg,i)=>{
         seg.classList.toggle("cur", i===gi);
         seg.classList.toggle("done", i<gi);
@@ -2923,7 +2965,7 @@
     }
     function open(){
       if(opened) return;
-      opened = true; lastGid = null; lastTLKey = "";
+      opened = true; lastStripKey = ""; lastTLKey = "";
       el.overlay.hidden = false;
       document.body.classList.add("fs-lock");
       try{ if(el.overlay.requestFullscreen) el.overlay.requestFullscreen().catch(()=>{}); }catch(err){}
@@ -2955,7 +2997,7 @@
         if(seg && seg.dataset.id) playGroup(seg.dataset.id);
       });
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
-      window.addEventListener("resize", ()=>{ if(opened) centerCurrent(Transport.running() ? Transport.cur().bar : 0); });
+      window.addEventListener("resize", ()=>{ if(opened) centerCurrent(); });
     }
     return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
   })();
