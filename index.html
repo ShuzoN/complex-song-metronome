@@ -1528,14 +1528,12 @@
     const isSoloMode = m => m === "solo";
     let frame = null;                          // 唯一の timeline state（singleton）
     // 対象グループ列（solo/lead は該当グループのみ、他は拍子を持つ全グループ）
-    // tail=true のとき、solo は「該当グループから末尾まで」の拍子ありグループを返す（全画面の連続再生用）
+    // tail=true（全画面のグループ再生）は曲全体（拍子ありの全グループ）を返す。再生の開始位置だけを
+    // 対象グループ先頭にする（Transport が firstIndexOf で解決）。こうすると ◁◁ の −5秒で対象グループ
+    // より前のセクションへも遡れ、そのまま曲末尾まで連続再生できる。
     function targetGroups(mode, soloId, tail){
       const groups = Store.getState().groups;
-      if(isSoloMode(mode) && soloId){
-        if(tail){
-          const start = groups.findIndex(g => g.id === soloId);
-          return (start < 0 ? [] : groups.slice(start)).filter(g => g.pattern.rhythms.length);
-        }
+      if(isSoloMode(mode) && soloId && !tail){
         return groups.filter(g => g.id === soloId && g.pattern.rhythms.length);
       }
       return groups.filter(g => g.pattern.rhythms.length);
@@ -1579,6 +1577,12 @@
       ready: () => !!frame,
       count: () => frame ? frame.events.length : 0,
       at: i => frame ? frame.events[i] : null,
+      // 指定グループの最初の拍の index（曲全体タイムライン上の再生開始位置に使う）。無ければ 0
+      firstIndexOf(gid){
+        if(!frame || gid == null) return 0;
+        const i = frame.events.findIndex(e => e.gid === gid);
+        return i < 0 ? 0 : i;
+      },
       // vt 以上の最初の index（二分探索）。VideoPadService が動画位置→開始拍の突き合わせに使う。
       indexAtVideo(vtq){
         if(!frame) return 0;
@@ -1684,7 +1688,8 @@
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
       // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
-      cueWatch = {target: fire, from, kind, index: 0, countIn: useCountIn, resume: false, jump: false,
+      // index:null＝beginPlayback 側で既定位置を解決（全体は曲頭0／全画面グループ再生は対象グループ先頭）
+      cueWatch = {target: fire, from, kind, index: null, countIn: useCountIn, resume: false, jump: false,
                   t0: ClockGateway.perf(), limit: 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
@@ -1898,7 +1903,11 @@
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
       const t0 = ClockGateway.now();
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
-      PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
+      // 開始 index：pad などが明示指定すればそれ。全画面グループ再生（soloTail）は曲全体タイムライン上の
+      // 対象グループ先頭から。ふつうの全体再生は 0（曲頭）。o.index は 0 も有効値なので != null で判定する。
+      const baseIndex = (soloTail && soloId != null) ? PlaybackService.firstIndexOf(soloId) : 0;
+      const startIndex = (o.index != null) ? o.index : baseIndex;
+      PlaybackScheduler.primeAtIndex(start, startIndex);
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
       for(const bar of ci.bars){
