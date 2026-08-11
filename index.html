@@ -166,11 +166,15 @@
   .g-title{flex:1 1 90px;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .g-times{font-family:var(--mono);font-size:11.5px;color:var(--brass);white-space:nowrap;letter-spacing:.04em}
   .group.playing .g-times{color:var(--signal)}
-  /* 折りたたみ時、再生回数(×N)の上にこのブロックのBPMを重ねて表示（可変BPM曲の区間判別用） */
-  .g-meta{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1}
-  .g-bpm-tag{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.02em;white-space:nowrap}
-  .g-bpm-tag.own{color:var(--brass)}   /* このグループ固有のBPM＝基準テンポに追従していない区間 */
+  /* 折りたたみ時、カード右上に BPM と再生回数(×N) を重ねて表示（可変BPM曲の区間判別用） */
+  .g-meta{position:absolute;top:8px;right:10px;display:flex;flex-direction:column;align-items:flex-end;gap:3px;line-height:1}
+  .g-bpm-tag{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.02em;white-space:nowrap}
+  .g-bpm-tag .v{border:1px solid var(--rule);background:#FAF9F5;padding:1px 5px;font-size:11px;font-weight:400;color:var(--ink)}   /* 値は箱（枠）で囲む */
+  .g-bpm-tag.own{color:var(--brass)}                       /* このグループ固有のBPM＝基準テンポに追従していない区間 */
+  .g-bpm-tag.own .v{border-color:var(--brass);color:var(--brass)}
   .group.playing .g-bpm-tag{color:var(--signal)}
+  .group.playing .g-bpm-tag .v{border-color:var(--signal);color:var(--signal)}
+  .group:not(.active) .g-head{padding-right:78px}          /* 右上バッジのぶんだけ名前側に余白を確保 */
 
   .g-sub{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:0 9px 9px 41px}
   .g-sub .g-times{font-size:12px}
@@ -2194,21 +2198,23 @@
         const meta = document.createElement("span");
         meta.className = "g-meta";
 
-        // このブロックの実効BPM（g.bpm があればそれ、無ければ基準テンポに追従）。再生回数の上に重ねて表示
+        // このブロックの実効BPM（g.bpm があればそれ、無ければ基準テンポに追従）。カード右上、再生回数の上に表示
         const own = g.bpm != null;
         const ebpm = Domain.effectiveBpm(g, st.bpm);
         const bpmTag = document.createElement("span");
         bpmTag.className = "g-bpm-tag" + (own ? " own" : "");
         bpmTag.dataset.role = "bpm";
         bpmTag.title = own ? "このグループ固有のBPM" : "基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従中のBPM";
-        bpmTag.textContent = "bpm [" + Fmt.bpm(ebpm) + "]";
+        const bpmLabel = document.createElement("span"); bpmLabel.textContent = "bpm";
+        const bpmVal = document.createElement("b"); bpmVal.className = "v"; bpmVal.textContent = Fmt.bpm(ebpm);
+        bpmTag.append(bpmLabel, bpmVal);
         meta.appendChild(bpmTag);
 
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
         times.title = "再生回数";
         times.textContent = Fmt.times(g);
-        meta.appendChild(times);          // ×N は拍子チップの行に右寄せで整列（BPMの下）
+        meta.appendChild(times);          // ×N は BPM の下に重ねる（カード右上）
         sub.appendChild(meta);
         card.appendChild(sub);
       }
@@ -2383,8 +2389,9 @@
       [...groupsEl.children].forEach(card=>{
         const tag = card.querySelector('[data-role="bpm"]');
         if(!tag || tag.classList.contains("own")) return;   // 固有BPMは基準に追従しないので触らない
+        const val = tag.querySelector(".v");
         const g = st.groups.find(x=>x.id === card.dataset.id);
-        if(g) tag.textContent = "bpm [" + Fmt.bpm(Domain.effectiveBpm(g, st.bpm)) + "]";
+        if(g && val) val.textContent = Fmt.bpm(Domain.effectiveBpm(g, st.bpm));
       });
     }
 
