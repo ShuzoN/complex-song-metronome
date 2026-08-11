@@ -1381,17 +1381,13 @@
         const ebpm = Domain.effectiveBpm(g, bpm);
         for(let rep = 0; rep < g.reps; rep++){
           // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
-          const rawAnc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-          if(rawAnc != null) vt = Math.max(vt, rawAnc);   // vt は indexAtVideo（動画位置→拍の二分探索）用に単調化
-          // 再アンカーは「生の記録cue」を焼き込む（bar0/beat0 のみ）。グループ再生と同じく、動画側の記録位置
-          // ちょうどへ寄せるため。※クランプ後の vt を使うと、cue が BPM 累積より手前（動画が速い区間）のとき
-          // Math.max に食われて同期できない。過去への予約だけはスケジューラ側の Math.max(target, now) で防ぐ。
+          const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
+          if(anc != null) vt = Math.max(vt, anc);
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
             const span = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
-              const evAnc = (bar === 0 && beat === 0) ? rawAnc : null;
-              events.push(Object.freeze({off, vt, anc:evAnc, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
+              events.push(Object.freeze({off, vt, gid:g.id, gbpm, rep, bar, beat, meter:m, accent:(beat===0)}));
               off += span; vt += span;
             }
           }
@@ -1423,14 +1419,9 @@
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
     let nextTime = 0, i = 0, finished = false, endTime = 0;
-    // 動画同期のクローズドループ再アンカー。anchorFn は Transport が注入する関数で、記録cueを渡すと
-    // 「動画がその cue（補正込み）に到達する音声時刻」を返す（＝その場の動画実位置を読む）。null なら無効。
-    // これで各グループ先頭を毎回“実際の動画位置”へ合わせ直す（グループ再生の着地検知と同等・シーク無し）。
-    let anchorFn = null;
     // イベントの拍長。gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
     // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）
     const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, (e.gbpm != null) ? e.gbpm : Store.getState().bpm);
-    function setAnchor(fn){ anchorFn = (typeof fn === "function") ? fn : null; }
     function resetPointer(){ i = 0; finished = false; }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
@@ -1444,13 +1435,6 @@
       if(!n){ finished = true; endTime = nextTime; return; }
       while(!finished && nextTime < limit){
         const e = PlaybackService.at(i);
-        // 動画同期時：記録cueを持つ rep 先頭で、いまの動画実位置から算出した到達時刻へ寄せ直す。
-        // 予測ではなく実位置基準なので、再生レート差・バッファリングがあっても各境界で合い直る。
-        // 過去への予約だけは避ける（微小なフラム許容）。
-        if(anchorFn && e.anc != null){
-          const target = anchorFn(e.anc);
-          if(target != null) nextTime = Math.max(target, ClockGateway.now() + 0.005);
-        }
         const span = beatSeconds(e);
         SoundGateway.click(e.accent, nextTime, span);
         queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
@@ -1460,7 +1444,7 @@
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump, setAnchor,
+      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump,
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
@@ -1468,7 +1452,7 @@
 
   /* ---------- VideoSync（動画の頭出し／助走／cue 記録。VideoGateway を駆動し、頭出し完了で Transport へ戻す） ---------- */
   const VideoSync = (() => {
-    let cueWatch = null;
+    let topWatch = null, cueWatch = null;
     let view = {};
     // 動画同期の遅延補正（秒）。メトロノームの発音は「音声出力遅延 − 動画出力遅延」ぶん
     // 動画より遅れて聞こえるため、記録位置より少し手前を狙って刻み出す＝実音が cue に重なる。
@@ -1482,31 +1466,38 @@
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
     function compensate(cue){ return Math.max(0, cue - CUE_LATENCY); }
-    function cancel(){ cueWatch = null; }
+    function cancel(){ topWatch = null; cueWatch = null; }
 
-    // 全体再生の頭出し：曲頭cue（先頭グループの記録位置）の手前 HEAD_LEAD 秒へ寄せ、
-    // 実到達を確認してから cue で刻み出す（グループ再生・パッドと同じ pollCue／beginPlayback を共有）。
-    // 直前へシークすると getCurrentTime が数フレーム前位置を返して合わせられないため、必ず手前へ置いて到達検知する。
-    const HEAD_LEAD = 3.0;
-    function startAtHead(kind){
-      PlaybackService.update("all", null);        // 曲頭cueを引くため timeline を用意（beginPlayback 側で resume:false により再構築される）
-      const head = PlaybackService.at(0);
-      if(!head){ Transport.clearArm(); return; }
-      // 通常の全体再生は曲頭cue（記録位置）へ寄せる。全体レック中は cue を無視して動画の先頭(0)から流し、
-      // 各グループの真の位置を録り直す（キャッシュ位置へ吸われないように）。
-      const headVt = Transport.recording() ? 0 : (head.anc != null ? head.anc : head.vt);
-      const aim = compensate(headVt);              // 狙う動画位置（cueあれば発音遅延ぶん手前）
-      const from = Math.max(0, aim - HEAD_LEAD);
+    function startFromTop(kind){
       try{
-        VideoGateway.seekTo(from, true);          // 曲頭の手前へ頭出し
+        VideoGateway.seekTo(0, true);
         VideoGateway.play();
       }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
-      // jump モード：手前(from)へ寄せて実到達を確認 → cue(aim) で刻み出す（overshoot 前倒し）。全体再生は空白を挟まず動画に張り付く。
-      cueWatch = {target: aim, from, kind, index: 0, countIn: false, resume: false, jump: true,
-                  t0: ClockGateway.perf(), limit: (HEAD_LEAD + 8) * 1000};
+      topWatch = {kind, t0: ClockGateway.perf()};
       view.status("頭出し中");
-      view.videoMsg("先頭に合わせています…", false);
-      ClockGateway.frame(pollCue);
+      view.videoMsg("先頭に戻しています…", false);
+      ClockGateway.frame(pollTop);
+    }
+    function pollTop(){
+      if(!topWatch) return;
+      let st = -1, t = null;
+      try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
+      // 先頭から実際に動き出したことを確認してから刻み始める（ここで空白が効く）
+      if(st === 1 && t != null && t > 0.02 && t < 2){
+        const kind = topWatch.kind;
+        topWatch = null; Transport.clearArm();
+        view.videoMsg("", false);
+        Transport.beginPlayback(kind);
+        return;
+      }
+      if(ClockGateway.perf() - topWatch.t0 > 6000){
+        const kind = topWatch.kind;
+        topWatch = null; Transport.clearArm();
+        view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
+        Transport.beginPlayback(kind);
+        return;
+      }
+      ClockGateway.frame(pollTop);
     }
     function startAtCue(kind, cue){
       // aim=実音を cue に重ねる補正位置。fire=そこからカウントイン(前グループ末尾の1〜2小節)ぶん
@@ -1549,14 +1540,10 @@
       try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
 
       if(cueWatch.jump){
-        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（全体再生＝HEAD_LEAD 手前／パッド＝SNAP_LEAD 手前）。
+        // 手前(from)へ寄せて実到達を確認してから target で刻み出す（lead＝5秒手前 / パッド＝SNAP_LEAD 手前）。
         // seekTo 直後は getCurrentTime が「移動前の位置」を数フレーム返すため、from まで実到達を確認してから計測。
         if(t != null && !isNaN(t)){
-          // シーク実到達の確認。seekTo 直後は getCurrentTime が旧位置（キャッシュ）を数フレーム返すため、
-          // 「from 近傍(±0.5)に入り」かつ「発行から少し猶予が経った」ことの両方を満たしてから信頼する。
-          // 旧判定 t<=from+0.5 は、直前位置がたまたま from 以下だと旧位置で誤検知して頭がズレていた。
-          const settled = (ClockGateway.perf() - cueWatch.t0) > 200;
-          if(!cueWatch.seeked && settled && Math.abs(t - cueWatch.from) <= 0.5) cueWatch.seeked = true;
+          if(!cueWatch.seeked && t <= cueWatch.from + 0.5) cueWatch.seeked = true;
           if(cueWatch.seeked){
             const remain = cueWatch.target - t;
             if(remain <= 0){
@@ -1602,7 +1589,7 @@
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
     }
-    return { init(o){ view = o.view || view; }, compensate, cancel, startAtHead, startAtCue, startAtIndex, stampCue };
+    return { init(o){ view = o.view || view; }, compensate, cancel, startFromTop, startAtCue, startAtIndex, stampCue };
   })();
 
   /* ---------- Transport（再生ステートマシン：all/solo・preroll・全REC・動画同期を統括） ----------
@@ -1736,17 +1723,6 @@
       // （グループ再生／−5秒再生で頭の拍が後ろへズレて聞こえていたのはこの初回オフセットが主因）
       const t0 = ClockGateway.now();
       const start = Math.max(t0 + 0.005, t0 + 0.02 + wait + ciDur + adjust + lead);
-      // 全体再生（＝all。パッドのシーク再生も含む）かつ動画同期のときだけ、各グループ先頭を「その場の
-      // 動画実位置」から算出した到達時刻へ寄せ直すクローズドループ補正を有効化（＝グループ再生の着地検知を
-      // 各境界に効かせる・シーク無し）。グループ再生・動画なしは従来どおり純粋累積。
-      // 全体レック中は必ず切る：録音は動画を素で流して真の位置を記録するため、過去の cue へ寄せると
-      // 位置がフィードバックでずれる（キャッシュされた頭に吸われる）。
-      const anchorOn = (mode === "all" && VideoGateway.armed() && !recording);
-      PlaybackScheduler.setAnchor(anchorOn ? (cue) => {
-        let v = null; try{ v = VideoGateway.time(); }catch(err){}
-        if(v == null || isNaN(v)) return null;                 // 読めないときは寄せ直さず自走に任せる
-        return ClockGateway.now() + (VideoSync.compensate(cue) - v);   // 動画が compensate(cue) に達する音声時刻
-      } : null);
       PlaybackScheduler.primeAtIndex(start, o.index || 0);   // index 既定 0 = 従来の prime と同じ
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。各小節の頭のみアクセント
@@ -1797,10 +1773,12 @@
     function start(kind){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
-      if(VideoGateway.armed() && kind === "all"){       // 全体再生：曲頭cueの手前へ寄せ、到達検知でロック（グループ再生・パッドと同じ機構）
+      if(VideoGateway.armed() && kind === "all"){       // 全体再生は必ず動画を先頭に戻す
         armKind = kind;
         view.updateTransport();
-        VideoSync.startAtHead(kind);
+        // 即時再生：タップ直後に動画を鳴らさず約1秒おき、その間に停止も受けられる（timeline 更新はこの後の beginPlayback で通る）
+        view.videoMsg("準備中…", false);
+        setTimeout(()=>{ if(armKind === kind && !running) VideoSync.startFromTop(kind); }, IMMEDIATE_LEAD * 1000);
         return;
       }
       const cue = cueOf(kind);
