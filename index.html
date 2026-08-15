@@ -75,6 +75,21 @@
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
   .apply{height:40px;padding:0 14px;background:var(--ink);color:var(--panel);border:1px solid var(--ink);font-size:12px}
 
+  /* ふつうのメトロノーム（曲構成なしで、指定テンポのまま無限に刻む）。テンポ操作のすぐ下 */
+  .plain{padding:0 18px 4px}
+  .plain-btn{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;height:42px;
+    background:var(--panel);border:1px solid var(--ink);font-size:12px;letter-spacing:.06em}
+  .plain-btn:hover:not(:disabled){background:#EAE9E2}
+  .plain-btn:not(:disabled):active{transform:translateY(1px)}
+  .plain-btn:disabled{opacity:.3;cursor:default;transform:none}
+  .plain-btn.on{color:var(--signal);border-color:var(--signal)}   /* 鳴っている間＝停止トグル */
+  .plain-lamp{width:10px;height:10px;flex:none;border:1px solid var(--ink);border-radius:50%;
+    transition:background 60ms linear,transform 60ms linear}
+  .plain-btn.on .plain-lamp{border-color:var(--signal)}
+  .plain-lamp.beat{background:var(--signal);border-color:var(--signal);transform:scale(1.3)}
+  .plain-hint{display:block;margin-top:7px;text-align:center;font-family:var(--mono);font-size:10px;
+    letter-spacing:.06em;color:var(--dim)}
+
   /* volume */
   .vol{padding:6px 18px 16px}
   .vol-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
@@ -474,6 +489,15 @@
     <button class="apply" type="submit">設定</button>
   </form>
 
+  <!-- ふつうのメトロノーム：曲構成を使わず、上のテンポのまま止めるまで等間隔に鳴らし続ける -->
+  <div class="plain">
+    <button class="plain-btn" id="plainBtn" type="button" aria-pressed="false">
+      <span class="plain-lamp" id="plainLamp" aria-hidden="true"></span>
+      <span id="plainLabel">メトロノームを鳴らす</span>
+    </button>
+    <span class="plain-hint">いまのテンポのまま、止めるまで刻み続けます</span>
+  </div>
+
   <section class="vol">
     <div class="vol-top">
       <span class="g-label">メトロノームの音量</span>
@@ -628,9 +652,10 @@
        usecase   … 操作の集約と DTO⇔entity 変換。編集操作はエンティティ階層ごとに分割
                    （SequenceService / GroupService / PatternService / RhythmService）。
                    ほかに HistoryService / SequenceMapper / SequenceIO /
-                   PlaybackScheduler / VideoSync / Transport
+                   PlaybackScheduler / VideoSync / Transport / PlainMetronome
+                   （PlainMetronome＝曲構成を使わない単体メトロノーム。Transport とは排他）
        ui        … DOM のみ。責務ごとに分割（RhythmView / PatternView / GroupView /
-                   SequenceView と TempoView / TransportView / IoView / VideoView）。
+                   SequenceView と TempoView / TransportView / PlainView / IoView / VideoView）。
                    操作は各サービスを呼び、Store.subscribe と Transport の view を購読して再描画
        bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画
 
@@ -1864,7 +1889,8 @@
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
       endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
-      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
+      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){},
+      plainStop(){}
     };
     const isSoloMode = m => m === "solo";
     const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
@@ -1944,6 +1970,7 @@
       const o = opts || {};
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
+      view.plainStop();                    // 動画同期・パッド経由もここを通るので、鳴っていれば必ず止まる
       SoundGateway.ensure();
       mode = (kind === "all") ? "all" : kind;
       soloId = (mode === "all") ? null : Store.getState().activeId;
@@ -2027,6 +2054,7 @@
     function start(kind, opts){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
+      view.plainStop();                    // ふつうのメトロノームと二重に鳴らさない
       soloTail = !!(opts && opts.tail) && kind !== "all";   // solo 起点から末尾まで連続（全画面のグループ再生）
       // 新規セッション開始（ボタン／グループ再生／全画面）では、パッド由来の一時停止状態を必ず解除する。
       // これを怠ると paused が残り、再生中なのに再生バー／HUD が「再開」表示のまま同期しなくなる。
@@ -2107,6 +2135,68 @@
       clearPending(){ pendingKind = null; },
       halt,
       start, stop, startRec, beginPlayback, armCancel, wake, onVideoPlaying, onVideoStopped
+    };
+  })();
+
+  /* ---------- PlainMetronome（ふつうのメトロノーム。曲構成（シーケンス）を使わず、基準テンポ
+     ♩＝BPM のまま等間隔に、止めるまで刻み続ける） ----------
+     先読みは PlaybackScheduler と同じ方式（AudioContext 時刻に予約 ＋ setInterval で継ぎ足し）。
+     1拍ぶんの長さは予約のたびに Store から読み直すので、鳴らしたままスライダーでテンポを変えられる。
+     ふつうのメトロノームなのでアクセントは付けず（＝全部の拍が同じ音）、小節も周回も持たない。
+     Transport（曲の再生）とは同時に鳴らさない：こちらは Transport 稼働中はボタンを止め、
+     Transport 側は再生に入るとき view.plainStop() でこちらを止める。 */
+  const PlainMetronome = (() => {
+    const LOOKAHEAD = 25, AHEAD = 0.12, LEAD = 0.12;   // 継ぎ足し間隔 / 先読み / 押してから1拍目まで
+    let running = false, nextTime = 0, cancelTimer = null;
+    let view = { plainUpdate(){}, plainBeat(){}, status(){}, setRunning(){} };
+    const beats = [];                                  // 予約済みの発音時刻（ランプ点滅用）
+    const span = () => 60 / Store.getState().bpm;      // ♩＝基準BPM。予約のたびに読み直す＝テンポに追従
+    function pump(){
+      // タブが背面だと setInterval が間引かれるので、Transport と同じだけ先読みを伸ばす
+      const limit = ClockGateway.now() + (ClockGateway.hidden() ? 1.2 : AHEAD);
+      while(nextTime < limit){
+        const s = span();
+        SoundGateway.click(false, nextTime, s);
+        beats.push(nextTime);
+        nextTime += s;
+      }
+    }
+    function draw(){
+      if(!running) return;
+      const now = ClockGateway.now();
+      let hit = false;
+      while(beats.length && beats[0] <= now){ beats.shift(); hit = true; }
+      if(hit) view.plainBeat();
+      ClockGateway.frame(draw);
+    }
+    function start(){
+      if(running || Transport.running() || Transport.armKind()) return;
+      SoundGateway.ensure();                 // タップ（ユーザー操作）の中で AudioContext を起こす
+      running = true;
+      beats.length = 0;
+      nextTime = ClockGateway.now() + LEAD;
+      pump();                                // 初回ぶんを即予約（以降は下の setInterval が継ぐ）
+      cancelTimer = ClockGateway.every(LOOKAHEAD, pump);
+      ClockGateway.frame(draw);
+      view.setRunning(true);                 // ヘッダーのランプ／状態表示も「鳴っている」に合わせる
+      view.status("メトロノーム");
+      view.plainUpdate();
+    }
+    function stop(){
+      if(!running) return;
+      running = false;
+      if(cancelTimer){ cancelTimer(); cancelTimer = null; }
+      beats.length = 0;
+      view.setRunning(false);
+      view.status("停止中");
+      view.plainUpdate();
+    }
+    return {
+      init(o){ view = o.view || view; },
+      running: () => running,
+      toggle(){ running ? stop() : start(); },
+      stop,
+      wake(){ if(running && SoundGateway.ready) pump(); }   // 背面から戻ったときの取りこぼし対策
     };
   })();
 
@@ -2200,6 +2290,7 @@
   const seqNameEl=$("seqName");
   const pbPlay=$("pbPlay"), pbSeekL=$("pbSeekL"), pbSeekR=$("pbSeekR"),
         pbPlayGlyph=$("pbPlayGlyph"), pbPlaySub=$("pbPlaySub");
+  const plainBtn=$("plainBtn"), plainLamp=$("plainLamp"), plainLabel=$("plainLabel");
   const saveBtn=$("saveBtn"), loadBtn=$("loadBtn"), ioFileLabel=$("ioFileLabel"),
         ioFile=$("ioFile"), ioMsg=$("ioMsg");
   const ytUrl=$("ytUrl"), ytLoad=$("ytLoad"), ytSync=$("ytSync"), ytClear=$("ytClear"), ytMsg=$("ytMsg");
@@ -2835,6 +2926,7 @@
           : "動画を先頭から流し、各リズムグループの位置を記録します";
       }
       PlaybarView.update();   // 下部固定バー（◁◁ □ ▷▷）の表示・状態を同期
+      PlainView.update();     // BPM 下の「ふつうのメトロノーム」ボタン（再生中は押せない）
     }
     function status(text){ statusText.textContent = text; }
     function readPreroll(){ return SequenceService.setPreroll(prerollInput.value); }
@@ -2878,7 +2970,7 @@
         e.preventDefault();
         Transport.running() ? Transport.stop(false) : Transport.start("all");
       });
-      document.addEventListener("visibilitychange", ()=>Transport.wake());
+      document.addEventListener("visibilitychange", ()=>{ Transport.wake(); PlainMetronome.wake(); });
     }
     return {
       paintBeats, showPulse, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
@@ -2927,6 +3019,33 @@
       pbPlay.addEventListener("pointerdown", e=>{ e.preventDefault(); center(); });
     }
     return { update, bind };
+  })();
+
+  /* ---------- PlainView（BPM のすぐ下の「ふつうのメトロノーム」ボタン） ----------
+     押すたびに PlainMetronome を入り／切り。鳴っている間はラベルが「停止」に変わり、
+     ランプが1拍ごとに光る。曲の再生（Transport）中は押せない。 */
+  const PlainView = (() => {
+    let lampTimer = null;
+    function update(){
+      const on = PlainMetronome.running();
+      const busy = Transport.running() || !!Transport.armKind();
+      plainBtn.classList.toggle("on", on);
+      plainBtn.disabled = !on && busy;
+      plainBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      plainLabel.textContent = on ? "停止" : "メトロノームを鳴らす";
+      plainBtn.title = on ? "メトロノームを止める"
+        : busy ? "曲の再生中は使えません" : "いまのテンポのまま、止めるまで刻み続けます";
+      if(!on){ clearTimeout(lampTimer); plainLamp.classList.remove("beat"); }
+    }
+    function beat(){
+      plainLamp.classList.add("beat");
+      clearTimeout(lampTimer);
+      lampTimer = setTimeout(()=>plainLamp.classList.remove("beat"), 70);
+    }
+    function bind(){
+      plainBtn.addEventListener("click", ()=>PlainMetronome.toggle());
+    }
+    return { update, beat, bind };
   })();
 
   /* ---------- FullscreenView（横画面の練習HUD。表示のみ・裏側は既存を再利用） ----------
@@ -3315,7 +3434,10 @@
     readPreroll: TransportView.readPreroll,
     stampCueView: GroupView.stampCueView,
     padUpdate: () => { PlaybarView.update(); FullscreenView.updatePlay(); },
-    padReset: () => { VideoPadService.clearPause(); }
+    padReset: () => { VideoPadService.clearPause(); },
+    plainStop: () => { PlainMetronome.stop(); },      // 曲の再生に入るときは単体メトロノームを止める
+    plainUpdate: () => { PlainView.update(); },
+    plainBeat: () => { PlainView.beat(); }
   };
   // Store の変更を meta フラグに応じて各ビューへ配る
   function dispatch(meta){
@@ -3344,6 +3466,7 @@
     syncEnabled: () => VideoView.syncEnabled()
   });
   Transport.init({ view });
+  PlainMetronome.init({ view });
   VideoSync.init({ view });
   VideoPadService.init({ view });
   Store.subscribe(dispatch);
@@ -3352,6 +3475,7 @@
   SequenceView.bind();
   TransportView.bind();
   PlaybarView.bind();
+  PlainView.bind();
   FullscreenView.bind();
   IoView.bind();
   VideoView.bind();
@@ -3362,6 +3486,7 @@
   SequenceView.applyTitle();
   SequenceView.updateHistory();
   PlaybarView.update();
+  PlainView.update();
   FullscreenView.updateEntry();
   SequenceService.setTempo(120);
 
