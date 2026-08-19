@@ -647,7 +647,7 @@
      domain … 純粋層：エンティティ生成・拍子計算・定数・ID/クランプの唯一の真実。
      DOM・アプリ状態・ファイル・AudioContext・YouTube を一切参照しない。
      階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
-       Rhythm        {num, den, accents} … 1拍子（例 7/8）。den ∈ DENOMS, num は 1..den
+       Rhythm        {num, den, accents} … 1拍子（例 7/8）。den は 1..32, num は 1..32
                                            accents=強く鳴らす拍番号（0起点）の配列。既定 [0]
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
        RhythmGroup   {id,name,reps,cue,pattern}
@@ -655,13 +655,17 @@
      生成はすべてここを通し、reps/cue/name/tempo/preroll の正規化を1箇所に集約する。
      ======================================================================== */
   const Domain = (() => {
-    const DENOMS = [2,3,4,6,8,9,12,15,16,32];
-    const NUM_MAX = 16;                     // 分子（拍数）の上限。分母から独立（例：5/4 のような変拍子を許容）
+    // 分母・分子とも 1〜32 の整数を1刻みで許容する（例：8/11 のような非等分割の拍子も組める）。
+    // この4定数が拍子の値域の唯一の真実。UI のピッカーも取り込みの検証もここから作る。
+    const DEN_MIN = 1, DEN_MAX = 32;        // 分母（音価）の範囲
+    const NUM_MIN = 1, NUM_MAX = 32;        // 分子（拍数）の範囲。分母から独立（例：5/4 のような変拍子を許容）
     const MIN = 50, MAX = 250;
     const TERMS = [[50,65,"Largo"],[66,75,"Adagio"],[76,107,"Andante"],[108,119,"Moderato"],
                    [120,167,"Allegro"],[168,200,"Presto"],[201,250,"Prestissimo"]];
-    const NOTE_NAME = {2:"2分音符",4:"4分音符",8:"8分音符",16:"16分音符",32:"32分音符",
-                       3:"2分3連",6:"4分3連",12:"8分3連",9:"全音符÷9",15:"全音符÷15"};
+    // 分母の音価表示名。慣用の呼び名があるものだけ持ち、無い分母（11 など）は「全音符÷N」で表す
+    const NOTE_NAME = {1:"全音符",2:"2分音符",4:"4分音符",8:"8分音符",16:"16分音符",32:"32分音符",
+                       3:"2分3連",6:"4分3連",12:"8分3連",24:"16分3連"};
+    const noteName = den => NOTE_NAME[den] || ("全音符÷" + den);
 
     const uid = () => "g" + Math.random().toString(36).slice(2,9);
     function clampInt(v, lo, hi, fallback){
@@ -698,9 +702,12 @@
       });
       return out.sort((a,b)=>a-b);
     }
+    // 生成の唯一の入口。num/den はここで 1〜32 の整数へクランプする
+    // （下書き復元など parseRhythm を通らない経路から den=0 のような値が入っても壊れないように）
     const makeRhythm = (num, den, accents) => {
-      const nu = Number(num);
-      return {num: nu, den: Number(den), accents: normAccents(accents === undefined ? null : accents, nu)};
+      const nu = clampInt(num, NUM_MIN, NUM_MAX, 4);
+      const de = clampInt(den, DEN_MIN, DEN_MAX, 4);
+      return {num: nu, den: de, accents: normAccents(accents === undefined ? null : accents, nu)};
     };
     // accents を持たない旧データ（保存前の古い下書きなど）は従来どおり先頭拍のみアクセント扱い
     const isAccent = (r, beat) => Array.isArray(r.accents) ? r.accents.indexOf(beat) >= 0 : beat === 0;
@@ -711,8 +718,8 @@
       const m = String(v).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
       if(!m) return null;
       const num = Number(m[1]), den = Number(m[2]);
-      if(!DENOMS.includes(den)) return null;
-      if(num < 1 || num > NUM_MAX) return null;
+      if(den < DEN_MIN || den > DEN_MAX) return null;
+      if(num < NUM_MIN || num > NUM_MAX) return null;
       return {num, den};
     }
     const formatRhythm = r => r.num + "/" + r.den;
@@ -775,7 +782,7 @@
     const totalBars = groups => groups.reduce((n,g)=>n + g.pattern.rhythms.length, 0);
 
     return {
-      DENOMS, NUM_MAX, MIN, MAX, TERMS, NOTE_NAME,
+      DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, MIN, MAX, TERMS, noteName,
       uid, clampInt, clampTempo, normBpm, effectiveBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       normAccents, isAccent, isDefaultAccents,
       termFor, makePattern, makeGroup, cloneGroup,
@@ -1398,7 +1405,10 @@
   const RhythmService = (() => {
     return {
       setPicker(num, den){
-        Store.apply(s => { if(num != null) s.pickNum = num; if(den != null) s.pickDen = den; }, {});
+        Store.apply(s => {
+          if(num != null) s.pickNum = Domain.clampInt(num, Domain.NUM_MIN, Domain.NUM_MAX, s.pickNum);
+          if(den != null) s.pickDen = Domain.clampInt(den, Domain.DEN_MIN, Domain.DEN_MAX, s.pickDen);
+        }, {});
       }
     };
   })();
@@ -1462,7 +1472,7 @@
         });
       });
       if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
-      if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母は " + Domain.DENOMS.join(",") + "、分子は 1〜" + Domain.NUM_MAX + "）");
+      if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母・分子とも " + Domain.DEN_MIN + "〜" + Domain.DEN_MAX + " の整数です）");
 
       const sequence = Domain.makeSequence({ name: doc.name, tempo: doc.tempo, preroll: doc.preroll, video: doc.video, groups });
       return { sequence, notes, rawVideo: doc.video };
@@ -2284,7 +2294,7 @@
       }
       const note = document.createElement("span");
       note.className = "bar-note";
-      note.textContent = Domain.NOTE_NAME[b.den] || ("全音符÷" + b.den);
+      note.textContent = Domain.noteName(b.den);
       row.appendChild(note);
       return row;
     }
@@ -2304,30 +2314,29 @@
       g.pattern.rhythms.forEach((b,bi)=> bars.appendChild(RhythmView.barRow(g, b, bi)));
       return bars;
     },
+    // 分子・分母とも 1〜32 の整数を1刻みで選ぶ。両者は独立（例：8/11 のような拍子も組める）
     picker(g){
       const wrap = document.createElement("div");
       wrap.className = "g-add";
+      const fill = (sel, lo, hi, cur) => {
+        for(let i=lo;i<=hi;i++){
+          const o=document.createElement("option"); o.value=i; o.textContent=i; sel.appendChild(o);
+        }
+        sel.value = String(cur);
+      };
+      // 保存済みの下書きが範囲外の値を持っていても、選択肢の中へ寄せてから描く
+      const pn = Domain.clampInt(state().pickNum, Domain.NUM_MIN, Domain.NUM_MAX, 4);
+      const pd = Domain.clampInt(state().pickDen, Domain.DEN_MIN, Domain.DEN_MAX, 4);
+      if(pn !== state().pickNum || pd !== state().pickDen) RhythmService.setPicker(pn, pd);
+
       const nSel = document.createElement("select");
       nSel.setAttribute("aria-label","分子");
+      fill(nSel, Domain.NUM_MIN, Domain.NUM_MAX, pn);
       const dSel = document.createElement("select");
       dSel.setAttribute("aria-label","分母");
-      Domain.DENOMS.forEach(d=>{
-        const o=document.createElement("option"); o.value=d; o.textContent=d; dSel.appendChild(o);
-      });
-      dSel.value = String(state().pickDen);
+      fill(dSel, Domain.DEN_MIN, Domain.DEN_MAX, pd);
 
-      function fillNum(){
-        nSel.innerHTML = "";
-        for(let i=1;i<=Domain.NUM_MAX;i++){
-          const o=document.createElement("option"); o.value=i; o.textContent=i; nSel.appendChild(o);
-        }
-        const pn = Math.min(state().pickNum, Domain.NUM_MAX);
-        RhythmService.setPicker(pn, null);
-        nSel.value = String(pn);
-      }
-      fillNum();
-
-      dSel.addEventListener("change", ()=>{ RhythmService.setPicker(null, Number(dSel.value)); fillNum(); TransportView.syncIdle(); });
+      dSel.addEventListener("change", ()=>{ RhythmService.setPicker(null, Number(dSel.value)); TransportView.syncIdle(); });
       nSel.addEventListener("change", ()=>{ RhythmService.setPicker(Number(nSel.value), null); TransportView.syncIdle(); });
 
       const slash = document.createElement("span");
@@ -2773,7 +2782,7 @@
       }
     }
     function showPulse(bar){
-      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span>';
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+Domain.noteName(bar.den)+'</span>';
     }
     // 展開中カードの pulse（拍ドット）にも、いま鳴っている拍を映す（beat=null で消灯のみ）。
     // 対象は再生中グループの現在小節の行だけ。グループ再生でカードを開いたまま聴くときに効く
@@ -3040,7 +3049,7 @@
     }
     function showPulse(bar){
       if(!opened) return;
-      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+(Domain.NOTE_NAME[bar.den]||("全音符÷"+bar.den))+'</span>';
+      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+Domain.noteName(bar.den)+'</span>';
     }
     function setBeatDot(beat){
       if(!opened) return;
