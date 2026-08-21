@@ -1921,7 +1921,7 @@
     let view = {
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
-      endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
+      endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){}, showTempo(){},
       highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
     };
     const isSoloMode = m => m === "solo";
@@ -1987,10 +1987,12 @@
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter);
-          view.showPulse(e.meter, e.ramp ? e.bpm : null);   // テンポ変化中だけ現在 BPM を併記
+          view.showPulse(e.meter, e.ramp ? e.bpm : null);
           view.highlight();
         }
         view.setBeatDot(e.beat);
+        // BPM は拍ごとに変わるので、小節単位の showPulse とは別に毎拍更新する
+        view.showTempo(e.ramp ? e.bpm : null);
       }
       if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ stop(true); return; }
       ClockGateway.frame(draw);
@@ -2858,10 +2860,16 @@
         beatsEl.appendChild(d);
       }
     }
-    // bpm を渡すとテンポ変化中の現在 BPM を右端に併記する（一定テンポのときは null＝従来表示）
+    // 拍表示。BPM の枠だけ常に置いておき、中身は showTempo が拍ごとに書き換える
+    let rampNow = null;
     function showPulse(bar, bpm){
-      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+Domain.noteName(bar.den)+'</span>'
-        + (bpm != null ? '<b class="rampnow">'+Fmt.bpm(bpm)+' bpm</b>' : '');
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+Domain.noteName(bar.den)+'</span><b class="rampnow"></b>';
+      rampNow = pulseView.querySelector(".rampnow");
+      showTempo(bpm);
+    }
+    // テンポ変化中の現在 BPM（一定テンポ・停止中は null＝空欄のまま）
+    function showTempo(bpm){
+      if(rampNow) rampNow.textContent = (bpm != null) ? Fmt.bpm(bpm) + " bpm" : "";
     }
     // 展開中カードの pulse（拍ドット）にも、いま鳴っている拍を映す（beat=null で消灯のみ）。
     // 対象は再生中グループの現在小節の行だけ。グループ再生でカードを開いたまま聴くときに効く
@@ -2969,7 +2977,7 @@
       document.addEventListener("visibilitychange", ()=>Transport.wake());
     }
     return {
-      paintBeats, showPulse, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
+      paintBeats, showPulse, showTempo, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
       setRunning, startWaiting, clearWaiting, isWaiting, endWaiting, prerollTick, bind
     };
   })();
@@ -3126,10 +3134,16 @@
         el.beats.appendChild(d);
       }
     }
+    let fsRampNow = null;
     function showPulse(bar, bpm){
       if(!opened) return;
-      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+Domain.noteName(bar.den)+'</span>'
-        + (bpm != null ? ' · <i>'+Fmt.bpm(bpm)+' bpm</i>' : '');
+      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+Domain.noteName(bar.den)+'</span><i class="fs-rampnow"></i>';
+      fsRampNow = el.meter.querySelector(".fs-rampnow");
+      showTempo(bpm);
+    }
+    function showTempo(bpm){
+      if(!opened || !fsRampNow) return;
+      fsRampNow.textContent = (bpm != null) ? " · " + Fmt.bpm(bpm) + " bpm" : "";
     }
     function setBeatDot(beat){
       if(!opened) return;
@@ -3287,7 +3301,7 @@
       el.timeline.addEventListener("pointerup", ()=>{ tlTap = null; });
       el.timeline.addEventListener("pointercancel", ()=>{ tlTap = null; tlBrowseUntil = performance.now() + 3500; });
     }
-    return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
+    return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, showTempo, setBeatDot, clearBeats, sync, isOpen:()=>opened };
   })();
 
   /* ---------- IoView（保存／読込のメッセージ表示とバインド） ---------- */
@@ -3399,6 +3413,7 @@
     clearBeats: () => { TransportView.clearBeats(); FullscreenView.clearBeats(); },
     paintBeats: bar => { TransportView.paintBeats(bar); FullscreenView.paintBeats(bar); },
     showPulse: (bar, bpm) => { TransportView.showPulse(bar, bpm); FullscreenView.showPulse(bar, bpm); },
+    showTempo: bpm => { TransportView.showTempo(bpm); FullscreenView.showTempo(bpm); },
     highlight: () => { TransportView.highlight(); FullscreenView.sync(); },
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
