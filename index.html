@@ -198,6 +198,11 @@
   .g-hbpm{display:inline-flex;align-items:center;gap:4px;flex:none}
   .g-hbpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
   .g-hbpm input{width:54px;height:30px;font-size:13px}
+  /* 到達BPM（「追加」ボタンの右端）。空欄＝テンポ一定、値が入るとブラスで強調して変化中と分かるように */
+  .g-tobpm{margin-left:auto;display:inline-flex;align-items:center;gap:4px;flex:none}
+  .g-tobpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
+  .g-tobpm input{width:58px;height:34px;font-size:13px}
+  .g-tobpm input:not(:placeholder-shown){border-color:var(--brass);color:var(--brass)}
   /* グループ再生（solo）トグル。展開したカード内。フラットベージュ・全幅 */
   .g-play{margin-top:2px;margin-bottom:0}
   .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
@@ -254,6 +259,7 @@
 
   .pulse{display:flex;align-items:baseline;gap:8px;margin-top:14px;padding:0 18px 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;color:var(--dim)}
   .pulse i{font-style:normal;color:var(--brass)}
+  .pulse .rampnow{margin-left:auto;font-weight:400;font-style:normal;color:var(--brass)}   /* テンポ変化中の現在BPM */
   .beats{display:flex;flex-wrap:wrap;gap:7px;padding:0 18px 18px;min-height:13px;border-bottom:1px solid var(--ink)}
   .beat{width:13px;height:13px;border:1px solid var(--ink);border-radius:50%;transition:background 60ms linear,transform 60ms linear}
   .beat.accent{border-color:var(--brass);box-shadow:inset 0 0 0 2px rgba(142,113,50,.28)}
@@ -650,7 +656,7 @@
        Rhythm        {num, den, accents} … 1拍子（例 7/8）。den は 1..32, num は 1..32
                                            accents=強く鳴らす拍番号（0起点）の配列。既定 [0]
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
-       RhythmGroup   {id,name,reps,cue,pattern}
+       RhythmGroup   {id,name,reps,bpm,toBpm,cue,pattern} … toBpm=到達BPM（線形テンポ変化）
        Sequence      {name,tempo,preroll,video,groups} … 曲ひとつ分
      生成はすべてここを通し、reps/cue/name/tempo/preroll の正規化を1箇所に集約する。
      ======================================================================== */
@@ -687,8 +693,21 @@
       if(isNaN(n)) return null;
       return clampTempo(n, null);
     }
-    // 実効 BPM：グループの上書きがあればそれ、無ければ基準（上部メトロノーム）の BPM
+    // 実効 BPM：グループの上書きがあればそれ、無ければ基準（上部メトロノーム）の BPM。
+    // 到達BPM（toBpm）がある場合はこれが「グループ先頭の BPM」＝線形変化の始点になる
     const effectiveBpm = (group, baseBpm) => (group && group.bpm != null) ? group.bpm : baseBpm;
+    /* 到達BPM（toBpm）… そのリズムグループが終わるまでに線形で到達する BPM。null=テンポ一定。
+       始点は effectiveBpm（グループ個別 BPM、無ければ基準テンポ）。始点より速ければ加速、遅ければ減速。
+       補間はグループ全体（くり返し込みの総拍数）を 0〜1 に割り当て、拍ごとに BPM を求める＝
+       最後の1拍がちょうど到達BPMで鳴る。拍ごとに一定 BPM で刻むので、クリック間隔がそのまま瞬間テンポになる。 */
+    const endBpm = (group, baseBpm) => (group && group.toBpm != null) ? group.toBpm : effectiveBpm(group, baseBpm);
+    const hasRamp = (group, baseBpm) => !!group && group.toBpm != null && group.toBpm !== effectiveBpm(group, baseBpm);
+    // グループ全体の総拍数（くり返し込み）。線形補間の分母に使う
+    const groupBeats = g => (g ? g.reps * g.pattern.rhythms.reduce((n, r) => n + r.num, 0) : 0);
+    // グループ先頭からの通し拍番号 k（0起点・総拍数 total）を 0〜1 の位置へ。1拍しか無ければ始点のまま
+    const rampAt = (k, total) => (total > 1 ? k / (total - 1) : 0);
+    // 線形補間：t=0 で始点 BPM、t=1 で到達BPM
+    const rampBpm = (from, to, t) => from + (to - from) * t;
     /* アクセント位置（accents）… その拍子の中で強く鳴らす拍番号（0起点）の配列。昇順・重複なし。
        未指定（null/undefined）は既定＝先頭拍のみ [0]。空配列 [] は「アクセントなし」の明示指定として残す。
        範囲外（0..num-1 の外）や数値でない要素は落とす。 */
@@ -746,6 +765,7 @@
         name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
         reps: reps,
         bpm: normBpm(spec.bpm),                 // このグループ個別の BPM。null=基準（上部メトロノーム）に追従
+        toBpm: normBpm(spec.toBpm),             // 到達BPM。null=テンポ一定。値があるとグループ末尾へ向けて線形変化
         cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
         repCues: fitCues(spec.repCues, reps),   // 各くり返し(rep)の動画位置。パッドの位置突き合わせに使う（UI なし）
         pattern: makePattern(rhythms)
@@ -757,6 +777,7 @@
         name: g.name + " のコピー",
         reps: g.reps,
         bpm: g.bpm != null ? g.bpm : null,
+        toBpm: g.toBpm != null ? g.toBpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
         pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents))}
@@ -783,7 +804,7 @@
 
     return {
       DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, MIN, MAX, TERMS, noteName,
-      uid, clampInt, clampTempo, normBpm, effectiveBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
+      uid, clampInt, clampTempo, normBpm, effectiveBpm, endBpm, hasRamp, groupBeats, rampAt, rampBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       normAccents, isAccent, isDefaultAccents,
       termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
@@ -951,6 +972,7 @@
         L.push("  - name: " + scalarStr(g.name));
         L.push("    repeat: " + g.repeat);
         if(g.bpm != null) L.push("    bpm: " + g.bpm);   // 上書きがあるグループだけ出力
+        if(g.toBpm != null) L.push("    toBpm: " + g.toBpm);   // 到達BPM（線形テンポ変化）があるグループだけ出力
         if(g.cue != null) L.push("    cue: " + g.cue.toFixed(2));
         if(g.repCues) L.push("    repCues: [" + g.repCues.map(v => v == null ? "null" : v.toFixed(2)).join(", ") + "]");
         // pattern は既定アクセントなら [7/8, 8/8] のフロー列、アクセント指定があればブロック列
@@ -1351,6 +1373,14 @@
           if(g) g.bpm = Domain.normBpm(value);
         }, {render:true});
       },
+      // 到達BPM。空/不正なら null＝テンポ一定。値があるとグループ末尾に向けて線形に変化する
+      setToBpm(id, value){
+        HistoryService.commit();
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          if(g) g.toBpm = Domain.normBpm(value);
+        }, {render:true});
+      },
       setCue(id, value){            // グループ先頭（rep0）の記録・解除（commit＋再描画）
         HistoryService.commit();
         Store.apply(s => {
@@ -1432,6 +1462,8 @@
             repeat: g.reps,
             // グループ個別 BPM は上書きがあるときだけ出力（無ければ非出力＝基準追従・後方互換）
             bpm: (g.bpm != null) ? g.bpm : null,
+            // 到達BPM も指定があるときだけ出力（無ければ非出力＝テンポ一定・後方互換）
+            toBpm: (g.toBpm != null) ? g.toBpm : null,
             cue: (g.cue != null) ? g.cue : null,
             // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
             repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
@@ -1466,6 +1498,7 @@
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
           reps: g.repeat,
           bpm: g.bpm,                                    // 無指定/不正は normBpm が null 化＝基準追従
+          toBpm: g.toBpm,                                // 同上。null＝テンポ一定
           cue: g.cue,
           repCues: Array.isArray(g.repCues) ? g.repCues : null,
           rhythms
@@ -1631,17 +1664,24 @@
         // イベントには gbpm（上書き値 or null）を焼き込む＝スケジューラ側でテンポ追従を保つため
         const gbpm = (g.bpm != null) ? g.bpm : null;
         const ebpm = Domain.effectiveBpm(g, bpm);
+        // 到達BPM（線形テンポ変化）。tBpm と拍位置 t をイベントに焼き込み、実際の BPM は
+        // スケジューラ側で都度求める（gbpm と同じ理由＝基準テンポ追従を壊さないため）
+        const tBpm = (g.toBpm != null) ? g.toBpm : null;
+        const total = Domain.groupBeats(g);   // グループの総拍数（くり返し込み）＝線形補間の分母
+        let k = 0;                            // グループ先頭からの通し拍番号
         for(let rep = 0; rep < g.reps; rep++){
           // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
           const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
           if(anc != null) vt = Math.max(vt, anc);
           for(let bar = 0; bar < rhythms.length; bar++){
             const m = rhythms[bar];
-            const span = Domain.rhythmSeconds(m.den, ebpm);
             for(let beat = 0; beat < m.num; beat++){
+              // テンポ変化があると小節内でも拍ごとに長さが変わるので、span は拍ごとに求める
+              const t = tBpm != null ? Domain.rampAt(k, total) : 0;
+              const span = Domain.rhythmSeconds(m.den, tBpm != null ? Domain.rampBpm(ebpm, tBpm, t) : ebpm);
               // accent は発音直前に meter から読む（＝再生中にアクセントを変えても次の先読みから反映される）
-              events.push(Object.freeze({off, vt, gid:g.id, gbpm, rep, bar, beat, meter:m}));
-              off += span; vt += span;
+              events.push(Object.freeze({off, vt, gid:g.id, gbpm, toBpm:tBpm, t, rep, bar, beat, meter:m}));
+              off += span; vt += span; k++;
             }
           }
         }
@@ -1678,9 +1718,14 @@
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
     let nextTime = 0, i = 0, finished = false, endTime = 0;
-    // イベントの拍長。gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
-    // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）
-    const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, (e.gbpm != null) ? e.gbpm : Store.getState().bpm);
+    // イベントの実効 BPM。始点は gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
+    // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）。
+    // 到達BPM があるグループは、焼き込んだ拍位置 t で始点→到達BPM を線形補間した値で鳴らす
+    const eventBpm = e => {
+      const from = (e.gbpm != null) ? e.gbpm : Store.getState().bpm;
+      return (e.toBpm != null) ? Domain.rampBpm(from, e.toBpm, e.t) : from;
+    };
+    const beatSeconds = e => Domain.rhythmSeconds(e.meter.den, eventBpm(e));
     function resetPointer(){ i = 0; finished = false; }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
@@ -1694,9 +1739,12 @@
       if(!n){ finished = true; endTime = nextTime; return; }
       while(!finished && nextTime < limit){
         const e = PlaybackService.at(i);
-        const span = beatSeconds(e);
+        const bpm = eventBpm(e);
+        const span = Domain.rhythmSeconds(e.meter.den, bpm);
         SoundGateway.click(Domain.isAccent(e.meter, e.beat), nextTime, span);
-        queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter});
+        // bpm は拍表示のライブ更新用。ramp のときだけ実際に表示する（一定テンポでは従来どおり出さない）
+        queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, meter:e.meter,
+                    bpm, ramp: e.toBpm != null});
         nextTime += span;
         i++;
         if(i >= n){ finished = true; endTime = nextTime; }
@@ -1873,7 +1921,7 @@
     let view = {
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
-      endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){},
+      endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){}, showTempo(){},
       highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
     };
     const isSoloMode = m => m === "solo";
@@ -1893,8 +1941,9 @@
       for(let i = idx - 1; i >= 0; i--){ if(st.groups[i].pattern.rhythms.length){ prev = st.groups[i]; break; } }
       const srcGroup = prev || target;
       const src = prev ? prev.pattern.rhythms : target.pattern.rhythms.slice(0, 1);
-      // 助走は「出所グループ」の実効 BPM で鳴らす（177→88 の境界で誤テンポにならないように）
-      const ciBpm = Domain.effectiveBpm(srcGroup, st.bpm);
+      // 助走は「出所グループ」の実効 BPM で鳴らす（177→88 の境界で誤テンポにならないように）。
+      // 前グループの末尾から取る場合、そこはテンポ変化の終点なので到達BPM側を使う
+      const ciBpm = prev ? Domain.endBpm(srcGroup, st.bpm) : Domain.effectiveBpm(srcGroup, st.bpm);
       const bars = [];
       let dur = 0;
       for(let i = src.length - 1; i >= 0; i--){
@@ -1938,10 +1987,12 @@
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter);
-          view.showPulse(e.meter);
+          view.showPulse(e.meter, e.ramp ? e.bpm : null);
           view.highlight();
         }
         view.setBeatDot(e.beat);
+        // BPM は拍ごとに変わるので、小節単位の showPulse とは別に毎拍更新する
+        view.showTempo(e.ramp ? e.bpm : null);
       }
       if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ stop(true); return; }
       ClockGateway.frame(draw);
@@ -2226,7 +2277,12 @@
       return m + ":" + (r < 10 ? "0" : "") + r.toFixed(2);
     },
     times(g){ return "×" + g.reps; },
-    bpm(b){ return Number.isInteger(b) ? String(b) : b.toFixed(1); }   // 小数BPM（例 175.5）は1桁表示
+    bpm(b){ return Number.isInteger(b) ? String(b) : b.toFixed(1); },  // 小数BPM（例 175.5）は1桁表示
+    // グループのBPM表示。到達BPM があれば「120 → 160」、無ければ実効BPM1つ
+    bpmSpan(g, base){
+      const from = Domain.effectiveBpm(g, base);
+      return Domain.hasRamp(g, base) ? this.bpm(from) + " → " + this.bpm(Domain.endBpm(g, base)) : this.bpm(from);
+    }
   };
   function mini(label, aria, disabled, fn){
     const b=document.createElement("button");
@@ -2314,6 +2370,27 @@
       g.pattern.rhythms.forEach((b,bi)=> bars.appendChild(RhythmView.barRow(g, b, bi)));
       return bars;
     },
+    // 到達BPM … このリズムグループが終わるまでに線形で到達する BPM。空欄でテンポ一定。
+    // 始点は「グループのBPM（空欄なら基準テンポ）」なので、始点より大きければ加速、小さければ減速になる
+    toBpmField(g){
+      const st = state();
+      const from = Domain.effectiveBpm(g, st.bpm);
+      const box = document.createElement("span");
+      box.className = "g-tobpm";
+      const u = document.createElement("span"); u.className = "u"; u.textContent = "到達bpm";
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.min = String(Domain.MIN); inp.max = String(Domain.MAX);
+      inp.step = "0.1"; inp.inputMode = "decimal";
+      inp.value = (g.toBpm != null) ? g.toBpm : "";
+      inp.placeholder = "—";
+      inp.disabled = Transport.running();
+      inp.title = "このリズムグループの終わりまでに到達するBPM。" + Fmt.bpm(from)
+                + " から最後の拍まで線形に変化します。空欄でテンポ一定";
+      inp.setAttribute("aria-label", "到達BPM（空欄でテンポ一定）");
+      inp.addEventListener("change", ()=>GroupService.setToBpm(g.id, inp.value));
+      box.append(u, inp);
+      return box;
+    },
     // 分子・分母とも 1〜32 の整数を1刻みで選ぶ。両者は独立（例：8/11 のような拍子も組める）
     picker(g){
       const wrap = document.createElement("div");
@@ -2344,7 +2421,7 @@
       const add = document.createElement("button");
       add.type="button"; add.className="step"; add.textContent="追加";
       add.addEventListener("click", ()=>PatternService.addRhythm(g.id, state().pickNum, state().pickDen));
-      wrap.append(nSel, slash, dSel, add);
+      wrap.append(nSel, slash, dSel, add, PatternView.toBpmField(g));
       return wrap;
     }
   };
@@ -2489,12 +2566,14 @@
         // このブロックの実効BPM（g.bpm があればそれ、無ければ基準テンポに追従）をタイトルと同じ行に右寄せ表示。
         // ヘッダーの flex 行に入れることで、タイトルと横（右寄せ）だけでなく縦（中央）も揃う
         const own = g.bpm != null;
+        const ramp = Domain.hasRamp(g, st.bpm);
         const bpmTag = document.createElement("span");
         bpmTag.className = "g-bpm-tag" + (own ? " own" : "");
         bpmTag.dataset.role = "bpm";
-        bpmTag.title = own ? "このグループ固有のBPM" : "基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従中のBPM";
+        bpmTag.title = ramp ? "グループの終わりに向けて " + Fmt.bpm(Domain.endBpm(g, st.bpm)) + " へ線形に変化します"
+                     : own ? "このグループ固有のBPM" : "基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従中のBPM";
         const bpmLabel = document.createElement("span"); bpmLabel.textContent = "bpm";
-        const bpmVal = document.createElement("b"); bpmVal.className = "v"; bpmVal.textContent = Fmt.bpm(Domain.effectiveBpm(g, st.bpm));
+        const bpmVal = document.createElement("b"); bpmVal.className = "v"; bpmVal.textContent = Fmt.bpmSpan(g, st.bpm);
         bpmTag.append(bpmLabel, bpmVal);
         head.appendChild(bpmTag);
       }
@@ -2699,7 +2778,7 @@
         if(!tag || tag.classList.contains("own")) return;   // 固有BPMは基準に追従しないので触らない
         const val = tag.querySelector(".v");
         const g = st.groups.find(x=>x.id === card.dataset.id);
-        if(g && val) val.textContent = Fmt.bpm(Domain.effectiveBpm(g, st.bpm));
+        if(g && val) val.textContent = Fmt.bpmSpan(g, st.bpm);
       });
     }
 
@@ -2781,8 +2860,16 @@
         beatsEl.appendChild(d);
       }
     }
-    function showPulse(bar){
-      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+Domain.noteName(bar.den)+'</span>';
+    // 拍表示。BPM の枠だけ常に置いておき、中身は showTempo が拍ごとに書き換える
+    let rampNow = null;
+    function showPulse(bar, bpm){
+      pulseView.innerHTML = '<i>'+bar.num+'/'+bar.den+'</i><span>'+Domain.noteName(bar.den)+'</span><b class="rampnow"></b>';
+      rampNow = pulseView.querySelector(".rampnow");
+      showTempo(bpm);
+    }
+    // テンポ変化中の現在 BPM（一定テンポ・停止中は null＝空欄のまま）
+    function showTempo(bpm){
+      if(rampNow) rampNow.textContent = (bpm != null) ? Fmt.bpm(bpm) + " bpm" : "";
     }
     // 展開中カードの pulse（拍ドット）にも、いま鳴っている拍を映す（beat=null で消灯のみ）。
     // 対象は再生中グループの現在小節の行だけ。グループ再生でカードを開いたまま聴くときに効く
@@ -2890,7 +2977,7 @@
       document.addEventListener("visibilitychange", ()=>Transport.wake());
     }
     return {
-      paintBeats, showPulse, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
+      paintBeats, showPulse, showTempo, setBeatDot, clearBeats, highlight, syncIdle, update, status, readPreroll,
       setRunning, startWaiting, clearWaiting, isWaiting, endWaiting, prerollTick, bind
     };
   })();
@@ -3047,9 +3134,16 @@
         el.beats.appendChild(d);
       }
     }
-    function showPulse(bar){
+    let fsRampNow = null;
+    function showPulse(bar, bpm){
       if(!opened) return;
-      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+Domain.noteName(bar.den)+'</span>';
+      el.meter.innerHTML='<i>'+bar.num+'/'+bar.den+'</i> · <span>'+Domain.noteName(bar.den)+'</span><i class="fs-rampnow"></i>';
+      fsRampNow = el.meter.querySelector(".fs-rampnow");
+      showTempo(bpm);
+    }
+    function showTempo(bpm){
+      if(!opened || !fsRampNow) return;
+      fsRampNow.textContent = (bpm != null) ? " · " + Fmt.bpm(bpm) + " bpm" : "";
     }
     function setBeatDot(beat){
       if(!opened) return;
@@ -3207,7 +3301,7 @@
       el.timeline.addEventListener("pointerup", ()=>{ tlTap = null; });
       el.timeline.addEventListener("pointercancel", ()=>{ tlTap = null; tlBrowseUntil = performance.now() + 3500; });
     }
-    return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, setBeatDot, clearBeats, sync, isOpen:()=>opened };
+    return { bind, open, close, updateEntry, updatePlay, paintBeats, showPulse, showTempo, setBeatDot, clearBeats, sync, isOpen:()=>opened };
   })();
 
   /* ---------- IoView（保存／読込のメッセージ表示とバインド） ---------- */
@@ -3318,7 +3412,8 @@
     prerollTick: TransportView.prerollTick,
     clearBeats: () => { TransportView.clearBeats(); FullscreenView.clearBeats(); },
     paintBeats: bar => { TransportView.paintBeats(bar); FullscreenView.paintBeats(bar); },
-    showPulse: bar => { TransportView.showPulse(bar); FullscreenView.showPulse(bar); },
+    showPulse: (bar, bpm) => { TransportView.showPulse(bar, bpm); FullscreenView.showPulse(bar, bpm); },
+    showTempo: bpm => { TransportView.showTempo(bpm); FullscreenView.showTempo(bpm); },
     highlight: () => { TransportView.highlight(); FullscreenView.sync(); },
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
