@@ -231,10 +231,11 @@
   .bars{display:flex;flex-direction:column;gap:4px}
   .bar{display:flex;flex-direction:column;gap:3px;padding:3px 3px 6px 8px;border:1px solid var(--rule);background:#FCFBF7}
   .bar.now{border-color:var(--signal);background:#FBF0EE}
-  .bar-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
-  .bar-sig{font-family:var(--mono);font-size:14px;letter-spacing:.06em}
+  .bar-top{display:flex;align-items:center;gap:8px}
+  /* 拍子欄は「32 / 32」が入る最小幅を持たせ、右の連符チップが行をまたいでも同じ位置に来るようにする */
+  .bar-sig{flex:none;min-width:76px;font-family:var(--mono);font-size:14px;letter-spacing:.06em}
   .bar-sig em{font-style:normal;color:var(--brass);padding:0 2px}
-  .bar-ctl{display:flex;gap:3px}
+  .bar-ctl{display:flex;gap:3px;margin-left:auto}
   /* グループ内の pulse（拍ドット）。1丸＝1拍のボタンで、タップするとアクセントの入り／切りが変わる。
      アクセント＝真鍮色の二重丸（下部バーの .beat.accent と同じ表し方）、再生中の拍＝塗り */
   .bar-pulse{display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding-right:3px}
@@ -252,7 +253,6 @@
   .bar-tup.on{color:var(--brass);border-color:var(--brass)}
   .bar-tup:disabled{opacity:.35;cursor:default}
   .chip-tup{margin-left:4px;font-style:normal;font-size:9px;color:var(--brass)}
-  .bar-note{margin-left:auto;font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--dim);white-space:nowrap}
   .empty{font-size:11.5px;line-height:1.7;color:var(--dim);padding:1px 0 3px}
 
   .g-add{display:flex;align-items:center;gap:6px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--rule)}
@@ -271,11 +271,13 @@
   .beat{width:13px;height:13px;border:1px solid var(--ink);border-radius:50%;transition:background 60ms linear,transform 60ms linear}
   /* 連符の裏拍：小さく淡く。拍の頭（.beat:not(.sub)）の手前に間を空けて「1拍のまとまり」を見せる */
   .beat.sub{width:8px;height:8px;border-color:var(--rule)}
-  .beats.tuplet{gap:4px}
-  .beats.tuplet .beat:not(.sub):not(:first-child){margin-left:8px}
-  .bar-pulse.tuplet{gap:4px}
-  .bar-pulse.tuplet .pdot:not(.sub):not(:first-child){margin-left:8px}
+  /* 拍のまとまり（.pgroup / .bgroup）を等幅の1単位として折り返す。どの行も同じ幅の単位が並ぶので
+     2段・3段に折り返しても拍の頭が縦に揃う。連符なしのときは1単位＝丸1個で従来と同じ見た目になる */
+  .pgroup{display:flex;align-items:center;gap:4px}
+  .bar-pulse.tuplet{gap:10px}
   .pdot.sub{width:11px;height:11px;min-width:0;border-color:var(--rule);background:#FAF9F5;cursor:default;pointer-events:none}
+  .bgroup{display:flex;align-items:center;gap:4px}
+  .beats.tuplet{gap:10px}
   .beat.accent{border-color:var(--brass);box-shadow:inset 0 0 0 2px rgba(142,113,50,.28)}
   .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.35)}
   .beat.accent.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
@@ -415,8 +417,8 @@
   .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .fs-meter i{font-style:normal;color:var(--brass)}
   .fs-beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
-  .fs-beats.tuplet{gap:clamp(5px,1.4vw,8px)}
-  .fs-beats.tuplet .fs-beat:not(.sub):not(:first-child){margin-left:clamp(6px,1.8vw,12px)}
+  .fs-bgroup{display:flex;align-items:center;gap:clamp(4px,1.2vw,7px)}
+  .fs-beats.tuplet{gap:clamp(10px,2.6vw,16px)}
   .fs-beat.sub{width:clamp(6px,1.6dvh,9px);height:clamp(6px,1.6dvh,9px);border-color:rgba(245,244,239,.28)}
   .fs-beat{width:clamp(10px,2.6dvh,15px);height:clamp(10px,2.6dvh,15px);
     border:1.5px solid rgba(245,244,239,.45);border-radius:50%;transition:background 60ms linear,transform 60ms linear}
@@ -2411,7 +2413,8 @@
     /* pulse（拍ドット）… この拍子の発音を1つずつ丸で並べる。表拍の丸はボタンで、タップすると
        その拍のアクセントが入り／切りに変わる（既定は1拍目のみ）。連符の裏拍は小さい丸で、
        アクセントは拍単位なのでタップ対象にしない。再生中はいま鳴っている丸が光る。
-       並び順は通し発音番号（拍0の表・裏…／拍1の表・裏…）で、点灯側の index と一致させる。 */
+       拍ごとに .pgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
+       .pdot は文書順（拍0の表・裏…／拍1の表・裏…）＝通し発音番号の順に並び、点灯側の index と一致する。 */
     pulse(g, b, bi){
       const row = document.createElement("div");
       row.className = "bar-pulse"; row.dataset.pulse = bi;
@@ -2420,6 +2423,8 @@
       const tp = Domain.tupletOf(b);
       if(tp > 1) row.classList.add("tuplet");
       for(let i = 0; i < b.num; i++){
+        const grp = document.createElement("span");
+        grp.className = "pgroup";
         const dot = document.createElement("button");
         dot.type = "button"; dot.className = "pdot"; dot.dataset.beat = i;
         dot.textContent = i + 1;
@@ -2436,17 +2441,14 @@
           PatternService.toggleAccent(g.id, bi, i);
           paint();                                   // 構造は変わらないので再描画せず見た目だけ差し替える
         });
-        row.appendChild(dot);
+        grp.appendChild(dot);
         for(let sub = 1; sub < tp; sub++){        // 裏拍（連符の2つ目以降）
           const sd = document.createElement("span");
           sd.className = "pdot sub"; sd.setAttribute("aria-hidden", "true");
-          row.appendChild(sd);
+          grp.appendChild(sd);
         }
+        row.appendChild(grp);
       }
-      const note = document.createElement("span");
-      note.className = "bar-note";
-      note.textContent = Domain.noteLabel(b);
-      row.appendChild(note);
       return row;
     }
   };
@@ -2947,18 +2949,24 @@
 
   /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
   const TransportView = (() => {
-    // 拍ドットは通し発音番号の順に並べる（連符の裏拍は小さい丸）。setBeatDot の index と一致させる
+    /* 拍ドット。拍ごとに .bgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
+       .beat は文書順＝通し発音番号の順で、setBeatDot の index と一致する（描画のたびに控えておく） */
+    let beatNodes = [];
     function paintBeats(bar){
       beatsEl.innerHTML = "";
       const tp = Domain.tupletOf(bar);
-      beatsEl.classList.toggle("tuplet", tp > 1);   // 連符のときだけ拍の頭に間を空けて group 感を出す
+      beatsEl.classList.toggle("tuplet", tp > 1);
       for(let i=0;i<bar.num;i++){
+        const grp = document.createElement("span");
+        grp.className = "bgroup";
         for(let sub=0;sub<tp;sub++){
           const d = document.createElement("span");
           d.className = "beat" + (sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : ""));
-          beatsEl.appendChild(d);
+          grp.appendChild(d);
         }
+        beatsEl.appendChild(grp);
       }
+      beatNodes = [...beatsEl.querySelectorAll(".beat")];
     }
     // 拍表示。BPM の枠だけ常に置いておき、中身は showTempo が拍ごとに書き換える
     let rampNow = null;
@@ -2977,16 +2985,15 @@
       groupsEl.querySelectorAll(".pdot.on").forEach(d=>d.classList.remove("on"));
       if(pulse == null) return;
       const row = groupsEl.querySelector(".group.playing .bar.now .bar-pulse");
-      const dot = row && row.children[pulse];
-      if(dot && dot.classList.contains("pdot")) dot.classList.add("on");
+      const dot = row && row.querySelectorAll(".pdot")[pulse];
+      if(dot) dot.classList.add("on");
     }
     function setBeatDot(pulse){
-      const dots = beatsEl.children;
-      for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i === pulse);
+      for(let i=0;i<beatNodes.length;i++) beatNodes[i].classList.toggle("on", i === pulse);
       setGroupBeatDot(pulse);
     }
     function clearBeats(){
-      [...beatsEl.children].forEach(d=>d.classList.remove("on"));
+      beatNodes.forEach(d=>d.classList.remove("on"));
       setGroupBeatDot(null);
     }
 
@@ -3225,18 +3232,23 @@
       try{ el.timeline.scrollTo({left, behavior: instant ? "auto" : "smooth"}); }
       catch(_){ el.timeline.scrollLeft = left; }
     }
+    let fsBeatNodes = [];
     function paintBeats(bar){
       if(!opened) return;
       el.beats.innerHTML="";
       const tp = Domain.tupletOf(bar);
       el.beats.classList.toggle("tuplet", tp > 1);
       for(let i=0;i<bar.num;i++){
+        const grp=document.createElement("span");
+        grp.className="fs-bgroup";
         for(let sub=0;sub<tp;sub++){
           const d=document.createElement("span");
           d.className="fs-beat"+(sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : ""));
-          el.beats.appendChild(d);
+          grp.appendChild(d);
         }
+        el.beats.appendChild(grp);
       }
+      fsBeatNodes = [...el.beats.querySelectorAll(".fs-beat")];
     }
     let fsRampNow = null;
     function showPulse(bar, bpm){
@@ -3251,10 +3263,9 @@
     }
     function setBeatDot(pulse){
       if(!opened) return;
-      const dots=el.beats.children;
-      for(let i=0;i<dots.length;i++) dots[i].classList.toggle("on", i===pulse);
+      for(let i=0;i<fsBeatNodes.length;i++) fsBeatNodes[i].classList.toggle("on", i===pulse);
     }
-    function clearBeats(){ if(!opened) return; [...el.beats.children].forEach(d=>d.classList.remove("on")); }
+    function clearBeats(){ if(!opened) return; fsBeatNodes.forEach(d=>d.classList.remove("on")); }
     function updatePlay(){
       if(!opened) return;
       const hasVideo = VideoGateway.ready();
