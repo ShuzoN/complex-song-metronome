@@ -412,7 +412,7 @@
   .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
   /* 拍子表示だけタップゾーン（z:1）より前面に出し、長押しで計測パネルをトグルできるようにする。
      短いタップは従来どおり左右シークへ流すので、シーク操作の当たり判定は変わらない */
-  .fs-meter{position:relative;z-index:2;touch-action:manipulation}
+  .fs-pulse-line{position:relative;z-index:2;touch-action:manipulation}
   /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
   .fs-pulse-line{display:flex;align-items:baseline;justify-content:center;gap:clamp(6px,1.6vw,10px);flex-wrap:wrap}
   .fs-sep{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);color:rgba(245,244,239,.3)}
@@ -457,7 +457,8 @@
   .fs-flash.show{opacity:1;transition:opacity 60ms ease}
 
   /* 同期ズレの計測パネル（SyncProbe）。既定は非表示で、?debug=sync か長押しトグルのときだけ出す */
-  .fs-probe{position:absolute;left:8px;top:8px;z-index:40;display:flex;flex-direction:column;gap:1px;
+  .fs-probe{position:absolute;left:8px;z-index:40;
+    top:calc(env(safe-area-inset-top) + clamp(46px,12.5dvh,60px));display:flex;flex-direction:column;gap:1px;
     padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.62);color:rgba(245,244,239,.86);
     font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.35;
     pointer-events:none;white-space:nowrap}
@@ -3579,7 +3580,8 @@
       // 計測パネル（SyncProbe）のトグル：拍子表示を 600ms 長押し。?debug=sync でも出せる
       let probeHold = null, probeFired = false;
       const probeCancel = ()=>{ if(probeHold){ clearTimeout(probeHold); probeHold = null; } };
-      el.meter.addEventListener("pointerdown", e=>{
+      const probeZone = el.meter.parentElement;   // 「1 / 8周 · 4/4」の行ぜんぶを的にする
+      probeZone.addEventListener("pointerdown", e=>{
         e.preventDefault();
         probeCancel(); probeFired = false;
         probeHold = setTimeout(()=>{
@@ -3587,13 +3589,13 @@
           SyncProbe.toggle(); flash(SyncProbe.enabled() ? "計測 ON" : "計測 OFF");
         }, 600);
       });
-      el.meter.addEventListener("pointerup", e=>{
+      probeZone.addEventListener("pointerup", e=>{
         probeCancel();
         // 長押しでなければ従来のタップゾーンと同じ扱い（画面の左半分＝戻す／右半分＝送る）
         if(!probeFired) seek(e.clientX < window.innerWidth / 2 ? -1 : 1);
         probeFired = false;
       });
-      ["pointercancel","pointerleave"].forEach(ev=>el.meter.addEventListener(ev, ()=>{ probeCancel(); probeFired = false; }));
+      ["pointercancel","pointerleave"].forEach(ev=>probeZone.addEventListener(ev, ()=>{ probeCancel(); probeFired = false; }));
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
