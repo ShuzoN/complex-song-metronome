@@ -2044,14 +2044,17 @@
       const ciDur = useCountIn ? Transport.countInFor(Transport.soloTarget()).dur : 0;
       const fire = Math.max(0, aim - ciDur);
       const from = fire;
-      SyncProbe.mark("startAtCue", {kind, cue, aim, ciDur, fire});
+      // seek を出す前の再生位置。着弾判定でこれと見比べ、「まだ移動前の位置を読んでいる」間は刻み出さない
+      let before = null;
+      try{ const b = VideoGateway.time(); if(b != null && !isNaN(b)) before = b; }catch(err){}
+      SyncProbe.mark("startAtCue", {kind, cue, aim, ciDur, fire, before});
       try{
         VideoGateway.seekTo(from, true);     // カウントイン開始点へ頭出し
         VideoGateway.play();
       }catch(err){ SyncProbe.mark("startAtCue:throw"); Transport.clearArm(); Transport.beginPlayback(kind); return; }
       // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
       // index:null＝beginPlayback 側で既定位置を解決（全体は曲頭0／全画面グループ再生は対象グループ先頭）
-      cueWatch = {target: fire, from, kind, index: null, countIn: useCountIn, resume: false, jump: false,
+      cueWatch = {target: fire, from, before, kind, index: null, countIn: useCountIn, resume: false, jump: false,
                   t0: ClockGateway.perf(), limit: 6000};
       view.status("頭出し中");
       view.videoMsg("頭出し中…", false);
@@ -2075,6 +2078,17 @@
       view.status("頭出し中");
       view.videoMsg("位置を合わせています…", false);
       ClockGateway.frame(pollCue);
+    }
+    /* seek が実際に効いたかの判定。seekTo 直後の getCurrentTime は「移動前の位置」を数フレーム
+       返すため、位置だけを信じると後ろへ戻すときに着弾を誤判定する（古い位置は必ず寄せ先より
+       先にあるので「もう着いた」と読めてしまう）。
+       ・後ろへ戻す seek … 寄せ先に着いたか、移動前の位置から実際に離れたかを確かめる
+       ・前へ進む seek   … 古い位置は必ず寄せ先より手前なので、位置を見るだけで誤発火しない */
+    function seekLanded(w, t){
+      if(t == null || isNaN(t)) return false;
+      const back = (w.before != null) ? (w.before - w.from) : 0;
+      if(back <= 0.1) return true;                    // 前へ進む／ほぼ動かない seek は確認不要
+      return t <= w.from + 0.5 || t < w.before - Math.min(0.25, back / 2);
     }
     function pollCue(){
       if(!cueWatch) return;
@@ -2103,8 +2117,8 @@
             view.videoMsg("頭出し中…", false);   // まだ寄せ先まで到達していない
           }
         }
-      }else if(st === 1 && t != null && t >= cueWatch.target - 0.1){
-        // 指定位置に着いて、実際に再生が始まったフレームで刻み出す
+      }else if(seekLanded(cueWatch, t) && st === 1 && t != null && t >= cueWatch.target - 0.1){
+        // 寄せ先へ実際に着き、そこから再生が始まったフレームで刻み出す
         const w = cueWatch;
         const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
         // frames=この待ちで見たフレーム数。1〜2 で、しかも t が target を大きく超えていたら
@@ -2116,9 +2130,10 @@
         Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index});   // 行き過ぎたぶんだけ前倒し
         return;
       }
+      if(!cueWatch.jump && !seekLanded(cueWatch, t)) view.videoMsg("頭出し中…", false);
       if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
         const w = cueWatch;
-        SyncProbe.mark("pollCue:timeout", {t, st, target: w.target});
+        SyncProbe.mark("pollCue:timeout", {t, st, target: w.target, before: w.before});
         cueWatch = null; Transport.clearArm();
         view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
         Transport.beginPlayback(w.kind, {skipWait:true, index:w.index, resume:w.resume});
