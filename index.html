@@ -410,9 +410,6 @@
     font-family:var(--body);font-size:clamp(8px,2.2dvh,10px);letter-spacing:.06em;color:rgba(245,244,239,.34)}
 
   .fs-pulse{display:flex;flex-direction:column;align-items:center;gap:clamp(6px,1.8dvh,10px);padding:0 20px}
-  /* 拍子表示だけタップゾーン（z:1）より前面に出し、長押しで計測パネルをトグルできるようにする。
-     短いタップは従来どおり左右シークへ流すので、シーク操作の当たり判定は変わらない */
-  .fs-pulse-line{position:relative;z-index:2;touch-action:manipulation}
   /* rep（周回）と meter を pulse と同列（拍ドットの下の1行）に並べる */
   .fs-pulse-line{display:flex;align-items:baseline;justify-content:center;gap:clamp(6px,1.6vw,10px);flex-wrap:wrap}
   .fs-sep{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);color:rgba(245,244,239,.3)}
@@ -455,15 +452,6 @@
     font-family:var(--display);font-size:clamp(44px,14dvh,72px);font-weight:700;color:#FFF;letter-spacing:.02em;
     text-shadow:0 2px 16px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity 140ms ease}
   .fs-flash.show{opacity:1;transition:opacity 60ms ease}
-
-  /* 同期ズレの計測パネル（SyncProbe）。既定は非表示で、?debug=sync か長押しトグルのときだけ出す */
-  .fs-probe{position:absolute;left:8px;z-index:40;
-    top:calc(env(safe-area-inset-top) + clamp(46px,12.5dvh,60px));display:flex;flex-direction:column;gap:1px;
-    padding:6px 8px;border-radius:8px;background:rgba(0,0,0,.62);color:rgba(245,244,239,.86);
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;line-height:1.35;
-    pointer-events:none;white-space:nowrap}
-  .fs-probe b{font-size:9px;letter-spacing:.12em;opacity:.6}
-  .fs-probe .bad{color:#FF8A7A;font-weight:700}
 
   .fs-rotate{position:absolute;inset:0;z-index:5;background:var(--ink);color:rgba(245,244,239,.7);
     display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;
@@ -1287,163 +1275,6 @@
     };
   })();
 
-  /* ---------- SyncProbe（動画↔クリックのズレ計測。既定 OFF・計測だけで挙動は変えない） ----------
-     全画面のグループ再生は「頭出しで1回だけ動画と噛み合わせ、あとは BPM だけで刻み続ける」開ループ。
-     ＝どこで噛み合わせ、そこからどれだけ離れていったかを見ないと原因が特定できない。ここでは
-       lock   … 刻み出しの瞬間の（AudioContext 時刻, 動画位置）＝以後の基準点
-       clock  … 動画の時計と AudioContext の時計の進み方の差（バッファリング／再生レートのズレ）
-       cue    … 各 rep の頭で「録った cue」と「実際に鳴った動画位置」の差（BPM モデルと実曲の差）
-       trace  … 頭出し経路の判断（cue/aim/助走/到達検知/前倒し）の記録
-     を集める。ON: URL に ?debug=sync／#debug=sync、または console で SyncProbe.on()。
-     全画面では拍子表示を長押し（600ms）でもトグルできる。 */
-  const SyncProbe = (() => {
-    const MAX_LOG = 400, MAX_SAMPLES = 600;
-    let on = /[?&#]debug=sync\b/.test(location.search + location.hash);
-    let log = [], cueSamples = [], lock = null, last = {clock:null, cue:null}, warns = [];
-    let panel = null, view = { onToggle(){} };
-    const ms = v => (v == null || isNaN(v)) ? "—" : (v >= 0 ? "+" : "") + (v * 1000).toFixed(0) + "ms";
-    const sec = v => (v == null || isNaN(v)) ? "—" : v.toFixed(3) + "s";
-    function addWarn(text){ if(warns.indexOf(text) < 0){ warns.push(text); if(warns.length > 4) warns.shift(); } }
-    function vtime(){ try{ const t = VideoGateway.time(); return (t == null || isNaN(t)) ? null : t; }catch(err){ return null; } }
-    function vstate(){ try{ return VideoGateway.stateCode(); }catch(err){ return -1; } }
-
-    function mark(tag, data){
-      if(!on) return;
-      const rec = Object.assign({tag, at: ClockGateway.perf(), video: vtime(), st: vstate()}, data || {});
-      // 既知の2パターンを自動判定して警告に積む（HUD に出す）
-      if(tag === "startAtCue" && rec.aim != null && rec.ciDur > 0 && (rec.aim - rec.ciDur) < 0){
-        // fire が 0 にクランプされたのに beginPlayback は助走の全長を待つ＝その差だけ downbeat が遅れる
-        addWarn("助走クランプ " + ms(rec.ciDur - rec.aim) + "（cue が助走より手前）");
-      }
-      if(rec.stale) addWarn("頭出し誤発火（seek 前の位置で着弾判定）");
-      if(rec.clamped) addWarn("前倒し補正が 50ms で頭打ち");
-      log.push(rec);
-      if(log.length > MAX_LOG) log.shift();
-      if(window.console && console.debug) console.debug("[sync]", tag, rec);
-      paint();
-    }
-    // 刻み出しの瞬間を基準点として固定する。以後のズレはすべてここからの差分
-    function setLock(info){
-      if(!on) return;
-      lock = Object.assign({audio: ClockGateway.now(), perf: ClockGateway.perf(), video: vtime()}, info || {});
-      last = {clock:null, cue:null};
-      cueSamples = [];
-      mark("lock", {index: lock.index, kind: lock.kind, adjust: lock.adjust, ciDur: lock.ciDur});
-    }
-    function clearLock(){ lock = null; last = {clock:null, cue:null}; paint(); }
-    // 動画の時計 vs AudioContext の時計。基準点から等速なら 0。バッファリングや再生レート差でここが開く
-    function sampleClock(){
-      if(!on || !lock || lock.video == null) return;
-      const v = vtime();
-      if(v == null) return;
-      last.clock = v - (lock.video + (ClockGateway.now() - lock.audio));
-    }
-    // rep の頭で「録った cue」と「実際に鳴った動画位置」を突き合わせる。
-    // evTime=その拍の発音予定時刻（AudioContext 時刻）。描画フレームの遅れぶんを引いて実時刻へ戻す。
-    function sampleCue(gid, rep, evTime){
-      if(!on || !lock) return;
-      const g = Store.findGroup(gid);
-      const v = vtime();
-      if(!g || v == null) return;
-      const rc = Array.isArray(g.repCues) ? g.repCues : null;
-      const anchor = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-      if(anchor == null) return;
-      const late = Math.max(0, ClockGateway.now() - evTime);      // 取りこぼしたフレームぶん
-      const videoAtBeat = v - late;
-      // 再生側は compensate(cue)（発音遅延ぶん手前）を狙って刻むので、比較対象もそこへ揃える
-      const drift = videoAtBeat - VideoSync.compensate(anchor);
-      last.cue = drift;
-      const s = {gid, name: g.name, rep, anchor, videoAtBeat, drift, clock: last.clock};
-      cueSamples.push(s);
-      if(cueSamples.length > MAX_SAMPLES) cueSamples.shift();
-      if(window.console && console.debug) console.debug("[sync] cue", g.name + " rep" + rep, ms(drift));
-      paint();
-    }
-    /* 再生しなくても分かるぶんの監査：タイムラインが積み上げる vt（BPM モデル）と、録った cue の差。
-       build() は vt = Math.max(vt, cue) で単調化するため、モデルが実曲より長いとアンカーごと無視される。
-       その取りこぼしが「あとのセクションほどズレる」の正体なので、ここで一覧にする。 */
-    function audit(){
-      const st = Store.getState();
-      const groups = st.groups.filter(g => g.pattern.rhythms.length);
-      const rows = [];
-      let vt = 0;
-      groups.forEach(g => {
-        const rc = Array.isArray(g.repCues) ? g.repCues : null;
-        const ebpm = Domain.effectiveBpm(g, st.bpm);
-        const tBpm = (g.toBpm != null) ? g.toBpm : null;
-        const total = Domain.groupBeats(g);
-        let k = 0;
-        for(let rep = 0; rep < g.reps; rep++){
-          const anchor = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
-          const predicted = vt;                                   // モデルが「ここ」と言う位置
-          if(anchor != null) vt = Math.max(vt, anchor);           // build() と同じ単調クランプ
-          rows.push({
-            group: g.name, rep,
-            cue: anchor,
-            model: Math.round(predicted * 1000) / 1000,
-            gap: anchor == null ? null : Math.round((predicted - anchor) * 1000) / 1000,
-            anchored: anchor != null && anchor >= predicted       // false＝クランプでアンカーが捨てられた
-          });
-          for(let bar = 0; bar < g.pattern.rhythms.length; bar++){
-            const m = g.pattern.rhythms[bar];
-            for(let beat = 0; beat < m.num; beat++){
-              const t = tBpm != null ? Domain.rampAt(k, total) : 0;
-              vt += Domain.rhythmSeconds(m.den, tBpm != null ? Domain.rampBpm(ebpm, tBpm, t) : ebpm);
-              k++;
-            }
-          }
-        }
-      });
-      if(window.console && console.table) console.table(rows);
-      return rows;
-    }
-    function dump(){
-      const out = {lock, warns: warns.slice(), log: log.slice(), cueSamples: cueSamples.slice(), audit: audit()};
-      if(window.console) console.log(JSON.stringify(out, null, 2));
-      return out;
-    }
-    function reset(){ log = []; cueSamples = []; lock = null; last = {clock:null, cue:null}; warns = []; paint(); }
-
-    /* --- 全画面 HUD の計測パネル --- */
-    function ensurePanel(){
-      if(panel) return panel;
-      panel = document.createElement("div");
-      panel.className = "fs-probe";
-      panel.hidden = true;
-      const host = $("fsOverlay");
-      if(host) host.appendChild(panel);
-      return panel;
-    }
-    function paint(){
-      const p = ensurePanel();
-      if(!p) return;
-      p.hidden = !on;
-      if(!on) return;
-      const l = cueSamples.length ? cueSamples[cueSamples.length - 1] : null;
-      const worst = cueSamples.reduce((a, s) => (a == null || Math.abs(s.drift) > Math.abs(a.drift)) ? s : a, null);
-      p.innerHTML =
-        '<b>SYNC</b>'
-        + '<span>lock ' + (lock ? sec(lock.video) + " / " + (lock.kind || "?") + (lock.index != null ? " #" + lock.index : "") : "—") + '</span>'
-        + '<span>clock ' + ms(last.clock) + '</span>'
-        + '<span class="' + (l && Math.abs(l.drift) > 0.08 ? "bad" : "") + '">cue ' + (l ? l.name + " r" + l.rep + " " + ms(l.drift) : "—") + '</span>'
-        + '<span>worst ' + (worst ? worst.name + " " + ms(worst.drift) : "—") + '</span>'
-        + '<span>n=' + cueSamples.length + '</span>'
-        + warns.map(w => '<span class="bad">! ' + w + '</span>').join("");
-    }
-    function set(v){
-      on = !!v;
-      if(!on) reset();
-      paint();
-      view.onToggle(on);
-      if(window.console) console.log("[sync] probe " + (on ? "ON（SyncProbe.dump() / SyncProbe.audit()）" : "OFF"));
-    }
-    return {
-      init(o){ if(o && o.view) view = o.view; paint(); },
-      enabled: () => on,
-      on: () => set(true), off: () => set(false), toggle: () => set(!on),
-      mark, setLock, clearLock, sampleClock, sampleCue, audit, dump, reset, paint
-    };
-  })();
 
 
   /* ========================================================================
@@ -2047,11 +1878,10 @@
       // seek を出す前の再生位置。着弾判定でこれと見比べ、「まだ移動前の位置を読んでいる」間は刻み出さない
       let before = null;
       try{ const b = VideoGateway.time(); if(b != null && !isNaN(b)) before = b; }catch(err){}
-      SyncProbe.mark("startAtCue", {kind, cue, aim, ciDur, fire, before});
       try{
         VideoGateway.seekTo(from, true);     // カウントイン開始点へ頭出し
         VideoGateway.play();
-      }catch(err){ SyncProbe.mark("startAtCue:throw"); Transport.clearArm(); Transport.beginPlayback(kind); return; }
+      }catch(err){ Transport.clearArm(); Transport.beginPlayback(kind); return; }
       // 手前へ頭出しして実到達を確認してから target で刻む（到達検知）。
       // index:null＝beginPlayback 側で既定位置を解決（全体は曲頭0／全画面グループ再生は対象グループ先頭）
       cueWatch = {target: fire, from, before, kind, index: null, countIn: useCountIn, resume: false, jump: false,
@@ -2068,7 +1898,6 @@
       if(!ev){ Transport.clearArm(); return; }   // 対象拍なし（曲末尾より後）→ 動画だけ動かしメトロノームは止めたまま
       const aim = compensate(ev.vt);
       const from = Math.max(0, aim - SNAP_LEAD);
-      SyncProbe.mark("startAtIndex", {index, vt: ev.vt, aim, from});
       try{
         VideoGateway.seekTo(from, true);
         VideoGateway.play();
@@ -2094,8 +1923,6 @@
       if(!cueWatch) return;
       let st = -1, t = null;
       try{ st = VideoGateway.stateCode(); t = VideoGateway.time(); }catch(err){}
-      cueWatch.frames = (cueWatch.frames || 0) + 1;
-      if(cueWatch.frames === 1) SyncProbe.mark("pollCue:first", {t, st, target: cueWatch.target, jump: cueWatch.jump});
 
       if(cueWatch.jump){
         // 手前(from)へ寄せて実到達を確認してから target で刻み出す（lead＝5秒手前 / パッド＝SNAP_LEAD 手前）。
@@ -2106,7 +1933,6 @@
             const remain = cueWatch.target - t;
             if(remain <= 0){
               const w = cueWatch; const over = Math.min(-remain, 0.05);
-              SyncProbe.mark("pollCue:fire(jump)", {t, target: w.target, over, clamped: -remain > 0.05});
               cueWatch = null; Transport.clearArm();
               view.videoMsg("", false);
               Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index, resume:w.resume});
@@ -2121,10 +1947,6 @@
         // 寄せ先へ実際に着き、そこから再生が始まったフレームで刻み出す
         const w = cueWatch;
         const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
-        // frames=この待ちで見たフレーム数。1〜2 で、しかも t が target を大きく超えていたら
-        // 「seek 前の位置（stale な getCurrentTime）で誤発火した」疑い＝ここが全画面のズレの震源になる
-        SyncProbe.mark("pollCue:fire(seekWait)", {t, target: w.target, over,
-          clamped: (t - w.target) > 0.05, frames: w.frames || 0, stale: (w.frames || 0) <= 2 && t > w.target + 0.2});
         cueWatch = null; Transport.clearArm();
         view.videoMsg("", false);
         Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index});   // 行き過ぎたぶんだけ前倒し
@@ -2133,7 +1955,6 @@
       if(!cueWatch.jump && !seekLanded(cueWatch, t)) view.videoMsg("頭出し中…", false);
       if(ClockGateway.perf() - cueWatch.t0 > cueWatch.limit){
         const w = cueWatch;
-        SyncProbe.mark("pollCue:timeout", {t, st, target: w.target, before: w.before});
         cueWatch = null; Transport.clearArm();
         view.videoMsg("動画の応答がないため、メトロノームだけ始めます", true);
         Transport.beginPlayback(w.kind, {skipWait:true, index:w.index, resume:w.resume});
@@ -2235,7 +2056,6 @@
       }else if(view.isWaiting()){
         view.endWaiting(baseStatus());
       }
-      SyncProbe.sampleClock();
       const queue = PlaybackScheduler.queue;
       while(queue.length && queue[0].time <= now){
         const e = queue.shift();
@@ -2245,8 +2065,6 @@
           if(recording && e.bar === 0){    // 各くり返し(rep)の頭で記録（rep0=グループ先頭も含む）
             VideoSync.stampCue(e.gid, e.rep, e.time);
           }
-          // 記録ではなく再生のとき、rep の頭で「録った cue」と実際の動画位置を突き合わせる（計測のみ）
-          if(!recording && e.bar === 0) SyncProbe.sampleCue(e.gid, e.rep, e.time);
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter);
           view.showPulse(e.meter, e.ramp ? e.bpm : null);
@@ -2300,9 +2118,6 @@
       const baseIndex = (soloTail && soloId != null) ? PlaybackService.firstIndexOf(soloId) : 0;
       const startIndex = (o.index != null) ? o.index : baseIndex;
       PlaybackScheduler.primeAtIndex(start, startIndex);
-      // 刻み出しの瞬間＝動画と噛み合わせた唯一の基準点。ここから先は BPM だけで進む（開ループ）
-      SyncProbe.setLock({kind, index: startIndex, adjust, ciDur, wait, lead, soloTail, soloId,
-                         startVt: (PlaybackService.at(startIndex) || {}).vt});
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。アクセントは各小節の指定位置に従う
       for(const bar of ci.bars){
@@ -2324,15 +2139,12 @@
     }
     // メトロノームの run ループだけ停止（timeline/mode は保持）。パッドのシーク・一時停止で使う。
     function halt(){
-      SyncProbe.mark("halt"); SyncProbe.clearLock();
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
       running = false; firstBeatTime = 0;
       view.clearBeats();
     }
     function stop(completed, fromVideo){
-      SyncProbe.mark("stop", {completed: !!completed, fromVideo: !!fromVideo});
-      SyncProbe.clearLock();
       running = false;
       armKind = null; VideoSync.cancel();
       recording = false;
@@ -2365,8 +2177,6 @@
       // これを怠ると paused が残り、再生中なのに再生バー／HUD が「再開」表示のまま同期しなくなる。
       view.padReset();
       const cue = cueOf(kind);
-      SyncProbe.mark("start", {kind, tail: soloTail, cue, armed: VideoGateway.armed(), recording,
-                               soloId: Store.getState().activeId});
       // 全体レック／cue 未記録の全体再生は先頭(0秒)から（従来どおり・preroll あり）。頭出しへは即入る（0.15s の間は廃止）
       if(VideoGateway.armed() && kind === "all" && (recording || cue == null)){
         armKind = kind;
@@ -2424,7 +2234,6 @@
       }
     }
     function onVideoStopped(){
-      SyncProbe.mark("videoStopped", {running});
       clearTimeout(waitTimer); pendingKind = null;
       if(running && VideoGateway.syncOn()) stop(false, true);   // 動画を止めたら刻みも止まる
     }
@@ -3552,7 +3361,6 @@
     function playGroup(id){
       const g = findGroup(id);
       if(!g || !g.pattern.rhythms.length) return;                     // 空グループは無視
-      SyncProbe.mark("fs:playGroup", {id, name: g.name, cue: g.cue, wasRunning: Transport.running()});
       SoundGateway.ensure();
       if(Transport.running() || Transport.armKind()) Transport.stop(false);
       Store.apply({activeId: id}, {});                                // solo 対象＝このグループ（stop の後に設定）
@@ -3592,25 +3400,6 @@
         const seg = e.target.closest(".fs-seg");
         if(seg && seg.dataset.id) playGroup(seg.dataset.id);
       });
-      // 計測パネル（SyncProbe）のトグル：拍子表示を 600ms 長押し。?debug=sync でも出せる
-      let probeHold = null, probeFired = false;
-      const probeCancel = ()=>{ if(probeHold){ clearTimeout(probeHold); probeHold = null; } };
-      const probeZone = el.meter.parentElement;   // 「1 / 8周 · 4/4」の行ぜんぶを的にする
-      probeZone.addEventListener("pointerdown", e=>{
-        e.preventDefault();
-        probeCancel(); probeFired = false;
-        probeHold = setTimeout(()=>{
-          probeHold = null; probeFired = true;
-          SyncProbe.toggle(); flash(SyncProbe.enabled() ? "計測 ON" : "計測 OFF");
-        }, 600);
-      });
-      probeZone.addEventListener("pointerup", e=>{
-        probeCancel();
-        // 長押しでなければ従来のタップゾーンと同じ扱い（画面の左半分＝戻す／右半分＝送る）
-        if(!probeFired) seek(e.clientX < window.innerWidth / 2 ? -1 : 1);
-        probeFired = false;
-      });
-      ["pointercancel","pointerleave"].forEach(ev=>probeZone.addEventListener(ev, ()=>{ probeCancel(); probeFired = false; }));
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
@@ -3809,9 +3598,6 @@
   SequenceView.updateHistory();
   PlaybarView.update();
   FullscreenView.updateEntry();
-  // 同期ズレの計測（既定 OFF）。console から SyncProbe.on() / .audit() / .dump() を叩けるように公開する
-  SyncProbe.init({});
-  window.SyncProbe = SyncProbe;
   SequenceService.setTempo(120);
 
   /* ---------- 下書きの自動退避・復元・離脱警告 ---------- */
