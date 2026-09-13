@@ -1298,16 +1298,24 @@
   const SyncProbe = (() => {
     const MAX_LOG = 400, MAX_SAMPLES = 600;
     let on = /[?&#]debug=sync\b/.test(location.search + location.hash);
-    let log = [], cueSamples = [], lock = null, last = {clock:null, cue:null};
+    let log = [], cueSamples = [], lock = null, last = {clock:null, cue:null}, warns = [];
     let panel = null, view = { onToggle(){} };
     const ms = v => (v == null || isNaN(v)) ? "—" : (v >= 0 ? "+" : "") + (v * 1000).toFixed(0) + "ms";
     const sec = v => (v == null || isNaN(v)) ? "—" : v.toFixed(3) + "s";
+    function addWarn(text){ if(warns.indexOf(text) < 0){ warns.push(text); if(warns.length > 4) warns.shift(); } }
     function vtime(){ try{ const t = VideoGateway.time(); return (t == null || isNaN(t)) ? null : t; }catch(err){ return null; } }
     function vstate(){ try{ return VideoGateway.stateCode(); }catch(err){ return -1; } }
 
     function mark(tag, data){
       if(!on) return;
       const rec = Object.assign({tag, at: ClockGateway.perf(), video: vtime(), st: vstate()}, data || {});
+      // 既知の2パターンを自動判定して警告に積む（HUD に出す）
+      if(tag === "startAtCue" && rec.aim != null && rec.ciDur > 0 && (rec.aim - rec.ciDur) < 0){
+        // fire が 0 にクランプされたのに beginPlayback は助走の全長を待つ＝その差だけ downbeat が遅れる
+        addWarn("助走クランプ " + ms(rec.ciDur - rec.aim) + "（cue が助走より手前）");
+      }
+      if(rec.stale) addWarn("頭出し誤発火（seek 前の位置で着弾判定）");
+      if(rec.clamped) addWarn("前倒し補正が 50ms で頭打ち");
       log.push(rec);
       if(log.length > MAX_LOG) log.shift();
       if(window.console && console.debug) console.debug("[sync]", tag, rec);
@@ -1389,11 +1397,11 @@
       return rows;
     }
     function dump(){
-      const out = {lock, log: log.slice(), cueSamples: cueSamples.slice(), audit: audit()};
+      const out = {lock, warns: warns.slice(), log: log.slice(), cueSamples: cueSamples.slice(), audit: audit()};
       if(window.console) console.log(JSON.stringify(out, null, 2));
       return out;
     }
-    function reset(){ log = []; cueSamples = []; lock = null; last = {clock:null, cue:null}; paint(); }
+    function reset(){ log = []; cueSamples = []; lock = null; last = {clock:null, cue:null}; warns = []; paint(); }
 
     /* --- 全画面 HUD の計測パネル --- */
     function ensurePanel(){
@@ -1418,7 +1426,8 @@
         + '<span>clock ' + ms(last.clock) + '</span>'
         + '<span class="' + (l && Math.abs(l.drift) > 0.08 ? "bad" : "") + '">cue ' + (l ? l.name + " r" + l.rep + " " + ms(l.drift) : "—") + '</span>'
         + '<span>worst ' + (worst ? worst.name + " " + ms(worst.drift) : "—") + '</span>'
-        + '<span>n=' + cueSamples.length + '</span>';
+        + '<span>n=' + cueSamples.length + '</span>'
+        + warns.map(w => '<span class="bad">! ' + w + '</span>').join("");
     }
     function set(v){
       on = !!v;
