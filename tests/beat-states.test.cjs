@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const html = fs.readFileSync(require('node:path').join(__dirname, '../index.html'), 'utf8');
 
-function load() {
+function load(names = ['Domain', 'Yaml', 'SequenceMapper', 'PatternService', 'SoundGateway']) {
   const context = vm.createContext({});
-  for (const name of ['Domain', 'Yaml', 'SequenceMapper', 'PatternService', 'SoundGateway']) {
+  for (const name of names) {
     const start = html.indexOf(`  const ${name} = (() => {`);
     assert.ok(start >= 0, `${name} exists`);
     const end = html.indexOf('\n  })();', start) + '\n  })();'.length;
@@ -100,4 +100,57 @@ test('existing unusual meters survive loading and saving', () => {
   const run = load();
   run(`const sequence = SequenceMapper.toEntity({groups: [{pattern: ['4/5', '7/8', '8/11']}]}).sequence;`);
   assert.equal(run('JSON.stringify(SequenceMapper.toDto(sequence).groups[0].pattern)'), '["4/5","7/8","8/11"]');
+});
+
+
+function playbackHarness(video = false) {
+  const run = load(['Domain', 'PlaybackService', 'PlaybackScheduler', 'Transport']);
+  run(`
+    const group = Domain.makeGroup({reps:2, rhythms:[{num:1, den:4}]});
+    const state = {groups:[group], activeId:group.id, bpm:120};
+    const Store = {getState:()=>state, findGroup:id=>state.groups.find(g=>g.id===id),
+      apply: patch => Object.assign(state, patch)};
+    const clearTimeout = () => {};
+    let now = 0, videoTime = 12, videoState = 1;
+    const clicks = [], seeks = [];
+    const SoundGateway = {ensure(){}, ready:true, click:(level,time)=>clicks.push({level,time})};
+    const ClockGateway = {now:()=>now, hidden:()=>false, every:()=>()=>{}, frame(){}};
+    const VideoGateway = {armed:()=>${video}, time:()=>videoTime, pause(){},
+      syncOn:()=>${video}, stateCode:()=>videoState};
+    const VideoSync = {cancel(){}, startAtCue:(kind,cue)=>seeks.push(cue)};
+  `);
+  return run;
+}
+
+test('group loop repeats seamlessly and normal playback still finishes', () => {
+  const run = playbackHarness();
+  run(`Transport.start('solo', {loop:true}); PlaybackScheduler.pump(3);`);
+  assert.equal(run('Transport.looping()'), true);
+  assert.equal(run('PlaybackScheduler.finished()'), false);
+  assert.equal(run('clicks.length'), 6);
+  assert.equal(run('JSON.stringify(PlaybackScheduler.queue.map(e=>e.cycle))'), '[0,0,1,1,2,2]');
+  assert.equal(run('clicks.every((e,i)=>i===0 || Math.abs(e.time-clicks[i-1].time-0.5)<1e-9)'), true);
+  run(`Transport.stop(false); Transport.start('solo'); PlaybackScheduler.pump(3);`);
+  assert.equal(run('Transport.looping()'), false);
+  assert.equal(run('PlaybackScheduler.finished()'), true);
+  run('now = 4; Transport.wake();');
+  assert.equal(run('Transport.running()'), false);
+});
+
+test('video loop seeks to its original start and can be cancelled during seeking', () => {
+  const run = playbackHarness(true);
+  run(`Transport.start('solo', {loop:true}); Transport.clearArm(); Transport.beginPlayback('solo');
+    PlaybackScheduler.pump(2); videoTime = 14; now = 2; Transport.wake();`);
+  assert.equal(run('JSON.stringify(seeks)'), '[12,12]');
+  assert.equal(run('Transport.armKind()'), 'solo');
+  run('Transport.armCancel();');
+  assert.equal(run('Transport.looping()'), false);
+  assert.equal(run('Transport.armKind()'), null);
+});
+
+test('empty groups do not start infinite playback', () => {
+  const run = playbackHarness();
+  run(`group.pattern.rhythms = []; Transport.start('solo', {loop:true});`);
+  assert.equal(run('Transport.running()'), false);
+  assert.equal(run('Transport.looping()'), false);
 });
