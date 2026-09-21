@@ -684,8 +684,10 @@
      生成はすべてここを通し、reps/cue/name/tempo/preroll の正規化を1箇所に集約する。
      ======================================================================== */
   const Domain = (() => {
-    // 分母・分子とも 1〜32 の整数を1刻みで許容する（例：8/11 のような非等分割の拍子も組める）。
-    // この4定数が拍子の値域の唯一の真実。UI のピッカーも取り込みの検証もここから作る。
+    // 保存済みの特殊な拍子との互換性のため、取り込みは分母・分子とも1〜32を許容する。
+    // 新規追加の分母は一般的な音価（2の累乗）に限定する。
+    const DENOMINATORS = Object.freeze([1, 2, 4, 8, 16, 32]);
+    const pickerDen = value => DENOMINATORS.includes(Number(value)) ? Number(value) : 4;
     const DEN_MIN = 1, DEN_MAX = 32;        // 分母（音価）の範囲
     const NUM_MIN = 1, NUM_MAX = 32;        // 分子（拍数）の範囲。分母から独立（例：5/4 のような変拍子を許容）
     /* 連符（tuplet）… 1拍をいくつに割るか。1=分割なし（従来どおり）。
@@ -848,7 +850,7 @@
     const totalBars = groups => groups.reduce((n,g)=>n + g.pattern.rhythms.length, 0);
 
     return {
-      DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, TUPLET_MIN, TUPLET_MAX, MIN, MAX, TERMS, noteName, noteLabel,
+      DENOMINATORS, pickerDen, DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, TUPLET_MIN, TUPLET_MAX, MIN, MAX, TERMS, noteName, noteLabel,
       uid, clampInt, clampTempo, normBpm, effectiveBpm, endBpm, hasRamp, groupBeats, rampAt, rampBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       normAccents, isAccent, isMuted, isDefaultAccents,
       tupletOf, isDefaultTuplet, pulses, beatOfPulse, subOfPulse, clickLevel,
@@ -1505,7 +1507,7 @@
       setPicker(num, den){
         Store.apply(s => {
           if(num != null) s.pickNum = Domain.clampInt(num, Domain.NUM_MIN, Domain.NUM_MAX, s.pickNum);
-          if(den != null) s.pickDen = Domain.clampInt(den, Domain.DEN_MIN, Domain.DEN_MAX, s.pickDen);
+          if(den != null) s.pickDen = Domain.pickerDen(den);
         }, {});
       }
     };
@@ -2520,27 +2522,27 @@
       box.append(u, inp);
       return box;
     },
-    // 分子・分母とも 1〜32 の整数を1刻みで選ぶ。両者は独立（例：8/11 のような拍子も組める）
+    // 分子は1〜32、分母は一般的な音価の6種類から選ぶ。
     picker(g){
       const wrap = document.createElement("div");
       wrap.className = "g-add";
-      const fill = (sel, lo, hi, cur) => {
-        for(let i=lo;i<=hi;i++){
+      const fill = (sel, values, cur) => {
+        for(const i of values){
           const o=document.createElement("option"); o.value=i; o.textContent=i; sel.appendChild(o);
         }
         sel.value = String(cur);
       };
       // 保存済みの下書きが範囲外の値を持っていても、選択肢の中へ寄せてから描く
       const pn = Domain.clampInt(state().pickNum, Domain.NUM_MIN, Domain.NUM_MAX, 4);
-      const pd = Domain.clampInt(state().pickDen, Domain.DEN_MIN, Domain.DEN_MAX, 4);
+      const pd = Domain.pickerDen(state().pickDen);
       if(pn !== state().pickNum || pd !== state().pickDen) RhythmService.setPicker(pn, pd);
 
       const nSel = document.createElement("select");
       nSel.setAttribute("aria-label","分子");
-      fill(nSel, Domain.NUM_MIN, Domain.NUM_MAX, pn);
+      fill(nSel, Array.from({length: Domain.NUM_MAX - Domain.NUM_MIN + 1}, (_, i) => i + Domain.NUM_MIN), pn);
       const dSel = document.createElement("select");
       dSel.setAttribute("aria-label","分母");
-      fill(dSel, Domain.DEN_MIN, Domain.DEN_MAX, pd);
+      fill(dSel, Domain.DENOMINATORS, pd);
 
       dSel.addEventListener("change", ()=>{ RhythmService.setPicker(null, Number(dSel.value)); TransportView.syncIdle(); });
       nSel.addEventListener("change", ()=>{ RhythmService.setPicker(Number(nSel.value), null); TransportView.syncIdle(); });

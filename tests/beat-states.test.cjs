@@ -83,3 +83,21 @@ test('mute does not create audio nodes', () => {
   run("SoundGateway.click('accent', 0, 0.5); SoundGateway.click('beat', 0.5, 0.5)");
   assert.equal(run('created'), 2);
 });
+
+
+test('denominator picker accepts standard note values and resets obsolete selections', () => {
+  const run = load();
+  assert.equal(run('JSON.stringify(Domain.DENOMINATORS)'), '[1,2,4,8,16,32]');
+  for (const den of [1, 2, 4, 8, 16, 32]) {
+    assert.equal(run(`Domain.pickerDen("${den}")`), den);
+  }
+  for (const value of ['5', '11', '64', '0', 'null', 'undefined', '4.5']) {
+    assert.equal(run(`Domain.pickerDen(${value})`), 4);
+  }
+});
+
+test('existing unusual meters survive loading and saving', () => {
+  const run = load();
+  run(`const sequence = SequenceMapper.toEntity({groups: [{pattern: ['4/5', '7/8', '8/11']}]}).sequence;`);
+  assert.equal(run('JSON.stringify(SequenceMapper.toDto(sequence).groups[0].pattern)'), '["4/5","7/8","8/11"]');
+});
