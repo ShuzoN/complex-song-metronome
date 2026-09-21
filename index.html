@@ -483,7 +483,7 @@
   </section>
 
   <section class="scale">
-    <input type="range" id="tempoRange" min="50" max="250" step="0.1" value="120" aria-label="テンポ（BPM）">
+    <input type="range" id="tempoRange" min="50" max="250" step="1" value="120" aria-label="テンポ（BPM）">
     <div class="ticks" id="ticks"></div>
   </section>
 
@@ -495,9 +495,10 @@
     <button class="step" data-delta="10" type="button">＋10</button>
   </div>
 
-  <form class="entry" id="tempoForm">
+  <!-- 操作は1 BPM刻み。小数の直接入力は既存のテンポ正規化で処理する。 -->
+  <form class="entry" id="tempoForm" novalidate>
     <label for="tempoInput">直接入力</label>
-    <input type="number" id="tempoInput" min="50" max="250" step="0.1" value="120" inputmode="decimal">
+    <input type="number" id="tempoInput" min="50" max="250" step="1" value="120" inputmode="decimal">
     <button class="apply" type="submit">設定</button>
   </form>
 
@@ -2508,7 +2509,7 @@
       const u = document.createElement("span"); u.className = "u"; u.textContent = "到達bpm";
       const inp = document.createElement("input");
       inp.type = "number"; inp.min = String(Domain.MIN); inp.max = String(Domain.MAX);
-      inp.step = "0.1"; inp.inputMode = "decimal";
+      inp.step = "1"; inp.inputMode = "decimal"; inp.dataset.groupField = "toBpm";
       inp.value = (g.toBpm != null) ? g.toBpm : "";
       inp.placeholder = "—";
       inp.disabled = Transport.running();
@@ -2667,7 +2668,7 @@
           const baseTxt = Number.isInteger(st.bpm) ? String(st.bpm) : st.bpm.toFixed(1);
           const bin = document.createElement("input");
           bin.type = "number"; bin.min = String(Domain.MIN); bin.max = String(Domain.MAX);
-          bin.step = "0.1"; bin.inputMode = "decimal";
+          bin.step = "1"; bin.inputMode = "decimal"; bin.dataset.groupField = "bpm";
           bin.value = (g.bpm != null) ? g.bpm : "";
           bin.placeholder = baseTxt;
           bin.disabled = running;
@@ -2753,6 +2754,7 @@
         const x = document.createElement("span"); x.className="x"; x.textContent="×";
         const rin = document.createElement("input");
         rin.type="number"; rin.min="1"; rin.max="999"; rin.value=g.reps;
+        rin.dataset.groupField = "reps";
         rin.setAttribute("aria-label","再生回数");
         rin.addEventListener("change", ()=>GroupService.setReps(g.id, rin.value));
         reps.append(now, x, rin);
@@ -2877,6 +2879,10 @@
     function render(){
       const running = Transport.running();
       const st = state();
+      // 数値の変更でもカードを再生成するため、編集中の欄を記録して矢印キーの連続操作を保つ。
+      const active = document.activeElement;
+      const focusedField = groupsEl.contains(active) && active.dataset.groupField;
+      const focusedGroupId = focusedField && active.closest("[data-id]").dataset.id;
       groupsEl.innerHTML = "";
       groupsEl.classList.toggle("locked", running);
       addGroupBtn.disabled = running;
@@ -2891,6 +2897,10 @@
         const el = groupsEl.querySelector('[data-id="'+focusHandleId+'"] .handle');
         if(el) el.focus();
         focusHandleId = null;
+      }else if(focusedField){
+        const card = [...groupsEl.children].find(el => el.dataset.id === focusedGroupId);
+        const input = card && card.querySelector('[data-group-field="' + focusedField + '"]');
+        if(input && !input.disabled) input.focus({preventScroll:true});
       }
       summary();
       TransportView.update();
