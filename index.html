@@ -464,6 +464,8 @@
   .fs-rotate-close:active{transform:translateY(1px)}
   @media (orientation:portrait){ .fs-overlay .fs-rotate{display:flex} }
   @media (prefers-reduced-motion:reduce){.fs-beat,.fs-ctl,.fs-fbar,.fs-track,.fs-flash,.fs-fill{transition:none}}
+  /* ミュートでも拍の進行は表示する。破線と斜線で発音する拍と区別する。 */
+  .pdot.muted,.beat.muted,.fs-beat.muted{border-style:dashed;box-shadow:none;text-decoration:line-through;opacity:.5}
 </style>
 </head>
 <body>
@@ -672,9 +674,9 @@
      domain … 純粋層：エンティティ生成・拍子計算・定数・ID/クランプの唯一の真実。
      DOM・アプリ状態・ファイル・AudioContext・YouTube を一切参照しない。
      階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
-       Rhythm        {num, den, accents, tuplet} … 1拍子（例 7/8）。den は 1..32, num は 1..32
+       Rhythm        {num, den, accents, tuplet, muted} … 1拍子（例 7/8）。den は 1..32, num は 1..32
                                            tuplet=1拍の分割数（連符）。1=分割なし、3 なら 4/4 が3連符になる
-                                           accents=強く鳴らす拍番号（0起点）の配列。既定 [0]
+                                           accents=強く鳴らす拍番号（0起点）の配列。既定 [0]。muted=無音の拍番号。既定 []
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
        RhythmGroup   {id,name,reps,bpm,toBpm,cue,pattern} … toBpm=到達BPM（線形テンポ変化）
        Sequence      {name,tempo,preroll,video,groups} … 曲ひとつ分
@@ -756,19 +758,21 @@
     // 通し発音番号 → 拍番号／拍内の位置
     const beatOfPulse = (r, i) => Math.floor(i / tupletOf(r));
     const subOfPulse = (r, i) => i % tupletOf(r);
-    // 発音の種類：裏拍は sub、表拍はアクセント指定に従って accent / beat
-    const clickLevel = (r, beat, sub) => sub > 0 ? "sub" : (isAccent(r, beat) ? "accent" : "beat");
+    // ミュートは拍全体（連符の裏拍を含む）。それ以外の裏拍は sub、表拍は accent / beat
+    const clickLevel = (r, beat, sub) => isMuted(r, beat) ? "mute" : (sub > 0 ? "sub" : (isAccent(r, beat) ? "accent" : "beat"));
     // 音価の表示名（連符があれば「4分音符・3連」）
     const noteLabel = r => noteName(r.den) + (tupletOf(r) > 1 ? "・" + tupletOf(r) + "連" : "");
     // 生成の唯一の入口。num/den はここで 1〜32 の整数へクランプする
     // （下書き復元など parseRhythm を通らない経路から den=0 のような値が入っても壊れないように）
-    const makeRhythm = (num, den, accents, tuplet) => {
+    const makeRhythm = (num, den, accents, tuplet, muted) => {
       const nu = clampInt(num, NUM_MIN, NUM_MAX, 4);
       const de = clampInt(den, DEN_MIN, DEN_MAX, 4);
-      return {num: nu, den: de, accents: normAccents(accents === undefined ? null : accents, nu),
+      const silent = normAccents(muted == null ? [] : muted, nu);
+      return {num: nu, den: de, muted: silent, accents: normAccents(accents === undefined ? null : accents, nu).filter(i => !silent.includes(i)),
               tuplet: clampInt(tuplet, TUPLET_MIN, TUPLET_MAX, 1)};
     };
     // accents を持たない旧データ（保存前の古い下書きなど）は従来どおり先頭拍のみアクセント扱い
+    const isMuted = (r, beat) => Array.isArray(r.muted) && r.muted.includes(beat);
     const isAccent = (r, beat) => Array.isArray(r.accents) ? r.accents.indexOf(beat) >= 0 : beat === 0;
     const isDefaultAccents = r => !Array.isArray(r.accents) || (r.accents.length === 1 && r.accents[0] === 0);
     // 文字列 "7/8" または {meter} を検証しつつ Rhythm 化。不正なら null（読み込み時の取りこぼし数え上げ用）
@@ -784,7 +788,7 @@
     const formatRhythm = r => r.num + "/" + r.den;
     const rhythmSeconds = (den, bpm) => (60/bpm) * (4/den);
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
-    const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet))});
+    const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))});
     // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
     function normCue(v){
       const n = Number(v);
@@ -820,7 +824,7 @@
         toBpm: g.toBpm != null ? g.toBpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
-        pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet))}
+        pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))}
       };
     }
     // Sequence entity：バラバラの name/tempo/preroll/video/groups を1つに正規化する
@@ -845,7 +849,7 @@
     return {
       DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, TUPLET_MIN, TUPLET_MAX, MIN, MAX, TERMS, noteName, noteLabel,
       uid, clampInt, clampTempo, normBpm, effectiveBpm, endBpm, hasRamp, groupBeats, rampAt, rampBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
-      normAccents, isAccent, isDefaultAccents,
+      normAccents, isAccent, isMuted, isDefaultAccents,
       tupletOf, isDefaultTuplet, pulses, beatOfPulse, subOfPulse, clickLevel,
       termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
@@ -1024,6 +1028,7 @@
             if(p && typeof p === "object"){
               L.push("      - meter: " + p.meter);
               L.push("        accents: [" + p.accents.join(", ") + "]");
+              if(p.muted && p.muted.length) L.push("        muted: [" + p.muted.join(", ") + "]");
               if(p.tuplet > 1) L.push("        tuplet: " + p.tuplet);   // 分割なし（1）は書かない
             }else{
               L.push("      - " + p);
@@ -1091,6 +1096,7 @@
     // 発音の3段階。裏拍（連符の2つ目以降）は表拍の下に沈むよう、低く小さく鳴らす
     const VOICE = {accent:{freq:1760, peak:0.35}, beat:{freq:880, peak:0.22}, sub:{freq:587, peak:0.10}};
     function click(level, time, span){
+      if(level === "mute") return;
       const v = VOICE[level] || VOICE.beat;
       const peak = v.peak * vol;
       if(peak < 0.0002) return;   // 無音（スライダー0%付近）なら発音しない
@@ -1472,17 +1478,22 @@
         HistoryService.commit();
         Store.apply(() => { r.tuplet = cur >= Domain.TUPLET_MAX ? 1 : Math.max(2, cur + 1); }, {render:true, idle:true});
       },
-      // アクセント位置のトグル（拍ドットのタップ）。Rhythm オブジェクトは差し替えず accents だけ入れ替える
+      // 拍ドットのタップで 強調音 → 通常音 → ミュート → 強調音。Rhythm の参照を保つ
       // ＝再生中の timeline が持つ meter 参照からも次の先読みで新しいアクセントが読まれる。
       // 再描画はせず（タップのたびにカードが作り直されないように）、下部の拍表示だけ idle で同期する
-      toggleAccent(id, bi, beat){
+      cycleBeat(id, bi, beat){
         const g = Store.findGroup(id);
         const r = g && g.pattern.rhythms[bi];
         if(!r || beat < 0 || beat >= r.num) return;
         HistoryService.commit();
         const cur = Array.isArray(r.accents) ? r.accents : [0];
-        const next = cur.indexOf(beat) >= 0 ? cur.filter(v=>v !== beat) : cur.concat(beat);
-        Store.apply(() => { r.accents = Domain.normAccents(next, r.num); }, {idle:true});
+        const muted = r.muted || [];
+        const isMuted = Domain.isMuted(r, beat);
+        const isAccent = Domain.isAccent(r, beat);
+        Store.apply(() => {
+          r.accents = Domain.normAccents(isMuted ? cur.concat(beat) : cur.filter(v => v !== beat), r.num);
+          r.muted = Domain.normAccents(!isMuted && !isAccent ? muted.concat(beat) : muted.filter(v => v !== beat), r.num);
+        }, {idle:true});
       }
     };
   })();
@@ -1512,7 +1523,7 @@
         groups: seq.groups.map(g => {
           // アクセントが既定（先頭拍のみ）から外れている、または連符が付いている拍子が1つでもあれば
           // {meter, accents, tuplet} のマップ形式へ。すべて既定なら従来どおり "7/8" の文字列のまま＝後方互換
-          const withDetail = g.pattern.rhythms.some(r => !Domain.isDefaultAccents(r) || !Domain.isDefaultTuplet(r));
+          const withDetail = g.pattern.rhythms.some(r => !Domain.isDefaultAccents(r) || !Domain.isDefaultTuplet(r) || (r.muted || []).length > 0);
           return {
             name: g.name,
             repeat: g.reps,
@@ -1524,7 +1535,7 @@
             // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
             repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
             pattern: g.pattern.rhythms.map(r => withDetail
-              ? {meter: Domain.formatRhythm(r), accents: (r.accents || [0]).slice(), tuplet: Domain.tupletOf(r)}
+              ? {meter: Domain.formatRhythm(r), accents: (r.accents || [0]).slice(), tuplet: Domain.tupletOf(r), ...((r.muted || []).length ? {muted: r.muted.slice()} : {})}
               : Domain.formatRhythm(r))
           };
         })
@@ -1549,7 +1560,7 @@
           const b = Domain.parseRhythm(obj ? obj.meter : it);
           // accents / tuplet 未指定（従来の "7/8" 形式を含む）は既定＝先頭拍のみアクセント・分割なし。
           // 範囲外は normAccents / makeRhythm のクランプが吸収する
-          if(b) rhythms.push(obj ? {num:b.num, den:b.den, accents:obj.accents, tuplet:obj.tuplet} : b); else dropped++;
+          if(b) rhythms.push(obj ? {num:b.num, den:b.den, accents:obj.accents, tuplet:obj.tuplet, muted:obj.muted} : b); else dropped++;
         });
         return Domain.makeGroup({
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
@@ -2427,7 +2438,7 @@
       return rowb;
     },
     /* pulse（拍ドット）… この拍子の発音を1つずつ丸で並べる。表拍の丸はボタンで、タップすると
-       その拍のアクセントが入り／切りに変わる（既定は1拍目のみ）。連符の裏拍は小さい丸で、
+       その拍が強調音 → 通常音 → ミュートの順に変わる（既定は1拍目のみ強調音）。連符の裏拍は小さい丸で、
        アクセントは拍単位なのでタップ対象にしない。再生中はいま鳴っている丸が光る。
        拍ごとに .pgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
        .pdot は文書順（拍0の表・裏…／拍1の表・裏…）＝通し発音番号の順に並び、点灯側の index と一致する。 */
@@ -2435,7 +2446,7 @@
       const row = document.createElement("div");
       row.className = "bar-pulse"; row.dataset.pulse = bi;
       row.setAttribute("role", "group");
-      row.setAttribute("aria-label", b.num + "/" + b.den + " のアクセント位置");
+      row.setAttribute("aria-label", b.num + "/" + b.den + " の拍ごとの音");
       const tp = Domain.tupletOf(b);
       if(tp > 1) row.classList.add("tuplet");
       for(let i = 0; i < b.num; i++){
@@ -2447,20 +2458,24 @@
         const paint = () => {
           const on = Domain.isAccent(b, i);
           dot.classList.toggle("accent", on);
-          dot.setAttribute("aria-pressed", on ? "true" : "false");
-          dot.title = (i+1) + "拍目" + (on ? "のアクセントを外す" : "にアクセントをつける");
+          const muted = Domain.isMuted(b, i);
+          grp.querySelectorAll(".pdot").forEach(d => d.classList.toggle("muted", muted));
+          dot.classList.toggle("muted", muted);
+          const current = muted ? "ミュート" : on ? "強調音" : "通常音";
+          const next = muted ? "強調音" : on ? "通常音" : "ミュート";
+          dot.title = (i+1) + "拍目：" + current + "（クリックで" + next + "）";
           dot.setAttribute("aria-label", dot.title);
         };
         paint();
         dot.addEventListener("click", e=>{
           e.stopPropagation();                       // カードの折りたたみトグルを誘発しない
-          PatternService.toggleAccent(g.id, bi, i);
+          PatternService.cycleBeat(g.id, bi, i);
           paint();                                   // 構造は変わらないので再描画せず見た目だけ差し替える
         });
         grp.appendChild(dot);
         for(let sub = 1; sub < tp; sub++){        // 裏拍（連符の2つ目以降）
           const sd = document.createElement("span");
-          sd.className = "pdot sub"; sd.setAttribute("aria-hidden", "true");
+          sd.className = "pdot sub" + (Domain.isMuted(b, i) ? " muted" : ""); sd.setAttribute("aria-hidden", "true");
           grp.appendChild(sd);
         }
         row.appendChild(grp);
@@ -2977,7 +2992,7 @@
         grp.className = "bgroup";
         for(let sub=0;sub<tp;sub++){
           const d = document.createElement("span");
-          d.className = "beat" + (sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : ""));
+          d.className = "beat" + (sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
           grp.appendChild(d);
         }
         beatsEl.appendChild(grp);
@@ -3259,7 +3274,7 @@
         grp.className="fs-bgroup";
         for(let sub=0;sub<tp;sub++){
           const d=document.createElement("span");
-          d.className="fs-beat"+(sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : ""));
+          d.className="fs-beat"+(sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
           grp.appendChild(d);
         }
         el.beats.appendChild(grp);
