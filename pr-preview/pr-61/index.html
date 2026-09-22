@@ -81,7 +81,6 @@
   .speed [hidden]{display:none}
   .speed input{width:64px}
   .speed select{height:40px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
-  .speed-info{margin-top:8px;color:var(--brass);font-variant-numeric:tabular-nums}
   .speed-note{margin-top:6px;color:var(--dim);font-size:10px;line-height:1.6}
 
   /* volume */
@@ -523,7 +522,6 @@
       <select id="speedVideo" aria-label="動画同期の再生速度" hidden></select>
       <button class="step" id="speedReset" type="button">100％に戻す</button>
     </div>
-    <div class="speed-info" id="speedInfo"></div>
     <div class="speed-note" id="speedNote">曲のBPMを保持したまま、再生時の速度を変更します。</div>
   </section>
 
@@ -3098,14 +3096,7 @@
   })();
 
   const SpeedView = (() => {
-    const input = $("speedInput"), video = $("speedVideo"), info = $("speedInfo");
-    function showTempo(bpm){
-      const group = Store.findGroup(Transport.running() ? Transport.cur().gid : state().activeId);
-      const base = group ? Domain.effectiveBpm(group, state().bpm) : state().bpm;
-      const rate = SpeedService.rate();
-      const actual = bpm != null ? bpm : base * rate;
-      info.textContent = "設定BPM " + Fmt.bpm(bpm != null ? bpm / rate : base) + " → 再生BPM " + Fmt.bpm(actual);
-    }
+    const input = $("speedInput"), video = $("speedVideo");
     function render(){
       const synced = VideoGateway.armed();
       $("speedManual").hidden = synced;
@@ -3127,7 +3118,6 @@
       }
       $("speedNote").textContent = synced ? "動画が対応する速度から選択します。メトロノームも同じ速度で再生します。"
         : "曲のBPMを保持したまま、再生時の速度を変更します。";
-      if(!Transport.running()) showTempo(null);
     }
     function change(value){ SpeedService.setPercent(value); render(); }
     function bind(){
@@ -3149,7 +3139,7 @@
       video.addEventListener("change", ()=>{ SpeedService.setVideoRate(video.value); render(); });
       render();
     }
-    return {bind, render, showTempo};
+    return {bind, render};
   })();
 
   /* ---------- VolumeView（メトロノーム音量。スライダー50%＝既定、0-100%で調整） ---------- */
@@ -3750,7 +3740,7 @@
     clearBeats: () => { TransportView.clearBeats(); FullscreenView.clearBeats(); },
     paintBeats: bar => { TransportView.paintBeats(bar); FullscreenView.paintBeats(bar); },
     showPulse: (bar, bpm) => { TransportView.showPulse(bar, bpm); FullscreenView.showPulse(bar, bpm); },
-    showTempo: bpm => { TransportView.showTempo(bpm); FullscreenView.showTempo(bpm); SpeedView.showTempo(bpm); },
+    showTempo: bpm => { TransportView.showTempo(bpm); FullscreenView.showTempo(bpm); },
     highlight: () => { TransportView.highlight(); FullscreenView.sync(); },
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
     readPreroll: TransportView.readPreroll,
