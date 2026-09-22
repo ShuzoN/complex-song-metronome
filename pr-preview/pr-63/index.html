@@ -283,10 +283,22 @@
   /* 拍のまとまり（.pgroup / .bgroup）を等幅の1単位として折り返す。どの行も同じ幅の単位が並ぶので
      2段・3段に折り返しても拍の頭が縦に揃う。連符なしのときは1単位＝丸1個で従来と同じ見た目になる */
   .pgroup{display:flex;align-items:center;gap:4px}
+  /* 連符の丸は少し小さくして、1拍ぶんが横に伸びすぎないようにする（枠の大きさは状態によらず一定） */
   .bar-pulse.tuplet{gap:10px}
-  /* 連符の裏拍ドット。ボタンなので押せる（＝ここを拍の音にする）。押せることが分かるよう hover で色が付く */
-  .pdot.sub{width:11px;height:11px;min-width:0;border-color:var(--rule);background:#FAF9F5;cursor:pointer}
-  .pdot.sub:hover:not(:disabled){border-color:var(--brass);background:#F2EFE3}
+  .bar-pulse.tuplet .pdot{width:22px;height:22px}
+  /* 連符ではクリック（●）と裏拍（○）の差が大きさだけになるので、下部の拍表示と同じく枠の濃さでも分ける。
+     強調音（真鍮）と再生中（点灯）は自前の色を持つので、この指定からは外す */
+  .bar-pulse.tuplet .pdot:not(.sub):not(.accent):not(.on){border-color:var(--ink)}
+  /* 連符の裏拍ドット。枠（タップ範囲）は拍の音と同じ大きさのままで、中の丸だけ小さく描く。
+     こうすると入り切りしても丸の位置も並びの幅も動かない＝連打してもタップ先がずれない */
+  .pdot.sub{border-color:transparent;background:none}
+  .pdot.sub::before{content:"";display:block;width:11px;height:11px;border:1px solid var(--rule);
+    border-radius:50%;background:#FAF9F5}
+  .pdot.sub:hover:not(:disabled){border-color:transparent}
+  .pdot.sub:hover:not(:disabled)::before{border-color:var(--brass);background:#F2EFE3}
+  .pdot.sub.muted::before{border-style:dashed}
+  .pdot.sub.on{background:none;border-color:transparent}
+  .pdot.sub.on::before{background:var(--signal);border-color:var(--signal)}
   /* 連符のときの拍番号。丸から番号を引き取り、拍の状態（強調音／通常音／ミュート）の切り替えを担う */
   .pbeat{min-width:13px;padding:0 1px;font-family:var(--mono);font-size:10px;line-height:1;color:#A7ABA0;
     background:none;border:0;cursor:pointer}
@@ -2702,95 +2714,82 @@
     },
     /* 1拍ぶんのドット（.pgroup）。
        連符なし … 従来どおり、番号の入った丸1つ。タップで 強調音 → 通常音 → ミュート と変わる。
-       連符あり … 拍の番号を左の小さいボタン（.pbeat）に出し、そちらが 強調音／通常音／ミュート を担う。
-                  丸のほうは1つずつ「拍の音（大きい丸）／裏拍（小さい丸）」の入り切りになり、
-                  1拍に何個でも置ける（6連符で ●●○○○○ や ●●○○●● が作れる）。全部外せば裏拍だけの拍。 */
+       連符あり … 拍の番号を左の小さいボタン（.pbeat）に出し、そちらが拍ごとの
+                  強調音／通常音／ミュートを担う（従来の丸と同じ循環）。丸のほうは1つずつ
+                  「クリック（●）⇔ ○（裏拍）」の入り切りだけ。1拍に何個でも置ける。
+       どの状態でも丸の枠は同じ大きさなので、タップしても丸の位置も並びの幅も動かない。 */
     beatGroup(g, b, bi, beat){
       const grp = document.createElement("span");
       grp.className = "pgroup";
       const tp = Domain.tupletOf(b);
-      const heads = Domain.tupletAccentsAt(b, beat);   // この拍の中で「拍の音」を鳴らす位置（0起点）
-      const label = tp > 1 ? RhythmView.beatLabel(g, b, bi, beat) : null;
-      if(label) grp.appendChild(label);
-      for(let sub = 0; sub < tp; sub++){
-        grp.appendChild(heads.indexOf(sub) >= 0 ? RhythmView.headDot(g, b, bi, beat, sub, tp, label)
-                                                : RhythmView.subDot(g, b, bi, beat, sub));
-      }
+      if(tp > 1) grp.appendChild(RhythmView.beatLabel(g, b, bi, beat));
+      for(let sub = 0; sub < tp; sub++) grp.appendChild(RhythmView.pulseDot(g, b, bi, beat, sub, tp));
       return grp;
     },
-    /* 拍の状態（強調音／通常音／ミュート）を見た目に映す。組み立て中（まだ .pgroup に入っていない）は
-       その要素だけ、入ったあと（クリック後）は同じ拍の丸とラベルをまとめて塗り替える。 */
-    paintBeatState(g, b, bi, beat, node){
+    // 拍の状態（強調音／通常音／ミュート）を切り替える共通処理。同じ拍の丸とラベルを塗り替える
+    cycleBeatAt(g, b, bi, beat, node){
+      PatternService.cycleBeat(g.id, bi, beat);
       const grp = node.closest(".pgroup");
-      const on = Domain.isAccent(b, beat), muted = Domain.isMuted(b, beat);
-      (grp ? grp.querySelectorAll(".pdot, .pbeat") : [node]).forEach(d => {
-        d.classList.toggle("muted", muted);
-        if(d.classList.contains("pdot") && !d.classList.contains("sub")) d.classList.toggle("accent", on);
-      });
-      const current = muted ? "ミュート" : on ? "強調音" : "通常音";
-      const next = muted ? "強調音" : on ? "通常音" : "ミュート";
-      const title = (beat + 1) + "拍目：" + current + "（クリックで" + next + "）";
-      node.title = title;
-      node.setAttribute("aria-label", title);
+      if(!grp) return;
+      grp.querySelectorAll(".pdot").forEach((d, sub) => RhythmView.paintPulse(b, beat, sub, d, Domain.tupletOf(b)));
+      RhythmView.paintLabel(b, beat, grp.querySelector(".pbeat"));
     },
-    // 連符のときの拍番号。拍の状態（強調音／通常音／ミュート）はここから切り替える
+    // 連符のときの拍番号。拍ごとの強調音／通常音／ミュートはここから切り替える（従来の丸と同じ循環）
     beatLabel(g, b, bi, beat){
       const el = document.createElement("button");
       el.type = "button"; el.className = "pbeat"; el.dataset.beat = beat;
       el.textContent = beat + 1;
       el.addEventListener("click", e=>{
         e.stopPropagation();                         // カードの折りたたみトグルを誘発しない
-        PatternService.cycleBeat(g.id, bi, beat);
-        RhythmView.paintBeatState(g, b, bi, beat, el);   // 構造は変わらないので見た目だけ差し替える
+        RhythmView.cycleBeatAt(g, b, bi, beat, el);
       });
-      RhythmView.paintBeatState(g, b, bi, beat, el);
+      RhythmView.paintLabel(b, beat, el);
       return el;
     },
-    /* 拍の音の丸（大きい方）。連符なしのときは番号入りで、タップすると拍の状態が
+    paintLabel(b, beat, el){
+      if(!el) return;
+      const muted = Domain.isMuted(b, beat), on = Domain.isAccent(b, beat);
+      el.classList.toggle("muted", muted);
+      el.classList.toggle("accent", on);
+      const current = muted ? "ミュート" : on ? "強調音" : "通常音";
+      const next = muted ? "強調音" : on ? "通常音" : "ミュート";
+      el.title = (beat + 1) + "拍目：" + current + "（クリックで" + next + "）";
+      el.setAttribute("aria-label", el.title);
+    },
+    /* 発音ひとつぶんの丸。連符なしのときは番号入りで、タップすると拍の状態が
        強調音 → 通常音 → ミュートと変わる（従来どおり）。連符のときは番号を .pbeat に譲り、
-       タップするとこの位置を裏拍に戻す（＝拍の音から外す）。 */
-    headDot(g, b, bi, beat, sub, tp, label){
+       タップは クリック（●）⇔ ○（裏拍）の入り切りだけ。状態が変わっても大きさは変わらないので、
+       作り直さずクラスだけ塗り替える＝タップしたボタンがそのまま残る（連打してもずれない）。 */
+    pulseDot(g, b, bi, beat, sub, tp){
       const dot = document.createElement("button");
-      dot.type = "button"; dot.className = "pdot"; dot.dataset.beat = beat;
-      if(tp > 1){
-        dot.title = (beat + 1) + "拍目の" + (sub + 1) + "つ目：拍の音（クリックで裏拍）";
-        dot.setAttribute("aria-label", dot.title);
-        dot.classList.toggle("accent", Domain.isAccent(b, beat));
-        dot.classList.toggle("muted", Domain.isMuted(b, beat));
-        dot.addEventListener("click", e=>{
-          e.stopPropagation();
-          RhythmView.toggleHead(g, b, bi, beat, sub, dot);
-        });
-        return dot;
-      }
-      dot.textContent = beat + 1;
+      dot.type = "button"; dot.className = "pdot"; dot.dataset.beat = beat; dot.dataset.sub = sub;
+      if(tp === 1) dot.textContent = beat + 1;
       dot.addEventListener("click", e=>{
         e.stopPropagation();                         // カードの折りたたみトグルを誘発しない
-        PatternService.cycleBeat(g.id, bi, beat);
-        RhythmView.paintBeatState(g, b, bi, beat, dot);
+        if(tp === 1){ RhythmView.cycleBeatAt(g, b, bi, beat, dot); return; }
+        PatternService.toggleTupletAccent(g.id, bi, beat, sub);
+        RhythmView.paintPulse(b, beat, sub, dot, tp);
       });
-      RhythmView.paintBeatState(g, b, bi, beat, dot);
+      RhythmView.paintPulse(b, beat, sub, dot, tp);
       return dot;
     },
-    // 連符の裏拍ドット。タップするとこの位置が拍の音になる（○●○ や ●●○○●● を作る操作）
-    subDot(g, b, bi, beat, sub){
-      const sd = document.createElement("button");
-      sd.type = "button";
-      sd.className = "pdot sub" + (Domain.isMuted(b, beat) ? " muted" : "");
-      sd.title = (beat + 1) + "拍目の" + (sub + 1) + "つ目：裏拍（クリックで拍の音）";
-      sd.setAttribute("aria-label", sd.title);
-      sd.addEventListener("click", e=>{
-        e.stopPropagation();                         // カードの折りたたみトグルを誘発しない
-        RhythmView.toggleHead(g, b, bi, beat, sub, sd);
-      });
-      return sd;
-    },
-    /* 拍の音／裏拍の入れ替え。丸の大きさそのものが変わるので、その拍のまとまりだけ組み直す
-       （カードも他の拍も作り直さない＝再生中に押しても表示が飛ばない）。 */
-    toggleHead(g, b, bi, beat, sub, node){
-      const host = node.closest(".pgroup");
-      PatternService.toggleTupletAccent(g.id, bi, beat, sub);
-      if(host) host.replaceWith(RhythmView.beatGroup(g, b, bi, beat));
+    // 丸ひとつの見た目。鳴り方（強調音／通常音／裏拍／ミュート）をそのままクラスにする
+    paintPulse(b, beat, sub, dot, tp){
+      const level = Domain.clickLevel(b, beat, sub);
+      dot.classList.toggle("sub", level === "sub");
+      dot.classList.toggle("accent", level === "accent");
+      dot.classList.toggle("muted", level === "mute");
+      if(tp === 1){
+        const muted = Domain.isMuted(b, beat), on = Domain.isAccent(b, beat);
+        const current = muted ? "ミュート" : on ? "強調音" : "通常音";
+        const next = muted ? "強調音" : on ? "通常音" : "ミュート";
+        dot.title = (beat + 1) + "拍目：" + current + "（クリックで" + next + "）";
+      }else{
+        const head = level !== "sub";
+        dot.title = (beat + 1) + "拍目の" + (sub + 1) + "つ目：" + (head ? "クリック（タップで○）" : "○（タップでクリック）");
+      }
+      dot.setAttribute("aria-label", dot.title);
+      dot.setAttribute("aria-pressed", String(level !== "sub"));
     }
   };
 
