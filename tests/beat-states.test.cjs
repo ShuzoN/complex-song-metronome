@@ -70,8 +70,8 @@ test('legacy data has no muted beats and invalid/overlapping positions normalize
 
 test('tuplet accent position moves the beat click inside the tuplet', () => {
   const run = load();
-  run(`const rhythm = Domain.makeRhythm(4, 4, [0], 3, [], 1);`);      // 三連符の2つ目にアクセント（○●○）
-  assert.equal(run('rhythm.tupletAccent'), 1);
+  run(`const rhythm = Domain.makeRhythm(4, 4, [0], 3, [], 1);`);      // 全拍とも三連符の2つ目（○●○）
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[1,1,1,1]');
   assert.equal(run('Domain.clickLevel(rhythm, 0, 0)'), 'sub');
   assert.equal(run('Domain.clickLevel(rhythm, 0, 1)'), 'accent');
   assert.equal(run('Domain.clickLevel(rhythm, 0, 2)'), 'sub');
@@ -82,35 +82,61 @@ test('tuplet accent position moves the beat click inside the tuplet', () => {
     assert.equal(run(`Domain.clickLevel(silent, 1, ${sub})`), 'mute');
   }
   assert.equal(run('Domain.clickLevel(silent, 2, 2)'), 'beat');
-  assert.equal(run('Domain.noteLabel(rhythm)'), '4分音符・3連・2つ目');
+});
+
+test('tuplet accent position is kept per beat', () => {
+  const run = load();
+  // 1拍目 ○○● ／ 2拍目 ●○○ ／ 3・4拍目 ○●○ を1つの拍子に混ぜる
+  run('const rhythm = Domain.makeRhythm(4, 4, [0], 3, [], [2, 0, 1, 1]);');
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[2,0,1,1]');
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 2)'), 'accent');      // 1拍目だけアクセント指定
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 0)'), 'sub');
+  assert.equal(run('Domain.clickLevel(rhythm, 1, 0)'), 'beat');
+  assert.equal(run('Domain.clickLevel(rhythm, 1, 1)'), 'sub');
+  assert.equal(run('Domain.clickLevel(rhythm, 2, 1)'), 'beat');
+  assert.equal(run('Domain.uniformTupletAccent(rhythm)'), null);       // 畳めない＝保存は配列になる
+  assert.equal(run('Domain.uniformTupletAccent(Domain.makeRhythm(4, 4, [0], 3, [], 1))'), 1);
+  // 拍数に対して過不足のある配列は 0 埋め／切り詰め
+  assert.equal(run('JSON.stringify(Domain.makeRhythm(4, 4, [0], 3, [], [2, 1]).tupletAccent)'), '[2,1,0,0]');
+  assert.equal(run('JSON.stringify(Domain.makeRhythm(2, 4, [0], 3, [], [2, 1, 0, 2]).tupletAccent)'), '[2,1]');
 });
 
 test('tuplet accent position normalizes to the current division', () => {
   const run = load();
-  assert.equal(run('Domain.makeRhythm(4, 4, [0], 3, [], 9).tupletAccent'), 2);       // 範囲外は末尾へ
-  assert.equal(run('Domain.makeRhythm(4, 4, [0], 3, [], -1).tupletAccent'), 0);
-  assert.equal(run('Domain.makeRhythm(4, 4, [0], 1, [], 2).tupletAccent'), 0);       // 分割なしは常に拍の頭
-  for (const value of ['undefined', 'null', '"bad"']) {
-    assert.equal(run(`Domain.makeRhythm(4, 4, [0], 3, [], ${value}).tupletAccent`), 0);
+  assert.equal(run('JSON.stringify(Domain.makeRhythm(2, 4, [0], 3, [], 9).tupletAccent)'), '[2,2]');       // 範囲外は末尾へ
+  assert.equal(run('JSON.stringify(Domain.makeRhythm(2, 4, [0], 3, [], [-1, 5]).tupletAccent)'), '[0,2]');
+  assert.equal(run('JSON.stringify(Domain.makeRhythm(2, 4, [0], 1, [], 2).tupletAccent)'), '[0,0]');       // 分割なしは常に拍の頭
+  for (const value of ['undefined', 'null', '"bad"', '[null, "x"]']) {
+    assert.equal(run(`JSON.stringify(Domain.makeRhythm(2, 4, [0], 3, [], ${value}).tupletAccent)`), '[0,0]');
   }
   run('const legacy = SequenceMapper.toEntity({groups: [{pattern: [{meter: "4/4", tuplet: 3}]}]}).sequence.groups[0].pattern.rhythms[0];');
-  assert.equal(run('legacy.tupletAccent'), 0);                                       // 旧データは従来どおり拍の頭
+  assert.equal(run('JSON.stringify(legacy.tupletAccent)'), '[0,0,0,0]');   // 旧データは従来どおり拍の頭
   assert.equal(run('Domain.clickLevel(legacy, 0, 0)'), 'accent');
-  assert.equal(run('Domain.isTupletHead(legacy, 0)'), true);
+  assert.equal(run('Domain.isTupletHead(legacy, 0, 0)'), true);
 });
 
-test('tuplet accent position survives YAML round-trip and duplication', () => {
+test('tuplet accent position survives YAML round-trip in both scalar and per-beat form', () => {
   const run = load();
+  // 全拍そろっていれば数値1つに畳んで書く（拍子ごとに1つだった頃のファイルと同じ見た目）
   run(`
     const group = Domain.makeGroup({rhythms: [{num: 4, den: 4, accents: [0], tuplet: 3, tupletAccent: 1}]});
-    const sequence = Domain.makeSequence({groups: [group]});
-    const yaml = Yaml.stringify(SequenceMapper.toDto(sequence));
+    const yaml = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups: [group]})));
     const restored = SequenceMapper.toEntity(Yaml.parse(yaml)).sequence.groups[0].pattern.rhythms[0];
     const copy = Domain.cloneGroup(group);
   `);
-  assert.match(run('yaml'), /tupletAccent: 1/);
+  assert.match(run('yaml'), /tupletAccent: 1\n/);
   assert.equal(run('JSON.stringify(restored)'), run('JSON.stringify(group.pattern.rhythms[0])'));
-  assert.equal(run('copy.pattern.rhythms[0].tupletAccent'), 1);
+  assert.equal(run('JSON.stringify(copy.pattern.rhythms[0].tupletAccent)'), '[1,1,1,1]');
+  run('copy.pattern.rhythms[0].tupletAccent[0] = 2;');
+  assert.equal(run('group.pattern.rhythms[0].tupletAccent[0]'), 1);   // 複製は元と配列を共有しない
+  // 拍ごとに違うときだけ配列で書く
+  run(`
+    const mixed = Domain.makeGroup({rhythms: [{num: 4, den: 4, accents: [0], tuplet: 3, tupletAccent: [2, 0, 1, 1]}]});
+    const mixedYaml = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups: [mixed]})));
+    const mixedBack = SequenceMapper.toEntity(Yaml.parse(mixedYaml)).sequence.groups[0].pattern.rhythms[0];
+  `);
+  assert.match(run('mixedYaml'), /tupletAccent: \[2, 0, 1, 1\]/);
+  assert.equal(run('JSON.stringify(mixedBack)'), run('JSON.stringify(mixed.pattern.rhythms[0])'));
   // 既定（拍の頭）のときは書き出さない＝従来のファイルと同じ見た目のまま
   run(`
     const plain = Domain.makeSequence({groups: [Domain.makeGroup({rhythms: [{num: 4, den: 4, tuplet: 3}]})]});
@@ -128,22 +154,25 @@ test('editing the tuplet accent keeps the playback reference and follows the div
     const history = [];
     const HistoryService = {commit() { history.push(JSON.stringify(rhythm)); }};
     const Store = {findGroup: () => group, apply: fn => fn()};
-    PatternService.setTupletAccent(group.id, 0, 2);
+    PatternService.setTupletAccent(group.id, 0, 0, 2);
   `);
   assert.equal(run('group.pattern.rhythms[0] === rhythm'), true);      // 再生中の timeline が持つ参照を保つ
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[2,0,0,0]');   // 押した拍だけ動く
   assert.equal(run('Domain.clickLevel(rhythm, 0, 2)'), 'accent');
+  assert.equal(run('Domain.clickLevel(rhythm, 1, 0)'), 'beat');
   assert.equal(run('history.length'), 1);
-  run('PatternService.setTupletAccent(group.id, 0, 2);');              // 同じ位置なら履歴を積まない
+  run('PatternService.setTupletAccent(group.id, 0, 0, 2);');           // 同じ位置なら履歴を積まない
   assert.equal(run('history.length'), 1);
-  run('PatternService.setTupletAccent(group.id, 0, 7);');              // 分割数を超える指定は末尾へ丸める
-  assert.equal(run('rhythm.tupletAccent'), 2);
+  run('PatternService.setTupletAccent(group.id, 0, 0, 7);');           // 分割数を超える指定は末尾へ丸める
+  run('PatternService.setTupletAccent(group.id, 0, 9, 1);');           // 拍数の外は無視する
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[2,0,0,0]');
+  run('PatternService.setTupletAccent(group.id, 0, 1, 1);');
   run('PatternService.cycleTuplet(group.id, 0);');                     // 3連符 → 4連符：位置はそのまま
   assert.equal(run('rhythm.tuplet'), 4);
-  assert.equal(run('rhythm.tupletAccent'), 2);
-  run('PatternService.setTupletAccent(group.id, 0, 3);');
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[2,1,0,0]');
   for (let i = 0; i < 6; i++) run('PatternService.cycleTuplet(group.id, 0);');   // 5〜9連符を経て分割なしへ一周
   assert.equal(run('rhythm.tuplet'), 1);
-  assert.equal(run('rhythm.tupletAccent'), 0);                         // 分割が無くなれば拍の頭へ戻る
+  assert.equal(run('JSON.stringify(rhythm.tupletAccent)'), '[0,0,0,0]');   // 分割が無くなれば拍の頭へ戻る
   assert.equal(run('Domain.clickLevel(rhythm, 0, 0)'), 'accent');
 });
 
