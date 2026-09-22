@@ -284,7 +284,9 @@
      2段・3段に折り返しても拍の頭が縦に揃う。連符なしのときは1単位＝丸1個で従来と同じ見た目になる */
   .pgroup{display:flex;align-items:center;gap:4px}
   .bar-pulse.tuplet{gap:10px}
-  .pdot.sub{width:11px;height:11px;min-width:0;border-color:var(--rule);background:#FAF9F5;cursor:default;pointer-events:none}
+  /* 連符の裏拍ドット。ボタンなので押せる（＝アクセント位置をそこへ移す）。押せることが分かるよう hover で色が付く */
+  .pdot.sub{width:11px;height:11px;min-width:0;border-color:var(--rule);background:#FAF9F5;cursor:pointer}
+  .pdot.sub:hover:not(:disabled){border-color:var(--brass);background:#F2EFE3}
   .bgroup{display:flex;align-items:center;gap:4px}
   .beats.tuplet{gap:10px}
   .beat.accent{border-color:var(--brass);box-shadow:inset 0 0 0 2px rgba(142,113,50,.28)}
@@ -698,8 +700,9 @@
      domain … 純粋層：エンティティ生成・拍子計算・定数・ID/クランプの唯一の真実。
      DOM・アプリ状態・ファイル・AudioContext・YouTube を一切参照しない。
      階層：Sequence › RhythmGroup › RhythmPattern › Rhythm
-       Rhythm        {num, den, accents, tuplet, muted} … 1拍子（例 7/8）。den は 1..32, num は 1..32
+       Rhythm        {num, den, accents, tuplet, tupletAccent, muted} … 1拍子（例 7/8）。den は 1..32, num は 1..32
                                            tuplet=1拍の分割数（連符）。1=分割なし、3 なら 4/4 が3連符になる
+                                           tupletAccent=連符の中でアクセントを置く位置（0起点）。既定 0＝拍の頭
                                            accents=強く鳴らす拍番号（0起点）の配列。既定 [0]。muted=無音の拍番号。既定 []
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
        RhythmGroup   {id,name,reps,bpm,toBpm,cue,pattern} … toBpm=到達BPM（線形テンポ変化）
@@ -715,7 +718,10 @@
     const NUM_MIN = 1, NUM_MAX = 32;        // 分子（拍数）の範囲。分母から独立（例：5/4 のような変拍子を許容）
     /* 連符（tuplet）… 1拍をいくつに割るか。1=分割なし（従来どおり）。
        拍子はそのままで割り方だけ変えるので、4/4 のまま3連符（1拍3分割＝1小節12発）が組める。
-       アクセントは従来どおり「拍」単位（0..num-1）で、裏拍には置けない＝保存形式の意味は変わらない。 */
+       アクセント（accents）は「拍」単位（0..num-1）のままで、どの拍を強く鳴らすかを表す。
+       tupletAccent … その拍の中でアクセント（＝拍の音）を置く位置（0起点、0..tuplet-1）。
+       既定 0＝従来どおり拍の頭。1 にすれば3連符が ○●○、2 なら ○○● というように、拍の中で
+       強く鳴らす位置だけをずらせる。位置は拍子ごとに1つで、その拍子のすべての拍に同じ形で効く。 */
     const TUPLET_MIN = 1, TUPLET_MAX = 9;
     const MIN = 50, MAX = 250;
     const TERMS = [[50,65,"Largo"],[66,75,"Adagio"],[76,107,"Andante"],[108,119,"Moderato"],
@@ -779,23 +785,37 @@
       return (n >= TUPLET_MIN && n <= TUPLET_MAX) ? n : 1;
     };
     const isDefaultTuplet = r => tupletOf(r) === 1;
+    /* 連符アクセント位置（tupletAccent）… 1拍の中で「拍の音」を鳴らす位置（0起点）。
+       未指定・不正・分割なし（tuplet=1）は 0＝拍の頭。範囲外は 0..tuplet-1 に収める。 */
+    function normTupletAccent(v, tuplet){
+      const tp = clampInt(tuplet, TUPLET_MIN, TUPLET_MAX, 1);
+      const n = Math.round(Number(v));
+      if(isNaN(n)) return 0;
+      return Math.min(tp - 1, Math.max(0, n));
+    }
+    const tupletAccentOf = r => normTupletAccent(r && r.tupletAccent, tupletOf(r));
+    const isDefaultTupletAccent = r => tupletAccentOf(r) === 0;
+    // その発音が拍の音（アクセント／通常音）か、連符の裏拍かの判定。既定では拍の頭（sub=0）が拍の音
+    const isTupletHead = (r, sub) => sub === tupletAccentOf(r);
     // その拍子の総発音数（拍数 × 分割数）。拍ドットの数とタイムラインのイベント数はこれに一致する
     const pulses = r => r.num * tupletOf(r);
     // 通し発音番号 → 拍番号／拍内の位置
     const beatOfPulse = (r, i) => Math.floor(i / tupletOf(r));
     const subOfPulse = (r, i) => i % tupletOf(r);
-    // ミュートは拍全体（連符の裏拍を含む）。それ以外の裏拍は sub、表拍は accent / beat
-    const clickLevel = (r, beat, sub) => isMuted(r, beat) ? "mute" : (sub > 0 ? "sub" : (isAccent(r, beat) ? "accent" : "beat"));
-    // 音価の表示名（連符があれば「4分音符・3連」）
-    const noteLabel = r => noteName(r.den) + (tupletOf(r) > 1 ? "・" + tupletOf(r) + "連" : "");
+    // ミュートは拍全体（連符の裏拍を含む）。拍の音の位置（tupletAccent）だけが accent / beat で、残りは sub
+    const clickLevel = (r, beat, sub) => isMuted(r, beat) ? "mute" : (!isTupletHead(r, sub) ? "sub" : (isAccent(r, beat) ? "accent" : "beat"));
+    // 音価の表示名（連符があれば「4分音符・3連」、アクセント位置をずらしていれば「・2つ目」まで）
+    const noteLabel = r => noteName(r.den) + (tupletOf(r) > 1 ? "・" + tupletOf(r) + "連" : "")
+      + (tupletAccentOf(r) > 0 ? "・" + (tupletAccentOf(r) + 1) + "つ目" : "");
     // 生成の唯一の入口。num/den はここで 1〜32 の整数へクランプする
     // （下書き復元など parseRhythm を通らない経路から den=0 のような値が入っても壊れないように）
-    const makeRhythm = (num, den, accents, tuplet, muted) => {
+    const makeRhythm = (num, den, accents, tuplet, muted, tupletAccent) => {
       const nu = clampInt(num, NUM_MIN, NUM_MAX, 4);
       const de = clampInt(den, DEN_MIN, DEN_MAX, 4);
+      const tp = clampInt(tuplet, TUPLET_MIN, TUPLET_MAX, 1);
       const silent = normAccents(muted == null ? [] : muted, nu);
       return {num: nu, den: de, muted: silent, accents: normAccents(accents === undefined ? null : accents, nu).filter(i => !silent.includes(i)),
-              tuplet: clampInt(tuplet, TUPLET_MIN, TUPLET_MAX, 1)};
+              tuplet: tp, tupletAccent: normTupletAccent(tupletAccent, tp)};
     };
     // accents を持たない旧データ（保存前の古い下書きなど）は従来どおり先頭拍のみアクセント扱い
     const isMuted = (r, beat) => Array.isArray(r.muted) && r.muted.includes(beat);
@@ -814,7 +834,7 @@
     const formatRhythm = r => r.num + "/" + r.den;
     const rhythmSeconds = (den, bpm) => (60/bpm) * (4/den);
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
-    const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))});
+    const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted, r.tupletAccent))});
     // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
     function normCue(v){
       const n = Number(v);
@@ -850,7 +870,7 @@
         toBpm: g.toBpm != null ? g.toBpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
-        pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))}
+        pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted, r.tupletAccent))}
       };
     }
     // Sequence entity：バラバラの name/tempo/preroll/video/groups を1つに正規化する
@@ -876,7 +896,8 @@
       DENOMINATORS, pickerDen, DEN_MIN, DEN_MAX, NUM_MIN, NUM_MAX, TUPLET_MIN, TUPLET_MAX, MIN, MAX, TERMS, noteName, noteLabel,
       uid, clampInt, clampTempo, normBpm, effectiveBpm, endBpm, hasRamp, groupBeats, rampAt, rampBpm, normCue, fitCues, makeRhythm, parseRhythm, formatRhythm, rhythmSeconds,
       normAccents, isAccent, isMuted, isDefaultAccents,
-      tupletOf, isDefaultTuplet, pulses, beatOfPulse, subOfPulse, clickLevel,
+      tupletOf, isDefaultTuplet, normTupletAccent, tupletAccentOf, isDefaultTupletAccent, isTupletHead,
+      pulses, beatOfPulse, subOfPulse, clickLevel,
       termFor, makePattern, makeGroup, cloneGroup,
       makeSequence, summaryCounts, totalBars
     };
@@ -1056,6 +1077,8 @@
               L.push("        accents: [" + p.accents.join(", ") + "]");
               if(p.muted && p.muted.length) L.push("        muted: [" + p.muted.join(", ") + "]");
               if(p.tuplet > 1) L.push("        tuplet: " + p.tuplet);   // 分割なし（1）は書かない
+              // 連符アクセント位置は拍の頭（0）から動かしたときだけ書く
+              if(p.tupletAccent > 0) L.push("        tupletAccent: " + p.tupletAccent);
             }else{
               L.push("      - " + p);
             }
@@ -1538,14 +1561,31 @@
         Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
       },
       // 連符（1拍の分割数）を なし→2→…→9→なし と循環させる。拍ドットの数が変わるので再描画する。
-      // アクセントは拍単位のままなので、分割数を変えても accents は触らない
+      // アクセントは拍単位のままなので、分割数を変えても accents は触らない。
+      // 連符アクセント位置は新しい分割数に収まるよう詰める（なしへ戻れば拍の頭＝0 に戻る）
       cycleTuplet(id, bi){
         const g = Store.findGroup(id);
         const r = g && g.pattern.rhythms[bi];
         if(!r) return;
         const cur = Domain.tupletOf(r);
         HistoryService.commit();
-        Store.apply(() => { r.tuplet = cur >= Domain.TUPLET_MAX ? 1 : Math.max(2, cur + 1); }, {render:true, idle:true});
+        Store.apply(() => {
+          r.tuplet = cur >= Domain.TUPLET_MAX ? 1 : Math.max(2, cur + 1);
+          r.tupletAccent = Domain.normTupletAccent(r.tupletAccent, r.tuplet);
+        }, {render:true, idle:true});
+      },
+      /* 連符アクセント位置＝1拍の中で「拍の音」を鳴らす位置（0起点）。三連符で 1 なら ○●○ になる。
+         位置は拍子ごとに1つで、その拍子のすべての拍に同じ形で効く。
+         cycleBeat と同じく Rhythm の参照を保つので、再生中に変えても次の先読みから新しい位置で鳴る。
+         再描画はせず（カードが作り直されないように）、下部の拍表示だけ idle で同期する */
+      setTupletAccent(id, bi, sub){
+        const g = Store.findGroup(id);
+        const r = g && g.pattern.rhythms[bi];
+        if(!r) return;
+        const next = Domain.normTupletAccent(sub, Domain.tupletOf(r));
+        if(next === Domain.tupletAccentOf(r)) return;
+        HistoryService.commit();
+        Store.apply(() => { r.tupletAccent = next; }, {idle:true});
       },
       // 拍ドットのタップで 強調音 → 通常音 → ミュート → 強調音。Rhythm の参照を保つ
       // ＝再生中の timeline が持つ meter 参照からも次の先読みで新しいアクセントが読まれる。
@@ -1590,9 +1630,11 @@
         preroll: (seq.preroll > 0) ? seq.preroll : null,
         video: seq.video || null,
         groups: seq.groups.map(g => {
-          // アクセントが既定（先頭拍のみ）から外れている、または連符が付いている拍子が1つでもあれば
-          // {meter, accents, tuplet} のマップ形式へ。すべて既定なら従来どおり "7/8" の文字列のまま＝後方互換
-          const withDetail = g.pattern.rhythms.some(r => !Domain.isDefaultAccents(r) || !Domain.isDefaultTuplet(r) || (r.muted || []).length > 0);
+          // アクセントが既定（先頭拍のみ）から外れている、連符が付いている、連符アクセント位置をずらしている
+          // 拍子が1つでもあれば {meter, accents, tuplet, tupletAccent} のマップ形式へ。
+          // すべて既定なら従来どおり "7/8" の文字列のまま＝後方互換
+          const withDetail = g.pattern.rhythms.some(r => !Domain.isDefaultAccents(r) || !Domain.isDefaultTuplet(r)
+            || !Domain.isDefaultTupletAccent(r) || (r.muted || []).length > 0);
           return {
             name: g.name,
             repeat: g.reps,
@@ -1604,7 +1646,8 @@
             // rep 別 cue は1つでも記録があるときだけ出力（無ければ従来どおり非出力＝後方互換）
             repCues: (g.repCues && g.repCues.some(v => v != null)) ? g.repCues.slice(0, g.reps) : null,
             pattern: g.pattern.rhythms.map(r => withDetail
-              ? {meter: Domain.formatRhythm(r), accents: (r.accents || [0]).slice(), tuplet: Domain.tupletOf(r), ...((r.muted || []).length ? {muted: r.muted.slice()} : {})}
+              ? {meter: Domain.formatRhythm(r), accents: (r.accents || [0]).slice(), tuplet: Domain.tupletOf(r),
+                 tupletAccent: Domain.tupletAccentOf(r), ...((r.muted || []).length ? {muted: r.muted.slice()} : {})}
               : Domain.formatRhythm(r))
           };
         })
@@ -1627,9 +1670,10 @@
         items.forEach(it=>{
           const obj = (it && typeof it === "object" && !Array.isArray(it)) ? it : null;
           const b = Domain.parseRhythm(obj ? obj.meter : it);
-          // accents / tuplet 未指定（従来の "7/8" 形式を含む）は既定＝先頭拍のみアクセント・分割なし。
-          // 範囲外は normAccents / makeRhythm のクランプが吸収する
-          if(b) rhythms.push(obj ? {num:b.num, den:b.den, accents:obj.accents, tuplet:obj.tuplet, muted:obj.muted} : b); else dropped++;
+          // accents / tuplet / tupletAccent 未指定（従来の "7/8" 形式を含む）は既定＝先頭拍のみアクセント・
+          // 分割なし・拍の頭。範囲外は normAccents / normTupletAccent / makeRhythm のクランプが吸収する
+          if(b) rhythms.push(obj ? {num:b.num, den:b.den, accents:obj.accents, tuplet:obj.tuplet,
+                                    tupletAccent:obj.tupletAccent, muted:obj.muted} : b); else dropped++;
         });
         return Domain.makeGroup({
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
@@ -2510,8 +2554,10 @@
       c.className = "chip"; c.dataset.bi = bi;
       c.textContent = b.num + "/" + b.den;
       const tp = Domain.tupletOf(b);
-      if(tp > 1){                              // 連符は小さく添える（4/4 3連）
-        const t = document.createElement("i"); t.className = "chip-tup"; t.textContent = tp + "連";
+      if(tp > 1){                              // 連符は小さく添える（4/4 3連）。位置をずらしていれば「3連 2つ目」
+        const head = Domain.tupletAccentOf(b);
+        const t = document.createElement("i"); t.className = "chip-tup";
+        t.textContent = tp + "連" + (head > 0 ? " " + (head + 1) + "つ目" : "");
         c.appendChild(t);
       }
       return c;
@@ -2527,10 +2573,11 @@
       /* 連符（1拍の分割数）。タップで なし→2→…→9→なし と循環する。拍子はそのままで
          割り方だけ変わるので、4/4 のまま3連符（1小節12発）といった指定ができる */
       const tp = Domain.tupletOf(b);
+      const head = Domain.tupletAccentOf(b);
       const tup = document.createElement("button");
       tup.type = "button";
       tup.className = "bar-tup" + (tp > 1 ? " on" : "");
-      tup.textContent = tp > 1 ? tp + "連符" : "連符なし";
+      tup.textContent = tp > 1 ? tp + "連符" + (head > 0 ? "・" + (head + 1) + "つ目" : "") : "連符なし";
       tup.disabled = Transport.running();
       tup.title = "1拍の分割数（タップで なし→2→…→" + Domain.TUPLET_MAX + "→なし）";
       tup.setAttribute("aria-label", "連符（1拍の分割数）：" + tup.textContent);
@@ -2550,17 +2597,19 @@
       rowb.append(top, RhythmView.pulse(g, b, bi));
       return rowb;
     },
-    /* pulse（拍ドット）… この拍子の発音を1つずつ丸で並べる。表拍の丸はボタンで、タップすると
+    /* pulse（拍ドット）… この拍子の発音を1つずつ丸で並べる。拍の音の丸（大きい方）はボタンで、タップすると
        その拍が強調音 → 通常音 → ミュートの順に変わる（既定は1拍目のみ強調音）。連符の裏拍は小さい丸で、
-       アクセントは拍単位なのでタップ対象にしない。再生中はいま鳴っている丸が光る。
-       拍ごとに .pgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
-       .pdot は文書順（拍0の表・裏…／拍1の表・裏…）＝通し発音番号の順に並び、点灯側の index と一致する。 */
+       こちらもボタン：タップするとその拍子の連符アクセント位置がそこへ移る（三連符なら ○●○ ／ ○○●）。
+       アクセント位置は拍子ごとに1つなので、どの拍の裏拍を押しても同じ位置がその拍子全体に効く。
+       再生中はいま鳴っている丸が光る。拍ごとに .pgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
+       .pdot は文書順（拍0の1つ目・2つ目…／拍1の…）＝通し発音番号の順に並び、点灯側の index と一致する。 */
     pulse(g, b, bi){
       const row = document.createElement("div");
       row.className = "bar-pulse"; row.dataset.pulse = bi;
       row.setAttribute("role", "group");
       row.setAttribute("aria-label", b.num + "/" + b.den + " の拍ごとの音");
       const tp = Domain.tupletOf(b);
+      const head = Domain.tupletAccentOf(b);      // 拍の中で「拍の音」を鳴らす位置（0起点）
       if(tp > 1) row.classList.add("tuplet");
       for(let i = 0; i < b.num; i++){
         const grp = document.createElement("span");
@@ -2585,15 +2634,29 @@
           PatternService.cycleBeat(g.id, bi, i);
           paint();                                   // 構造は変わらないので再描画せず見た目だけ差し替える
         });
-        grp.appendChild(dot);
-        for(let sub = 1; sub < tp; sub++){        // 裏拍（連符の2つ目以降）
-          const sd = document.createElement("span");
-          sd.className = "pdot sub" + (Domain.isMuted(b, i) ? " muted" : ""); sd.setAttribute("aria-hidden", "true");
-          grp.appendChild(sd);
+        for(let sub = 0; sub < tp; sub++){
+          grp.appendChild(sub === head ? dot : RhythmView.subDot(g, b, bi, i, sub));
         }
         row.appendChild(grp);
       }
       return row;
+    },
+    /* 連符の裏拍ドット。タップするとその拍子のアクセント位置がここへ移る（三連符の ○●○ を作る操作）。
+       位置が変わると「どの丸が拍の音か」という並びそのものが変わるので、その拍子の行だけ組み直す
+       （カード全体は作り直さない＝再生中に押しても表示が飛ばない。.bar.now は次の描画で付け直る）。 */
+    subDot(g, b, bi, beat, sub){
+      const sd = document.createElement("button");
+      sd.type = "button";
+      sd.className = "pdot sub" + (Domain.isMuted(b, beat) ? " muted" : "");
+      sd.title = "アクセント位置を" + (sub + 1) + "つ目へ移す（拍全体に効きます）";
+      sd.setAttribute("aria-label", (beat + 1) + "拍目の" + (sub + 1) + "つ目：" + sd.title);
+      sd.addEventListener("click", e=>{
+        e.stopPropagation();                         // カードの折りたたみトグルを誘発しない
+        PatternService.setTupletAccent(g.id, bi, sub);
+        const host = sd.closest(".bar");
+        if(host) host.replaceWith(RhythmView.barRow(g, b, bi));
+      });
+      return sd;
     }
   };
 
@@ -3171,7 +3234,7 @@
         grp.className = "bgroup";
         for(let sub=0;sub<tp;sub++){
           const d = document.createElement("span");
-          d.className = "beat" + (sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
+          d.className = "beat" + (!Domain.isTupletHead(bar, sub) ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
           grp.appendChild(d);
         }
         beatsEl.appendChild(grp);
@@ -3453,7 +3516,7 @@
         grp.className="fs-bgroup";
         for(let sub=0;sub<tp;sub++){
           const d=document.createElement("span");
-          d.className="fs-beat"+(sub > 0 ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
+          d.className="fs-beat"+(!Domain.isTupletHead(bar, sub) ? " sub" : (Domain.isAccent(bar, i) ? " accent" : "")) + (Domain.isMuted(bar, i) ? " muted" : "");
           grp.appendChild(d);
         }
         el.beats.appendChild(grp);

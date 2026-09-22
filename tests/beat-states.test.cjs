@@ -68,6 +68,85 @@ test('legacy data has no muted beats and invalid/overlapping positions normalize
   assert.equal(run('JSON.stringify(normalized.accents)'), '[0]');
 });
 
+test('tuplet accent position moves the beat click inside the tuplet', () => {
+  const run = load();
+  run(`const rhythm = Domain.makeRhythm(4, 4, [0], 3, [], 1);`);      // 三連符の2つ目にアクセント（○●○）
+  assert.equal(run('rhythm.tupletAccent'), 1);
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 0)'), 'sub');
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 1)'), 'accent');
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 2)'), 'sub');
+  assert.equal(run('Domain.clickLevel(rhythm, 1, 1)'), 'beat');        // アクセントの無い拍でも拍の音はここ
+  assert.equal(run('Domain.clickLevel(rhythm, 1, 0)'), 'sub');
+  run('const silent = Domain.makeRhythm(4, 4, [0], 3, [1], 2);');      // ミュートは拍全体に効いたまま
+  for (const sub of [0, 1, 2]) {
+    assert.equal(run(`Domain.clickLevel(silent, 1, ${sub})`), 'mute');
+  }
+  assert.equal(run('Domain.clickLevel(silent, 2, 2)'), 'beat');
+  assert.equal(run('Domain.noteLabel(rhythm)'), '4分音符・3連・2つ目');
+});
+
+test('tuplet accent position normalizes to the current division', () => {
+  const run = load();
+  assert.equal(run('Domain.makeRhythm(4, 4, [0], 3, [], 9).tupletAccent'), 2);       // 範囲外は末尾へ
+  assert.equal(run('Domain.makeRhythm(4, 4, [0], 3, [], -1).tupletAccent'), 0);
+  assert.equal(run('Domain.makeRhythm(4, 4, [0], 1, [], 2).tupletAccent'), 0);       // 分割なしは常に拍の頭
+  for (const value of ['undefined', 'null', '"bad"']) {
+    assert.equal(run(`Domain.makeRhythm(4, 4, [0], 3, [], ${value}).tupletAccent`), 0);
+  }
+  run('const legacy = SequenceMapper.toEntity({groups: [{pattern: [{meter: "4/4", tuplet: 3}]}]}).sequence.groups[0].pattern.rhythms[0];');
+  assert.equal(run('legacy.tupletAccent'), 0);                                       // 旧データは従来どおり拍の頭
+  assert.equal(run('Domain.clickLevel(legacy, 0, 0)'), 'accent');
+  assert.equal(run('Domain.isTupletHead(legacy, 0)'), true);
+});
+
+test('tuplet accent position survives YAML round-trip and duplication', () => {
+  const run = load();
+  run(`
+    const group = Domain.makeGroup({rhythms: [{num: 4, den: 4, accents: [0], tuplet: 3, tupletAccent: 1}]});
+    const sequence = Domain.makeSequence({groups: [group]});
+    const yaml = Yaml.stringify(SequenceMapper.toDto(sequence));
+    const restored = SequenceMapper.toEntity(Yaml.parse(yaml)).sequence.groups[0].pattern.rhythms[0];
+    const copy = Domain.cloneGroup(group);
+  `);
+  assert.match(run('yaml'), /tupletAccent: 1/);
+  assert.equal(run('JSON.stringify(restored)'), run('JSON.stringify(group.pattern.rhythms[0])'));
+  assert.equal(run('copy.pattern.rhythms[0].tupletAccent'), 1);
+  // 既定（拍の頭）のときは書き出さない＝従来のファイルと同じ見た目のまま
+  run(`
+    const plain = Domain.makeSequence({groups: [Domain.makeGroup({rhythms: [{num: 4, den: 4, tuplet: 3}]})]});
+    const plainYaml = Yaml.stringify(SequenceMapper.toDto(plain));
+  `);
+  assert.equal(run('plainYaml.includes("tupletAccent")'), false);
+  assert.match(run('plainYaml'), /tuplet: 3/);
+});
+
+test('editing the tuplet accent keeps the playback reference and follows the division', () => {
+  const run = load();
+  run(`
+    const group = Domain.makeGroup({rhythms: [{num: 4, den: 4, tuplet: 3}]});
+    const rhythm = group.pattern.rhythms[0];
+    const history = [];
+    const HistoryService = {commit() { history.push(JSON.stringify(rhythm)); }};
+    const Store = {findGroup: () => group, apply: fn => fn()};
+    PatternService.setTupletAccent(group.id, 0, 2);
+  `);
+  assert.equal(run('group.pattern.rhythms[0] === rhythm'), true);      // 再生中の timeline が持つ参照を保つ
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 2)'), 'accent');
+  assert.equal(run('history.length'), 1);
+  run('PatternService.setTupletAccent(group.id, 0, 2);');              // 同じ位置なら履歴を積まない
+  assert.equal(run('history.length'), 1);
+  run('PatternService.setTupletAccent(group.id, 0, 7);');              // 分割数を超える指定は末尾へ丸める
+  assert.equal(run('rhythm.tupletAccent'), 2);
+  run('PatternService.cycleTuplet(group.id, 0);');                     // 3連符 → 4連符：位置はそのまま
+  assert.equal(run('rhythm.tuplet'), 4);
+  assert.equal(run('rhythm.tupletAccent'), 2);
+  run('PatternService.setTupletAccent(group.id, 0, 3);');
+  for (let i = 0; i < 6; i++) run('PatternService.cycleTuplet(group.id, 0);');   // 5〜9連符を経て分割なしへ一周
+  assert.equal(run('rhythm.tuplet'), 1);
+  assert.equal(run('rhythm.tupletAccent'), 0);                         // 分割が無くなれば拍の頭へ戻る
+  assert.equal(run('Domain.clickLevel(rhythm, 0, 0)'), 'accent');
+});
+
 test('mute does not create audio nodes', () => {
   const run = load();
   run(`
