@@ -75,6 +75,14 @@
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
   .apply{height:40px;padding:0 14px;background:var(--ink);color:var(--panel);border:1px solid var(--ink);font-size:12px}
 
+  .speed{padding:0 18px 16px;font-family:var(--mono);font-size:12px}
+  .speed-controls,.speed-manual{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .speed-controls{margin-top:8px}
+  .speed [hidden]{display:none}
+  .speed input{width:64px}
+  .speed select{height:40px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
+  .speed-note{margin-top:6px;color:var(--dim);font-size:10px;line-height:1.6}
+
   /* volume */
   .vol{padding:6px 18px 16px}
   .vol-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
@@ -207,6 +215,7 @@
   .g-play{margin-top:2px;margin-bottom:0}
   .g-solo{width:100%;height:38px;background:var(--panel);color:var(--ink);border:1px solid var(--rule);
     font-family:var(--mono);font-size:12px;letter-spacing:.04em}
+  .g-play .g-solo{flex:1;min-width:0;width:auto}
   .g-solo.on{color:var(--signal);border-color:var(--signal)}   /* 再生中＝停止トグル */
   .g-solo:disabled{opacity:.35;cursor:default}
   .g-solo:not(:disabled):active{transform:translateY(1px)}
@@ -501,6 +510,20 @@
     <input type="number" id="tempoInput" min="50" max="250" step="1" value="120" inputmode="decimal">
     <button class="apply" type="submit">設定</button>
   </form>
+
+  <section class="speed" aria-label="再生速度">
+    <span>再生速度</span>
+    <div class="speed-controls">
+      <div class="speed-manual" id="speedManual">
+        <button class="step" id="speedDown" type="button" aria-label="再生速度を5ポイント下げる">−5</button>
+        <input id="speedInput" type="number" min="50" max="150" step="1" value="100" aria-label="再生速度（％）" inputmode="numeric"><span>％</span>
+        <button class="step" id="speedUp" type="button" aria-label="再生速度を5ポイント上げる">＋5</button>
+      </div>
+      <select id="speedVideo" aria-label="動画同期の再生速度" hidden></select>
+      <button class="step" id="speedReset" type="button">100％に戻す</button>
+    </div>
+    <div class="speed-note" id="speedNote">曲のBPMを保持したまま、再生時の速度を変更します。</div>
+  </section>
 
   <section class="vol">
     <div class="vol-top">
@@ -1089,6 +1112,7 @@
     let ctx = null;
     // 音量係数。スライダー50%＝1.0（既定音量）、0%＝0.0（無音）、100%＝2.0（最大）。
     let vol = 1;
+    const pending = new Set();
     function ensure(){
       if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
       if(ctx.state === "suspended") ctx.resume();
@@ -1112,9 +1136,25 @@
       gain.gain.setValueAtTime(peak, time);
       gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
       osc.connect(gain).connect(ctx.destination);
+      const note = {osc, level, time, span};
+      pending.add(note);
+      osc.onended = () => { pending.delete(note); osc.disconnect(); gain.disconnect(); };
       osc.start(time); osc.stop(time + decay + 0.015);
     }
-    return { ensure, now, click, setVolume, get ready(){ return !!ctx; } };
+    function cancelPending(){
+      for(const note of [...pending]){
+        if(note.time > now()){ pending.delete(note); note.osc.stop(); }
+      }
+    }
+    function retimePending(at, ratio){
+      for(const note of [...pending]){
+        if(note.time <= at) continue;
+        pending.delete(note);
+        note.osc.stop();
+        click(note.level, at + (note.time - at) * ratio, note.span * ratio);
+      }
+    }
+    return { ensure, now, click, setVolume, retimePending, cancelPending, get ready(){ return !!ctx; } };
   })();
 
   /* ---------- ClockGateway（タイミング源。刻みは AudioContext 時刻、UI 更新は rAF、先読みは setInterval） ---------- */
@@ -1177,7 +1217,7 @@
      再生位置・状態はメソッドで、頭出し中の状態変化はコールバック（onReady/onPlaying/onStopped/onMsg）で通知する。 */
   const VideoGateway = (() => {
     let ytPlayer = null, ytReady = false, apiTimer = null, ytCurrent = null;
-    let deps = { onMsg(){}, onReady(){}, onPlaying(){}, onStopped(){}, syncEnabled(){ return false; } };
+    let deps = { onMsg(){}, onReady(){}, onPlaying(){}, onStopped(){}, onRateChange(){}, syncEnabled(){ return false; } };
     const stage = $("ytStage"), foot = $("ytFoot");
     // file:// や content:// で開くと Referer が付かず、埋め込みが 153 で弾かれる
     const embedBlocked = !/^https?:$/.test(location.protocol);
@@ -1246,7 +1286,9 @@
           events: {
             onReady: ()=>{ ytReady = true; deps.onReady(); },
             onError: e=>deps.onMsg(ERROR_NOTE[e.data] || ("再生できません（エラー " + e.data + "）"), true),
+            onPlaybackRateChange: () => deps.onRateChange(),
             onStateChange: e=>{
+              deps.onRateChange();
               if(e.data === YT.PlayerState.PLAYING){ deps.onPlaying(); }
               else if(e.data === YT.PlayerState.PAUSED || e.data === YT.PlayerState.ENDED){ deps.onStopped(); }
             }
@@ -1276,7 +1318,16 @@
     function duration(){ return ytPlayer.getDuration(); }
     function stateCode(){ return ytPlayer.getPlayerState(); }
 
+    function rate(){
+      try{ const r = ytPlayer.getPlaybackRate(); return Number.isFinite(r) && r > 0 ? r : 1; }catch(_){ return 1; }
+    }
+    function rates(){
+      try{ return [...new Set([1, ...ytPlayer.getAvailablePlaybackRates()])].filter(r=>Number.isFinite(r) && r > 0).sort((a,b)=>a-b); }
+      catch(_){ return [1]; }
+    }
+    function setRate(r){ try{ ytPlayer.setPlaybackRate(r); }catch(_){} }
     return {
+      rate, rates, setRate,
       init(o){ deps = Object.assign(deps, o); },
       parse, mount, clear, url, armed, pause, seekTo, play, time, duration, stateCode,
       syncOn: () => deps.syncEnabled(),
@@ -1299,6 +1350,21 @@
        VideoSync      … 動画の頭出し／助走／cue 記録（VideoGateway を駆動）
        Transport      … 再生ステートマシン（all/solo/lead・preroll・全REC・動画同期の統括）
      ======================================================================== */
+
+  /* 練習用の速度。曲のBPM／保存データとは独立し、動画同期では実際の動画速度を使う。 */
+  const SpeedService = (() => {
+    let percent = 100;
+    const rate = () => VideoGateway.armed() ? VideoGateway.rate() : percent / 100;
+    function setPercent(value){
+      const n = Number(value);
+      if(String(value).trim() !== "" && Number.isFinite(n)) percent = Math.min(150, Math.max(50, Math.round(n)));
+    }
+    function setVideoRate(value){
+      const r = Number(value);
+      if(VideoGateway.armed() && VideoGateway.rates().includes(r)) VideoGateway.setRate(r);
+    }
+    return {rate, percent:()=>percent, setPercent, setVideoRate};
+  })();
 
   /* ---------- HistoryService（汎用：past/future スタックと undo/redo。記録/復元は capture/apply に委譲） ---------- */
   const HistoryService = (() => {
@@ -1793,23 +1859,37 @@
      ドット描画／REC 判定など DOM 由来は含めない。発音時刻は bpm から都度計算し、テンポ追従を維持する。 */
   const PlaybackScheduler = (() => {
     const LOOKAHEAD = 25, AHEAD = 0.12, queue = [];
-    let nextTime = 0, i = 0, finished = false, endTime = 0;
+    let nextTime = 0, i = 0, finished = false, endTime = 0, looping = false, cycle = 0;
     // イベントの実効 BPM。始点は gbpm（グループ個別 BPM）があればそれ、無ければ基準 BPM を都度参照
     // （＝上書きなしグループは再生中も上部スライダーに追従、上書きグループは固定値で鳴る）。
     // 到達BPM があるグループは、焼き込んだ拍位置 t で始点→到達BPM を線形補間した値で鳴らす
     const eventBpm = e => {
       const from = (e.gbpm != null) ? e.gbpm : Store.getState().bpm;
-      return (e.toBpm != null) ? Domain.rampBpm(from, e.toBpm, e.t) : from;
+      return ((e.toBpm != null) ? Domain.rampBpm(from, e.toBpm, e.t) : from) * SpeedService.rate();
     };
     // イベント1つ＝1発音の長さ。連符なら拍長を分割数で割る
     const pulseSeconds = e => Domain.rhythmSeconds(e.meter.den, eventBpm(e)) / Domain.tupletOf(e.meter);
-    function resetPointer(){ i = 0; finished = false; }
+    let scheduledRate = 1;
+    function syncRate(now){
+      const rate = SpeedService.rate(), ratio = scheduledRate / rate;
+      if(rate === scheduledRate) return 1;
+      SoundGateway.retimePending(now, ratio);
+      nextTime = now + Math.max(0, nextTime - now) * ratio;
+      if(finished) endTime = now + Math.max(0, endTime - now) * ratio;
+      for(const event of queue){
+        if(event.time > now){ event.time = now + (event.time - now) * ratio; event.bpm /= ratio; }
+      }
+      scheduledRate = rate;
+      return ratio;
+    }
+    function resetPointer(){ i = 0; finished = false; cycle = 0; scheduledRate = SpeedService.rate(); }
     function prime(startTime){ resetPointer(); queue.length = 0; nextTime = startTime; }
     // 任意の index から刻み直す（パッドの動画シーク／一時停止復帰でメトロノームをフィットさせる）
     function primeAtIndex(startTime, index){
       const n = PlaybackService.count();
+      scheduledRate = SpeedService.rate();
       i = Math.max(0, Math.min(index|0, n));     // n（末尾＝以降イベント無し）まで許容
-      finished = (i >= n); queue.length = 0; nextTime = startTime;
+      finished = (i >= n); cycle = 0; queue.length = 0; nextTime = startTime;
     }
     function pump(limit){
       const n = PlaybackService.count();
@@ -1822,15 +1902,19 @@
         SoundGateway.click(Domain.clickLevel(e.meter, e.beat, e.sub), nextTime, span);
         // pulse=小節先頭からの通し発音番号（拍ドットの点灯位置）。bpm は拍表示のライブ更新用で、
         // ramp のときだけ実際に表示する（一定テンポでは従来どおり出さない）
-        queue.push({time:nextTime, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, sub:e.sub,
+        queue.push({time:nextTime, cycle, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, sub:e.sub,
                     pulse: e.beat * tp + e.sub, meter:e.meter, bpm, ramp: e.toBpm != null});
         nextTime += span;
         i++;
-        if(i >= n){ finished = true; endTime = nextTime; }
+        if(i >= n){
+          if(looping){ i = 0; cycle++; }
+          else{ finished = true; endTime = nextTime; }
+        }
       }
     }
     return {
-      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump,
+      LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump, syncRate,
+      setLoop(value){ looping = !!value; },
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
@@ -1846,7 +1930,7 @@
     const CUE_LATENCY = 0.26;
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
-    function compensate(cue){ return Math.max(0, cue - CUE_LATENCY); }
+    function compensate(cue){ return Math.max(0, cue - CUE_LATENCY * SpeedService.rate()); }
     function cancel(){ topWatch = null; cueWatch = null; }
 
     function startFromTop(kind){
@@ -1887,7 +1971,7 @@
       const aim = compensate(cue);
       const useCountIn = (kind !== "all");
       const ciDur = useCountIn ? Transport.countInFor(Transport.soloTarget()).dur : 0;
-      const fire = Math.max(0, aim - ciDur);
+      const fire = Math.max(0, aim - ciDur * SpeedService.rate());
       const from = fire;
       // seek を出す前の再生位置。着弾判定でこれと見比べ、「まだ移動前の位置を読んでいる」間は刻み出さない
       let before = null;
@@ -1946,7 +2030,7 @@
           if(cueWatch.seeked){
             const remain = cueWatch.target - t;
             if(remain <= 0){
-              const w = cueWatch; const over = Math.min(-remain, 0.05);
+              const w = cueWatch; const over = Math.min(-remain / SpeedService.rate(), 0.05);
               cueWatch = null; Transport.clearArm();
               view.videoMsg("", false);
               Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index, resume:w.resume});
@@ -1960,7 +2044,7 @@
       }else if(seekLanded(cueWatch, t) && st === 1 && t != null && t >= cueWatch.target - 0.1){
         // 寄せ先へ実際に着き、そこから再生が始まったフレームで刻み出す
         const w = cueWatch;
-        const over = Math.min(Math.max(0, t - cueWatch.target), 0.05);
+        const over = Math.min(Math.max(0, t - cueWatch.target) / SpeedService.rate(), 0.05);
         cueWatch = null; Transport.clearArm();
         view.videoMsg("", false);
         Transport.beginPlayback(w.kind, {skipWait:true, adjust:-over, countIn:w.countIn, index:w.index});   // 行き過ぎたぶんだけ前倒し
@@ -1984,7 +2068,7 @@
       try{ t = VideoGateway.time(); }catch(err){}
       if(t == null || isNaN(t)) return;
       const late = Math.max(0, ClockGateway.now() - evTime);   // 取りこぼしたフレームぶんを引き、拍の実時刻の動画位置へ戻す
-      const val = Math.max(0, Math.round((t - late) * 100) / 100);   // grab と同じく生の動画位置で記録（発音遅延の補正は再生側 compensate に一本化）
+      const val = Math.max(0, Math.round((t - late * SpeedService.rate()) * 100) / 100);   // grab と同じく生の動画位置で記録（発音遅延の補正は再生側 compensate に一本化）
       if(!Array.isArray(g.repCues)) g.repCues = Domain.fitCues(null, g.reps);
       g.repCues[rep] = val;
       if(rep === 0){ g.cue = val; view.stampCueView(gid, val); }   // グループ表示は rep0 のみ（rep チップ UI なし）
@@ -2004,6 +2088,7 @@
     const IMMEDIATE_LEAD = 0.15;
     let running = false;
     let mode = "all", soloId = null;          // "all"=全体 / "solo"=選択グループのみ
+    let loopGroup = false, loopCue = null;
     let soloTail = false;                     // solo 起点から末尾まで連続再生（全画面のグループ再生用。終端で止めず次グループへ）
     let armKind = null, pendingKind = null, waitTimer = null;   // 準備中（頭出し／再生待ち）
     let recording = false;                    // 全体レック（各 rep の頭で repCues を記録）
@@ -2019,7 +2104,7 @@
       highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
     };
     const isSoloMode = m => m === "solo";
-    const baseStatus = () => isSoloMode(mode) ? "グループ再生" : "再生中";
+    const baseStatus = () => loopGroup ? "グループ無限再生" : isSoloMode(mode) ? "グループ再生" : "再生中";
 
     function soloTarget(){
       const g = Store.findGroup(Store.getState().activeId);
@@ -2037,7 +2122,7 @@
       const src = prev ? prev.pattern.rhythms : target.pattern.rhythms.slice(0, 1);
       // 助走は「出所グループ」の実効 BPM で鳴らす（177→88 の境界で誤テンポにならないように）。
       // 前グループの末尾から取る場合、そこはテンポ変化の終点なので到達BPM側を使う
-      const ciBpm = prev ? Domain.endBpm(srcGroup, st.bpm) : Domain.effectiveBpm(srcGroup, st.bpm);
+      const ciBpm = (prev ? Domain.endBpm(srcGroup, st.bpm) : Domain.effectiveBpm(srcGroup, st.bpm)) * SpeedService.rate();
       const bars = [];
       let dur = 0;
       for(let i = src.length - 1; i >= 0; i--){
@@ -2056,14 +2141,26 @@
       return (g && typeof g.cue === "number") ? g.cue : null;
     }
 
+    // 動画同期の周回は再び頭出しする。単体再生はスケジューラ内で隙間なく循環する。
+    function finishCycle(){
+      if(!loopGroup){ stop(true); return; }
+      halt();
+      start("solo", {loop:true, loopCue});
+    }
+    function syncSpeed(){
+      const now = ClockGateway.now(), ratio = PlaybackScheduler.syncRate(now);
+      if(firstBeatTime > now) firstBeatTime = now + (firstBeatTime - now) * ratio;
+    }
     function schedulerTick(){
+      syncSpeed();
       // タブが背面だと setInterval が 1 秒程度まで間引かれるので、先読みを伸ばす
       const limit = ClockGateway.now() + (ClockGateway.hidden() ? 1.2 : PlaybackScheduler.AHEAD);
-      if(PlaybackScheduler.finished() && ClockGateway.now() >= PlaybackScheduler.endTime()){ stop(true); return; }
+      if(PlaybackScheduler.finished() && ClockGateway.now() >= PlaybackScheduler.endTime()){ finishCycle(); return; }
       PlaybackScheduler.pump(limit);
     }
     function draw(){
       if(!running) return;
+      syncSpeed();
       const now = ClockGateway.now();
       if(firstBeatTime && now < firstBeatTime){
         view.prerollTick(Math.max(0, firstBeatTime - now).toFixed(2));
@@ -2073,7 +2170,7 @@
       const queue = PlaybackScheduler.queue;
       while(queue.length && queue[0].time <= now){
         const e = queue.shift();
-        const key = e.gid + ":" + e.rep + ":" + e.bar;
+        const key = e.cycle + ":" + e.gid + ":" + e.rep + ":" + e.bar;
         if(key !== shown){
           shown = key;
           if(recording && e.bar === 0){    // 各くり返し(rep)の頭で記録（rep0=グループ先頭も含む）
@@ -2081,14 +2178,14 @@
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter);
-          view.showPulse(e.meter, e.ramp ? e.bpm : null);
+          view.showPulse(e.meter, e.bpm);
           view.highlight();
         }
         view.setBeatDot(e.pulse);
         // BPM は拍ごとに変わるので、小節単位の showPulse とは別に毎拍更新する
-        view.showTempo(e.ramp ? e.bpm : null);
+        view.showTempo(e.bpm);
       }
-      if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ stop(true); return; }
+      if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ finishCycle(); return; }
       ClockGateway.frame(draw);
     }
 
@@ -2114,7 +2211,7 @@
       // 空白のぶん最初の予約を後ろへずらす。先読みスケジューラなので、
       // この間はクリックが1つも予約されず、時刻はサンプル精度で保たれる
       // 空白は「全体再生」かつ「動画の頭出しをしていないとき」だけ入れる（パッド/動画同期は skipWait）
-      const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() : 0;
+      const wait = (mode === "all" && !o.skipWait) ? view.readPreroll() / (VideoGateway.armed() ? SpeedService.rate() : 1) : 0;
       const adjust = o.adjust || 0;
       const lead = o.lead || 0;               // 即時再生（動画なし全体再生）の準備ディレイ。約1秒後から鳴らす
       // 助走カウントイン（動画同期時のみ）：前グループ末尾の1〜2小節を downbeat の手前に実際の拍子で
@@ -2131,6 +2228,7 @@
       // 対象グループ先頭から。ふつうの全体再生は 0（曲頭）。o.index は 0 も有効値なので != null で判定する。
       const baseIndex = (soloTail && soloId != null) ? PlaybackService.firstIndexOf(soloId) : 0;
       const startIndex = (o.index != null) ? o.index : baseIndex;
+      PlaybackScheduler.setLoop(loopGroup && !VideoGateway.armed());
       PlaybackScheduler.primeAtIndex(start, startIndex);
       firstBeatTime = (wait > 0 || lead > 0) ? start : 0;
       let ct = start - ciDur;                 // カウントインの先頭。アクセントは各小節の指定位置に従う
@@ -2153,12 +2251,15 @@
     }
     // メトロノームの run ループだけ停止（timeline/mode は保持）。パッドのシーク・一時停止で使う。
     function halt(){
+      SoundGateway.cancelPending();
       if(cancelTimer){ cancelTimer(); cancelTimer = null; }
       PlaybackScheduler.queue.length = 0;
       running = false; firstBeatTime = 0;
       view.clearBeats();
     }
     function stop(completed, fromVideo){
+      SoundGateway.cancelPending();
+      loopGroup = false; loopCue = null; PlaybackScheduler.setLoop(false);
       running = false;
       armKind = null; VideoSync.cancel();
       recording = false;
@@ -2186,14 +2287,18 @@
     function start(kind, opts){
       if(kind !== "all" && !soloTarget()) return;
       if(kind === "all" && !PlaybackScheduler.plan().length) return;
-      soloTail = !!(opts && opts.tail) && kind !== "all";   // solo 起点から末尾まで連続（全画面のグループ再生）
+      loopGroup = kind === "solo" && !!(opts && opts.loop);
+      loopCue = loopGroup ? (opts.loopCue != null ? opts.loopCue : cueOf(kind)) : null;
+      if(loopGroup && loopCue == null && VideoGateway.armed()) loopCue = VideoGateway.time() || 0;
+      soloTail = !loopGroup && !!(opts && opts.tail) && kind !== "all";   // solo 起点から末尾まで連続（全画面のグループ再生）
       // 新規セッション開始（ボタン／グループ再生／全画面）では、パッド由来の一時停止状態を必ず解除する。
       // これを怠ると paused が残り、再生中なのに再生バー／HUD が「再開」表示のまま同期しなくなる。
       view.padReset();
-      const cue = cueOf(kind);
+      const cue = loopGroup ? loopCue : cueOf(kind);
       // 全体レック／cue 未記録の全体再生は先頭(0秒)から（従来どおり・preroll あり）。頭出しへは即入る（0.15s の間は廃止）
       if(VideoGateway.armed() && kind === "all" && (recording || cue == null)){
         armKind = kind;
+        view.render();
         view.updateTransport();
         VideoSync.startFromTop(kind);
         return;
@@ -2201,12 +2306,14 @@
       // 全体（cue記録済み）／グループ再生は記録した位置から合わせる（cue−補正へ寄せ、実到達フレームで刻む）
       if(VideoGateway.armed() && cue != null){
         armKind = kind;
+        view.render();
         view.updateTransport();
         VideoSync.startAtCue(kind, cue);
         return;
       }
       if(VideoGateway.armed()){
         armKind = kind;
+        view.render();
         view.updateTransport();
         pendingKind = kind;
         view.videoMsg("動画の再生を待っています…", false);
@@ -2221,11 +2328,12 @@
     }
     function armCancel(){
       armKind = null; VideoSync.cancel(); pendingKind = null;
-      recording = false; soloTail = false;
+      recording = false; soloTail = false; loopGroup = false; loopCue = null; PlaybackScheduler.setLoop(false);
       clearTimeout(waitTimer);
       VideoGateway.pause();
       view.videoMsg("", false);
       view.status("停止中");
+      view.render();
       view.updateTransport();
       view.padUpdate();
     }
@@ -2249,6 +2357,7 @@
     }
     function onVideoStopped(){
       clearTimeout(waitTimer); pendingKind = null;
+      if(running && loopGroup && VideoGateway.stateCode() === 0){ finishCycle(); return; }
       if(running && VideoGateway.syncOn()) stop(false, true);   // 動画を止めたら刻みも止まる
     }
 
@@ -2260,6 +2369,7 @@
       soloId: () => soloId,
       armKind: () => armKind,
       recording: () => recording,
+      looping: () => loopGroup,
       cur: () => cur,
       soloTarget, countInFor,
       clearArm(){ armKind = null; },
@@ -2777,13 +2887,23 @@
 
         const solo = document.createElement("button");
         solo.type = "button"; solo.className = "g-solo";
-        solo.textContent = soloOn ? "停止" : "グループ再生";
-        solo.classList.toggle("on", soloOn);
-        solo.disabled = soloOn ? false : (busy || !hasBars);
+        const loopOn = soloOn && Transport.looping();
+        const onceOn = soloOn && !Transport.looping();
+        solo.textContent = onceOn ? "停止" : "グループ再生";
+        solo.classList.toggle("on", onceOn);
+        solo.disabled = onceOn ? false : (busy || !hasBars);
         solo.title = soloOn ? "停止" : hasBars ? "このリズムグループだけを再生" : "拍子を1つ以上追加してください";
         solo.addEventListener("click", ()=> Transport.armKind() ? Transport.armCancel()
                              : (Transport.running() ? Transport.stop(false) : Transport.start("solo")));
-        prow.appendChild(solo);
+        const loop = document.createElement("button");
+        loop.type = "button"; loop.className = "g-solo g-loop";
+        loop.textContent = loopOn ? "停止" : "∞ 無限再生";
+        loop.classList.toggle("on", loopOn);
+        loop.disabled = loopOn ? false : (busy || !hasBars);
+        loop.title = loopOn ? "無限再生を停止" : "このグループを設定した再生回数ごとに繰り返す";
+        loop.addEventListener("click", () => Transport.armKind() ? Transport.armCancel()
+          : (Transport.running() ? Transport.stop(false) : Transport.start("solo", {loop:true})));
+        prow.append(solo, loop);
         body.appendChild(prow);
         card.appendChild(body);
       }
@@ -2973,6 +3093,53 @@
       });
     }
     return { render, bind };
+  })();
+
+  const SpeedView = (() => {
+    const input = $("speedInput"), video = $("speedVideo");
+    function render(){
+      const synced = VideoGateway.armed();
+      $("speedManual").hidden = synced;
+      video.hidden = !synced;
+      input.value = SpeedService.percent();
+      $("speedDown").disabled = SpeedService.percent() <= 50;
+      $("speedUp").disabled = SpeedService.percent() >= 150;
+      if(synced){
+        const rates = VideoGateway.rates();
+        const key = rates.join(",");
+        if(video.dataset.rates !== key){
+          video.replaceChildren(...rates.map(rate=>{
+            const option = document.createElement("option"); option.value = rate;
+            option.textContent = Math.round(rate * 100) + "％"; return option;
+          }));
+          video.dataset.rates = key;
+        }
+        video.value = String(SpeedService.rate());
+      }
+      $("speedNote").textContent = synced ? "動画が対応する速度から選択します。メトロノームも同じ速度で再生します。"
+        : "曲のBPMを保持したまま、再生時の速度を変更します。";
+    }
+    function change(value){ SpeedService.setPercent(value); render(); }
+    function bind(){
+      input.addEventListener("change", ()=>change(input.value));
+      input.addEventListener("keydown", e=>{
+        if(e.key === "ArrowUp" || e.key === "ArrowDown"){
+          e.preventDefault(); change(SpeedService.percent() + (e.key === "ArrowUp" ? 1 : -1));
+        }else if(e.key === "Enter"){ e.preventDefault(); change(input.value); }
+      });
+      input.addEventListener("wheel", e=>{
+        if(document.activeElement !== input) return;
+        e.preventDefault(); if(e.deltaY) change(SpeedService.percent() + (e.deltaY < 0 ? 1 : -1));
+      }, {passive:false});
+      $("speedDown").addEventListener("click", ()=>change(SpeedService.percent()-5));
+      $("speedUp").addEventListener("click", ()=>change(SpeedService.percent()+5));
+      $("speedReset").addEventListener("click", ()=>{
+        if(VideoGateway.armed()) SpeedService.setVideoRate(1); else change(100);
+      });
+      video.addEventListener("change", ()=>{ SpeedService.setVideoRate(video.value); render(); });
+      render();
+    }
+    return {bind, render};
   })();
 
   /* ---------- VolumeView（メトロノーム音量。スライダー50%＝既定、0-100%で調整） ---------- */
@@ -3540,12 +3707,14 @@
         if(!v){ ytSay("YouTube のURLとして読めませんでした", true); return; }
         VideoGateway.mount(v);
       }
+      ytSync.addEventListener("change", ()=>SpeedView.render());
       ytLoad.addEventListener("click", applyUrl);
       ytUrl.addEventListener("keydown", e=>{ if(e.key === "Enter"){ e.preventDefault(); applyUrl(); } });
       ytUrl.addEventListener("paste", ()=>setTimeout(applyUrl, 0));
       ytClear.addEventListener("click", ()=>{
         if(Transport.running()) Transport.stop(false);
         VideoGateway.clear();
+        SpeedView.render();
         Transport.clearPending();
         ytUrl.value = ""; ytSay("", false);
         SequenceView.render();
@@ -3588,6 +3757,7 @@
     if(meta.preroll){ prerollInput.value = state().preroll.toFixed(2); }
     if(meta.render){ if(meta.focusHandle != null) focusHandleId = meta.focusHandle; SequenceView.render(); }
     if(meta.idle){ TransportView.syncIdle(); }
+    SpeedView.render();
   }
 
   /* ========================================================================
@@ -3600,7 +3770,8 @@
   });
   VideoGateway.init({
     onMsg: (text, bad) => VideoView.ytSay(text, bad),
-    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); PlaybarView.update(); },
+    onReady: () => { VideoView.ytSay("", false); SequenceView.render(); PlaybarView.update(); SpeedView.render(); },
+    onRateChange: () => SpeedView.render(),
     onPlaying: () => Transport.onVideoPlaying(),
     onStopped: () => Transport.onVideoStopped(),
     syncEnabled: () => VideoView.syncEnabled()
@@ -3610,6 +3781,7 @@
   VideoPadService.init({ view });
   Store.subscribe(dispatch);
   TempoView.bind();
+  SpeedView.bind();
   VolumeView.bind();
   SequenceView.bind();
   TransportView.bind();
