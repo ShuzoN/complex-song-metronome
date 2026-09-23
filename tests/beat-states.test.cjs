@@ -392,6 +392,21 @@ test('video speed uses confirmed rate only and rejects unsupported selections', 
   assert.equal(run('SpeedService.rate()'), 0.8);
 });
 
+test('video speed steps by 5% and falls back to the next supported rate when the player ignores it', () => {
+  const run = playbackHarness(true);
+  run('var timers=[]; var setTimeout=f=>timers.push(f);');
+  run('SpeedService.requestVideoPercent(105);');
+  assert.equal(run('requestedRate'), 1.05);
+  run('timers.shift()();');                                   // プレイヤが 1.05 を無視 → 上方向の次の対応速度
+  assert.equal(run('requestedRate'), 1.25);
+  run('videoRate=1.05; requestedRate=null; SpeedService.requestVideoPercent(100); videoRate=1; timers.shift()();');
+  assert.equal(run('requestedRate'), 1);                      // 反映されたら差し替えない
+  run('requestedRate=null; SpeedService.requestVideoPercent(33);');
+  assert.equal(run('requestedRate'), 0.5);                    // 5% 単位に丸め、対応範囲で頭打ち
+  assert.equal(run('SpeedService.shown()'), 100);
+  assert.equal(run('JSON.stringify(SpeedService.bounds())'), '[50,200]');
+});
+
 test('future audio nodes are cancelled and rescheduled on a live speed change', () => {
   const run = load(['SoundGateway']);
   run(`const nodes=[];
