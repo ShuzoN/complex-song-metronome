@@ -240,10 +240,11 @@
   .bars{display:flex;flex-direction:column;gap:4px}
   .bar{display:flex;flex-direction:column;gap:3px;padding:3px 3px 6px 8px;border:1px solid var(--rule);background:#FCFBF7}
   .bar.now{border-color:var(--signal);background:#FBF0EE}
-  .bar-top{display:flex;align-items:center;gap:8px}
+  .bar-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
   /* 拍子欄は「32 / 32」が入る最小幅を持たせ、右の連符チップが行をまたいでも同じ位置に来るようにする */
   .bar-sig{flex:none;min-width:76px;font-family:var(--mono);font-size:14px;letter-spacing:.06em}
   .bar-sig em{font-style:normal;color:var(--brass);padding:0 2px}
+  .bar-sig select{height:30px;min-width:48px;padding:2px 4px;border:1px solid var(--rule);border-radius:3px;background:var(--panel);color:inherit;font:inherit}
   .bar-ctl{display:flex;gap:3px;margin-left:auto}
   /* グループ内の pulse（拍ドット）。1丸＝1拍のボタンで、タップするとアクセントの入り／切りが変わる。
      アクセント＝真鍮色の二重丸（下部バーの .beat.accent と同じ表し方）、再生中の拍＝塗り */
@@ -1520,6 +1521,20 @@
   /* PatternService … リズムパターン（グループ内の拍子の並び）の編集 */
   const PatternService = (() => {
     return {
+      setMeter(id, i, num, den){
+        const g = Store.findGroup(id);
+        const r = g && g.pattern.rhythms[i];
+        if(!r || Transport.running()) return;
+        const n = Number(num), d = Number(den);
+        if(!Number.isInteger(n) || n < Domain.NUM_MIN || n > Domain.NUM_MAX) return;
+        // 読み込んだ特殊な分母は維持できるが、新たに選べる分母は一般的な音価のみ。
+        if(d !== r.den && !Domain.DENOMINATORS.includes(d)) return;
+        if(n === r.num && d === r.den) return;
+        HistoryService.commit();
+        Store.apply(() => {
+          Object.assign(r, Domain.makeRhythm(n, d, r.accents, r.tuplet, r.muted));
+        }, {render:true, idle:true});
+      },
       addRhythm(id, num, den){
         HistoryService.commit();
         Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
@@ -2522,7 +2537,28 @@
       top.className = "bar-top";
       const sig = document.createElement("span");
       sig.className = "bar-sig";
-      sig.innerHTML = b.num + ' <em>/</em> ' + b.den;
+      const meterSelect = (field, values, current, label) => {
+        const sel = document.createElement("select");
+        sel.dataset.groupField = "meter-" + field + "-" + bi;
+        sel.setAttribute("aria-label", (bi + 1) + "番目の拍子の" + label);
+        sel.disabled = Transport.running();
+        if(!values.includes(current)){
+          const old = document.createElement("option");
+          old.value = current; old.textContent = current + "（読込値）"; old.disabled = true;
+          sel.appendChild(old);
+        }
+        values.forEach(v => {
+          const opt = document.createElement("option");
+          opt.value = v; opt.textContent = v; sel.appendChild(opt);
+        });
+        sel.value = String(current);
+        sel.addEventListener("change", () => PatternService.setMeter(g.id, bi,
+          field === "num" ? sel.value : b.num, field === "den" ? sel.value : b.den));
+        return sel;
+      };
+      const slash = document.createElement("em"); slash.textContent = "/";
+      sig.append(meterSelect("num", Array.from({length:Domain.NUM_MAX}, (_,i)=>i+1), b.num, "分子"),
+        slash, meterSelect("den", Domain.DENOMINATORS, b.den, "分母"));
       /* 連符（1拍の分割数）。タップで なし→2→…→9→なし と循環する。拍子はそのままで
          割り方だけ変わるので、4/4 のまま3連符（1小節12発）といった指定ができる */
       const tp = Domain.tupletOf(b);

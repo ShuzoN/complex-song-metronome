@@ -21,6 +21,33 @@ test('application JavaScript parses', () => {
   }
 });
 
+test('meter editing preserves remaining beat settings, supports undo and persists', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'Yaml', 'SequenceMapper']);
+  run(`const Transport={running:()=>false};
+    const group=Domain.makeGroup({rhythms:[{num:7,den:8,accents:[0,4],muted:[1,6],tuplet:3}]});
+    Store.apply({groups:[group]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PatternService.setMeter(group.id,0,3,4);
+  `);
+  assert.equal(run('JSON.stringify(Store.findGroup(group.id).pattern.rhythms[0])'),
+    '{"num":3,"den":4,"muted":[1],"accents":[0],"tuplet":3}');
+  run('HistoryService.undo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 7);
+  assert.equal(run('JSON.stringify(Store.findGroup(group.id).pattern.rhythms[0].muted)'), '[1,6]');
+  run(`HistoryService.redo(); PatternService.setMeter(group.id,0,5,8);
+    const saved=SequenceMapper.toEntity(Yaml.parse(Yaml.stringify(SequenceMapper.toDto(
+      Domain.makeSequence({groups:Store.getState().groups})
+    )))).sequence.groups[0].pattern.rhythms[0];`);
+  assert.equal(run('saved.num'), 5);
+  assert.equal(run('saved.den'), 8);
+  assert.equal(run('Domain.clickLevel(saved,4,0)'), 'beat');
+  assert.equal(run('saved.tuplet'), 3);
+  run('PatternService.setMeter(group.id,0,4,5)');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].den'), 8);
+  run('Transport.running=()=>true; PatternService.setMeter(group.id,0,4,4)');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 5);
+});
+
 test('beat cycles through accent, normal, mute; mutations preserve playback references', () => {
   const run = load();
   run(`
