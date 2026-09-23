@@ -21,6 +21,64 @@ test('application JavaScript parses', () => {
   }
 });
 
+test('deleting meters stops at one and blocked deletion leaves undo history intact', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService']);
+  run(`const group=Domain.makeGroup({rhythms:[{num:3,den:4},{num:7,den:8}]});
+    Store.apply({groups:[group]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PatternService.removeRhythm(group.id,0);
+    PatternService.removeRhythm(group.id,0);
+  `);
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 1);
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 7);
+  run('HistoryService.undo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 2);
+  run('HistoryService.redo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 1);
+});
+
+test('empty or invalid imported patterns receive one default meter', () => {
+  const run = load();
+  for (const pattern of ['[]', '["invalid"]', 'null']) {
+    run(`var result=SequenceMapper.toEntity({groups:[{pattern:${pattern}}]});`);
+    assert.equal(run('result.sequence.groups[0].pattern.rhythms.length'), 1);
+    assert.equal(run('Domain.formatRhythm(result.sequence.groups[0].pattern.rhythms[0])'), '4/4');
+    assert.ok(run('result.notes.some(n=>n.includes("4/4"))'));
+  }
+  assert.equal(run('SequenceMapper.toEntity({groups:[]}).sequence.groups[0].pattern.rhythms.length'), 1);
+  assert.equal(run('Domain.makeGroup().pattern.rhythms.length'), 1);
+});
+
+test('meter editing preserves remaining beat settings, supports undo and persists', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'Yaml', 'SequenceMapper']);
+  run(`const Transport={running:()=>false};
+    const group=Domain.makeGroup({rhythms:[{num:7,den:8,accents:[0,4],muted:[1,6],tuplet:3,
+      tupletAccent:[[0],[1],[2],[0,1],[0],[0],[2]]}]});
+    Store.apply({groups:[group]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PatternService.setMeter(group.id,0,3,4);
+  `);
+  // 拍数が減れば連符アクセント位置もその拍数まで切り詰める（増えれば拍の頭で埋める）
+  assert.equal(run('JSON.stringify(Store.findGroup(group.id).pattern.rhythms[0])'),
+    '{"num":3,"den":4,"muted":[1],"accents":[0],"tuplet":3,"tupletAccent":[[0],[1],[2]]}');
+  run('HistoryService.undo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 7);
+  assert.equal(run('JSON.stringify(Store.findGroup(group.id).pattern.rhythms[0].muted)'), '[1,6]');
+  run(`HistoryService.redo(); PatternService.setMeter(group.id,0,5,8);
+    const saved=SequenceMapper.toEntity(Yaml.parse(Yaml.stringify(SequenceMapper.toDto(
+      Domain.makeSequence({groups:Store.getState().groups})
+    )))).sequence.groups[0].pattern.rhythms[0];`);
+  assert.equal(run('saved.num'), 5);
+  assert.equal(run('saved.den'), 8);
+  assert.equal(run('Domain.clickLevel(saved,4,0)'), 'beat');
+  assert.equal(run('saved.tuplet'), 3);
+  assert.equal(run('JSON.stringify(saved.tupletAccent)'), '[[0],[1],[2],[0],[0]]');
+  run('PatternService.setMeter(group.id,0,4,5)');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].den'), 8);
+  run('Transport.running=()=>true; PatternService.setMeter(group.id,0,4,4)');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 5);
+});
+
 test('beat cycles through accent, normal, mute; mutations preserve playback references', () => {
   const run = load();
   run(`
@@ -385,4 +443,22 @@ test('whole-sequence playback scales every group without clamping or altering sa
   run('SpeedService.setPercent(150); PlaybackScheduler.prime(0); PlaybackScheduler.pump(10);');
   assert.equal(run('JSON.stringify(PlaybackScheduler.queue.map(e=>e.bpm))'), '[75,75,375,375]');
   assert.equal(run('Yaml.stringify(SequenceMapper.toDto(SequenceIO.currentSequence()))===before'), true);
+});
+
+test('new groups capture the current BPM and retain it after global tempo changes and saving', () => {
+  const run = load(['Domain', 'Store', 'SequenceService', 'Yaml', 'SequenceMapper']);
+  run(`const HistoryService={commit(){}};
+    SequenceService.setTempo(179); SequenceService.addGroup();
+    const first=Store.findGroup(Store.getState().activeId);
+    SequenceService.setTempo(185.5); SequenceService.addGroup();
+    const second=Store.findGroup(Store.getState().activeId);
+    const restored=SequenceMapper.toEntity(Yaml.parse(Yaml.stringify(SequenceMapper.toDto(
+      Domain.makeSequence({tempo:185.5,groups:[first,second]})
+    )))).sequence;
+  `);
+  assert.equal(run('first.bpm'), 179);
+  assert.equal(run('Domain.effectiveBpm(first,185.5)'), 179);
+  assert.equal(run('second.bpm'), 185.5);
+  assert.equal(run('restored.groups[0].bpm'), 179);
+  assert.equal(run('restored.groups[1].bpm'), 185.5);
 });
