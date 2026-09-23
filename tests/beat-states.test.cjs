@@ -260,3 +260,21 @@ test('whole-sequence playback scales every group without clamping or altering sa
   assert.equal(run('JSON.stringify(PlaybackScheduler.queue.map(e=>e.bpm))'), '[75,75,375,375]');
   assert.equal(run('Yaml.stringify(SequenceMapper.toDto(SequenceIO.currentSequence()))===before'), true);
 });
+
+test('new groups capture the current BPM and retain it after global tempo changes and saving', () => {
+  const run = load(['Domain', 'Store', 'SequenceService', 'Yaml', 'SequenceMapper']);
+  run(`const HistoryService={commit(){}};
+    SequenceService.setTempo(179); SequenceService.addGroup();
+    const first=Store.findGroup(Store.getState().activeId);
+    SequenceService.setTempo(185.5); SequenceService.addGroup();
+    const second=Store.findGroup(Store.getState().activeId);
+    const restored=SequenceMapper.toEntity(Yaml.parse(Yaml.stringify(SequenceMapper.toDto(
+      Domain.makeSequence({tempo:185.5,groups:[first,second]})
+    )))).sequence;
+  `);
+  assert.equal(run('first.bpm'), 179);
+  assert.equal(run('Domain.effectiveBpm(first,185.5)'), 179);
+  assert.equal(run('second.bpm'), 185.5);
+  assert.equal(run('restored.groups[0].bpm'), 179);
+  assert.equal(run('restored.groups[1].bpm'), 185.5);
+});
