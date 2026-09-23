@@ -46,7 +46,12 @@
   .lat-dialog{margin:auto;width:min(360px,calc(100vw - 32px));padding:0;border:1px solid var(--ink);border-radius:0;
     background:var(--panel);color:var(--ink);box-shadow:0 12px 40px rgba(0,0,0,.35)}
   .lat-dialog::backdrop{background:rgba(13,15,13,.55)}
-  .lat-dialog form{padding:16px 16px 14px}
+  .lat-dialog form{padding:16px 16px 14px;text-align:center}
+  /* ダイアログ内はすべて中央揃え（ボタン内の文字・数値入力・セレクトの表示値も） */
+  .lat-dialog .step{display:inline-flex;align-items:center;justify-content:center;text-align:center}
+  .lat-dialog input[type=number]{-moz-appearance:textfield;appearance:textfield;padding:0}
+  .lat-dialog input[type=number]::-webkit-inner-spin-button,
+  .lat-dialog input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
   .lat-dlg-top{display:flex;align-items:baseline;justify-content:center;gap:12px;margin-bottom:12px}
   .lat-dlg-title{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase}
   .lat-dlg-val{font-family:var(--mono);font-size:18px;color:var(--brass);font-variant-numeric:tabular-nums}
@@ -90,7 +95,7 @@
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
 
   .lat-row[hidden]{display:none}
-  .lat-row select{height:40px;min-width:120px;padding:0 8px;font-family:var(--mono);font-size:14px;text-align:center;
+  .lat-row select{height:40px;min-width:120px;padding:0 8px;font-family:var(--mono);font-size:14px;text-align:center;text-align-last:center;
     background:var(--panel);color:var(--ink);border:1px solid var(--ink);border-radius:0}
 
   /* volume */
