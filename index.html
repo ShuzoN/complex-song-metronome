@@ -48,14 +48,13 @@
     background:var(--panel);color:var(--ink);box-shadow:0 12px 40px rgba(0,0,0,.35)}
   .lat-dialog::backdrop{background:rgba(13,15,13,.55)}
   .lat-dialog form{padding:16px 16px 14px}
-  .lat-dlg-top{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px}
+  .lat-dlg-top{display:flex;align-items:baseline;justify-content:center;gap:12px;margin-bottom:12px}
   .lat-dlg-title{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase}
   .lat-dlg-val{font-family:var(--mono);font-size:18px;color:var(--brass);font-variant-numeric:tabular-nums}
-  .lat-row{display:flex;align-items:center;gap:6px}
-  .lat-row .step{height:40px;min-width:0;flex:1}
+  .lat-row{display:flex;align-items:center;justify-content:center;gap:6px}
+  .lat-row .step{width:48px;height:40px;font-size:18px}
   .lat-row input{width:72px;height:40px;text-align:center}
-  .lat-row .unit{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .lat-foot{display:flex;justify-content:space-between;gap:8px;margin-top:14px}
+  .lat-foot{display:flex;justify-content:center;gap:8px;margin-top:14px}
   .lat-foot .step{height:36px;padding:0 14px}
   .lamp{width:9px;height:9px;border:1px solid var(--ink);border-radius:50%}
   body.running .lamp{background:var(--signal);border-color:var(--signal)}
@@ -717,10 +716,9 @@
       <span class="lat-dlg-val" id="latVal">±0 ms</span>
     </div>
     <div class="lat-row">
-      <button class="step" type="button" data-lat-step="-10" title="メトロノームを10ms遅らせる">遅らせる</button>
+      <button class="step" type="button" data-lat-step="-10" title="メトロノームを10ms遅らせる" aria-label="10ms遅らせる">−</button>
       <input type="number" id="latInput" min="-200" max="600" step="1" value="0" inputmode="numeric" aria-label="イヤホン遅延の補正（ミリ秒）">
-      <span class="unit">ms</span>
-      <button class="step" type="button" data-lat-step="10" title="メトロノームを10ms早める">早める</button>
+      <button class="step" type="button" data-lat-step="10" title="メトロノームを10ms早める" aria-label="10ms早める">＋</button>
     </div>
     <div class="lat-foot">
       <button class="step" id="latReset" type="button">0に戻す</button>
