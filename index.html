@@ -206,6 +206,7 @@
   .g-hbpm{display:inline-flex;align-items:center;gap:4px;flex:none}
   .g-hbpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
   .g-hbpm input{width:54px;height:30px;font-size:13px}
+  .g-hbpm input::placeholder{color:#A7ABA0;opacity:1}
   /* 到達BPM（「追加」ボタンの右端）。空欄＝テンポ一定、値が入るとブラスで強調して変化中と分かるように */
   .g-tobpm{margin-left:auto;display:inline-flex;align-items:center;gap:4px;flex:none}
   .g-tobpm .u{font-family:var(--mono);font-size:10px;letter-spacing:.04em;color:var(--dim)}
@@ -1413,7 +1414,7 @@
         HistoryService.commit();
         Store.apply(s => {
           s.groupSeq++;
-          const g = Domain.makeGroup({name:"リズムグループ"+s.groupSeq, reps:8});
+          const g = Domain.makeGroup({name:"リズムグループ"+s.groupSeq, reps:8, bpm:s.bpm});
           s.groups.push(g);
           s.activeId = g.id;
         }, {render:true});
@@ -2786,6 +2787,24 @@
           bin.disabled = running;
           bin.title = "このグループのBPM。空欄にすると基準テンポ（" + baseTxt + "）に追従します";
           bin.setAttribute("aria-label", "このリズムグループのBPM（空欄で基準テンポに追従）");
+          // ネイティブの増減ボタンも、空欄の最小値ではなく現在の基準BPMから始める。
+          // フォーカスだけではグループの固定値にせず、変更時に初めて保存する。
+          const seed = () => { if(bin.value === "" && !bin.validity.badInput) bin.value = Domain.effectiveBpm(g, state().bpm); };
+          bin.addEventListener("focus", seed);
+          bin.addEventListener("pointerdown", seed);
+          bin.addEventListener("blur", ()=>{ if(g.bpm == null) bin.value = ""; });
+          const nudge = delta => {
+            const base = Domain.normBpm(bin.value) ?? Domain.effectiveBpm(g, state().bpm);
+            GroupService.setBpm(g.id, base + delta);
+          };
+          bin.addEventListener("keydown", e=>{
+            if(e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault(); nudge(e.key === "ArrowUp" ? 1 : -1);
+          });
+          bin.addEventListener("wheel", e=>{
+            if(document.activeElement !== bin) return;
+            e.preventDefault(); if(e.deltaY) nudge(e.deltaY < 0 ? 1 : -1);
+          }, {passive:false});
           bin.addEventListener("change", ()=>GroupService.setBpm(g.id, bin.value));
           bp.append(u, bin);
           head.appendChild(bp);
@@ -3034,6 +3053,11 @@
     function syncBpm(){
       const st = state();
       [...groupsEl.children].forEach(card=>{
+        const input = card.querySelector('[data-group-field="bpm"]');
+        if(input){
+          input.placeholder = Fmt.bpm(st.bpm);
+          input.title = "このグループのBPM。空欄にすると基準テンポ（" + Fmt.bpm(st.bpm) + "）に追従します";
+        }
         const tag = card.querySelector('[data-role="bpm"]');
         if(!tag || tag.classList.contains("own")) return;   // 固有BPMは基準に追従しないので触らない
         const val = tag.querySelector(".v");
