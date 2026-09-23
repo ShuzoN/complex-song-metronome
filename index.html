@@ -3786,6 +3786,7 @@
      syncIdle）経由で受け取り、この HUD にも反映する。 */
   const FullscreenView = (() => {
     const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
+    let selectedStartId = null;              // 停止中に選んだグループから次の再生を始める
     let opened = false, lastStripKey = "", lastTLKey = "", flashTimer = null;
     let userBrowseUntil = 0, tlBrowseUntil = 0, instantNext = false;   // 手動スワイプ中は自動追従を止める（帯／タイムライン別）／次の中央寄せを即時にする
     const el = {};
@@ -3846,6 +3847,8 @@
         g.pattern.rhythms.forEach((r,i)=>{
           const t=document.createElement("div");
           t.className="fs-fbar"; t.dataset.gid=g.id; t.dataset.bi=i;
+          t.setAttribute("role", "button"); t.tabIndex = 0;
+          t.setAttribute("aria-label", g.name + "の先頭へ移動（" + r.num + "/" + r.den + "）");
           t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
           el.track.appendChild(t);
         });
@@ -3982,13 +3985,31 @@
       VideoPadService.seekBy(STEP * dir);
     }
     function center(){
+      if(!Transport.running() && selectedStartId){
+        const id = selectedStartId; selectedStartId = null;
+        if(findGroup(id) && state().activeId === id){ playGroup(id); return; }
+      }
       SoundGateway.ensure();
       if(VideoGateway.ready()) VideoPadService.togglePause();          // 動画あり：tap-pad と同じ統括
       else Transport.running() ? Transport.stop(false) : Transport.start("all");   // 動画なし：全体再生の開始/停止
     }
     // タイムラインのグループをタップ → そのグループの先頭から再生（現状の「グループ再生」と同じヘッド）。
     // 全画面を閉じずにグループ間を飛べる。再生中なら一旦止めてから当該グループで開始する。
+    function jumpGroup(id){
+      const g = findGroup(id);
+      if(!g || !g.pattern.rhythms.length) return;
+      userBrowseUntil = 0; tlBrowseUntil = 0; instantNext = true;
+      if(Transport.running()){
+        selectedStartId = null; playGroup(id);
+      }else{
+        if(Transport.armKind() || VideoPadService.isPaused() || VideoPadService.isBusy()) Transport.stop(false);
+        selectedStartId = id;
+        SequenceService.setActive(id);
+        sync();
+      }
+    }
     function playGroup(id){
+      selectedStartId = null;
       const g = findGroup(id);
       if(!g || !g.pattern.rhythms.length) return;                     // 空グループは無視
       SoundGateway.ensure();
@@ -4034,23 +4055,35 @@
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened && !document.querySelector("dialog[open]")) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
-      // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
-      // 動かさずに軽くタップした時だけ（左半分＝5秒戻す／右半分＝5秒送る）シークにフォールバックする。
+      // スワイプ中は追従を止め、動かずにタップした拍子だけを移動先にする。
       const strip = el.track.parentElement;
       let tap = null;
       const holdBrowse = ()=>{ userBrowseUntil = performance.now() + 3500; };
-      strip.addEventListener("wheel", holdBrowse, {passive:true});
-      strip.addEventListener("scroll", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointerdown", e=>{ tap = {x:e.clientX, y:e.clientY, t:performance.now()}; holdBrowse(); });
-      strip.addEventListener("pointermove", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointercancel", ()=>{ tap = null; });   // ネイティブのパン開始でキャンセル＝スワイプ扱い
+      strip.addEventListener("wheel", ()=>{ tap = null; holdBrowse(); }, {passive:true});
+      strip.addEventListener("scroll", ()=>{ if(tap){ tap.moved = true; holdBrowse(); } }, {passive:true});
+      strip.addEventListener("pointerdown", e=>{
+        if(e.button !== 0 || !e.isPrimary) return;
+        const tile = e.target.closest(".fs-fbar");
+        tap = {x:e.clientX, y:e.clientY, t:performance.now(), gid:tile && tile.dataset.gid, moved:false};
+        holdBrowse();
+      });
+      strip.addEventListener("pointermove", e=>{
+        if(tap && (Math.abs(e.clientX-tap.x) >= 8 || Math.abs(e.clientY-tap.y) >= 8)) tap.moved = true;
+        if(tap) holdBrowse();
+      }, {passive:true});
+      strip.addEventListener("pointercancel", ()=>{ tap = null; });
       strip.addEventListener("pointerup", e=>{
-        if(!tap) return;
-        const dx = Math.abs(e.clientX - tap.x), dy = Math.abs(e.clientY - tap.y), dt = performance.now() - tap.t;
-        tap = null;
-        if(dx < 8 && dy < 8 && dt < 300){          // 動いていない＝タップ → シーク（追従もすぐ戻す）
-          userBrowseUntil = 0;
-          seek(e.clientX < window.innerWidth/2 ? -1 : 1);
+        const start = tap; tap = null;
+        if(!start || start.moved || performance.now()-start.t >= 500) return;
+        const tile = e.target.closest(".fs-fbar");
+        if(tile && tile.dataset.gid === start.gid && Math.abs(e.clientX-start.x) < 8 && Math.abs(e.clientY-start.y) < 8){
+          jumpGroup(start.gid);
+        }
+      });
+      strip.addEventListener("keydown", e=>{
+        const tile = e.target.closest(".fs-fbar");
+        if(tile && (e.key === "Enter" || e.key === " ")){
+          e.preventDefault(); jumpGroup(tile.dataset.gid);
         }
       });
 

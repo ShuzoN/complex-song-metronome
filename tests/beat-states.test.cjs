@@ -528,3 +528,28 @@ test('shifted audio nodes are rescheduled and ones pushed into the past are drop
   assert.equal(run('nodes[0].stopTime > 0.1'), true);
   assert.ok(Math.abs(run('nodes[3].startTime') - 0.4) < 1e-9);
 });
+
+
+test('practice strip taps jump but drag, scroll and cancelled gestures do not', () => {
+  const start = html.indexOf('      // スワイプ中は追従を止め、動かずにタップした拍子だけを移動先にする。');
+  const end = html.indexOf('      // 上部タイムライン', start);
+  assert.ok(start >= 0 && end > start);
+  const ctx = vm.createContext({});
+  vm.runInContext(`
+    const handlers={}, jumps=[];
+    let userBrowseUntil=0;
+    const performance={now:()=>100};
+    const el={track:{parentElement:{addEventListener:(name,fn)=>handlers[name]=fn}}};
+    const jumpGroup=id=>jumps.push(id);
+    const target={closest:()=>({dataset:{gid:'group2'}})};
+    const down=()=>handlers.pointerdown({button:0,isPrimary:true,clientX:20,clientY:20,target});
+    const up=()=>handlers.pointerup({clientX:20,clientY:20,target});
+  ` + html.slice(start,end), ctx);
+  vm.runInContext('down(); up();',ctx);
+  assert.equal(vm.runInContext('jumps.length',ctx),1);
+  vm.runInContext(`down(); handlers.pointermove({clientX:50,clientY:20}); up();
+    down(); handlers.scroll(); up();
+    down(); handlers.pointercancel(); up();
+    down(); handlers.wheel(); up();`,ctx);
+  assert.equal(vm.runInContext('jumps.length',ctx),1);
+});
