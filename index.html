@@ -814,7 +814,7 @@
     const formatRhythm = r => r.num + "/" + r.den;
     const rhythmSeconds = (den, bpm) => (60/bpm) * (4/den);
     const termFor = v => (TERMS.find(t=>v>=t[0]&&v<=t[1])||[,,""])[2];
-    const makePattern = rhythms => ({rhythms: (rhythms||[]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))});
+    const makePattern = rhythms => ({rhythms: (rhythms && rhythms.length ? rhythms : [{num:4,den:4}]).map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))});
     // 動画位置（cue）1つ分の正規化：null / 0以上を小数2桁へ
     function normCue(v){
       const n = Number(v);
@@ -850,7 +850,7 @@
         toBpm: g.toBpm != null ? g.toBpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
-        pattern: {rhythms: g.pattern.rhythms.map(r=>makeRhythm(r.num, r.den, r.accents, r.tuplet, r.muted))}
+        pattern: makePattern(g.pattern.rhythms)
       };
     }
     // Sequence entity：バラバラの name/tempo/preroll/video/groups を1つに正規化する
@@ -1548,6 +1548,8 @@
         Store.apply(() => { [rs[i], rs[j]] = [rs[j], rs[i]]; }, {render:true});
       },
       removeRhythm(id, i){
+        const g = Store.findGroup(id);
+        if(!g || g.pattern.rhythms.length <= 1 || !Number.isInteger(i) || i < 0 || i >= g.pattern.rhythms.length) return;
         HistoryService.commit();
         Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
       },
@@ -1645,6 +1647,7 @@
           // 範囲外は normAccents / makeRhythm のクランプが吸収する
           if(b) rhythms.push(obj ? {num:b.num, den:b.den, accents:obj.accents, tuplet:obj.tuplet, muted:obj.muted} : b); else dropped++;
         });
+        if(!rhythms.length) notes.push((idx+1) + "番目のグループに拍子がないため、4/4拍子を追加しました");
         return Domain.makeGroup({
           name: (g.name == null || String(g.name) === "") ? "リズムグループ"+(idx+1) : String(g.name),
           reps: g.repeat,
@@ -1655,7 +1658,7 @@
           rhythms
         });
       });
-      if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、空のグループを1つ作りました"); }
+      if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、4/4拍子を持つグループを1つ作りました"); }
       if(dropped) notes.push(dropped + " 件の拍子は読み込めませんでした（分母・分子とも " + Domain.DEN_MIN + "〜" + Domain.DEN_MAX + " の整数です）");
 
       const sequence = Domain.makeSequence({ name: doc.name, tempo: doc.tempo, preroll: doc.preroll, video: doc.video, groups });
@@ -2578,7 +2581,8 @@
       ctl.className = "bar-ctl";
       ctl.appendChild(mini("↑","上へ移動", bi===0, ()=>PatternService.moveRhythm(g.id,bi,-1)));
       ctl.appendChild(mini("↓","下へ移動", bi===g.pattern.rhythms.length-1, ()=>PatternService.moveRhythm(g.id,bi,1)));
-      const k = mini("✕","削除", false, ()=>PatternService.removeRhythm(g.id,bi));
+      const k = mini("✕","削除", g.pattern.rhythms.length <= 1, ()=>PatternService.removeRhythm(g.id,bi));
+      k.title = g.pattern.rhythms.length <= 1 ? "拍子は最低1つ必要です" : "この拍子を削除";
       k.classList.add("kill");
       ctl.appendChild(k);
       top.append(sig, tup, ctl);

@@ -21,6 +21,34 @@ test('application JavaScript parses', () => {
   }
 });
 
+test('deleting meters stops at one and blocked deletion leaves undo history intact', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService']);
+  run(`const group=Domain.makeGroup({rhythms:[{num:3,den:4},{num:7,den:8}]});
+    Store.apply({groups:[group]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PatternService.removeRhythm(group.id,0);
+    PatternService.removeRhythm(group.id,0);
+  `);
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 1);
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms[0].num'), 7);
+  run('HistoryService.undo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 2);
+  run('HistoryService.redo()');
+  assert.equal(run('Store.findGroup(group.id).pattern.rhythms.length'), 1);
+});
+
+test('empty or invalid imported patterns receive one default meter', () => {
+  const run = load();
+  for (const pattern of ['[]', '["invalid"]', 'null']) {
+    run(`var result=SequenceMapper.toEntity({groups:[{pattern:${pattern}}]});`);
+    assert.equal(run('result.sequence.groups[0].pattern.rhythms.length'), 1);
+    assert.equal(run('Domain.formatRhythm(result.sequence.groups[0].pattern.rhythms[0])'), '4/4');
+    assert.ok(run('result.notes.some(n=>n.includes("4/4"))'));
+  }
+  assert.equal(run('SequenceMapper.toEntity({groups:[]}).sequence.groups[0].pattern.rhythms.length'), 1);
+  assert.equal(run('Domain.makeGroup().pattern.rhythms.length'), 1);
+});
+
 test('meter editing preserves remaining beat settings, supports undo and persists', () => {
   const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'Yaml', 'SequenceMapper']);
   run(`const Transport={running:()=>false};
