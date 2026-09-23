@@ -1412,7 +1412,7 @@
         HistoryService.commit();
         Store.apply(s => {
           s.groupSeq++;
-          const g = Domain.makeGroup({name:"リズムグループ"+s.groupSeq, reps:8, bpm:s.bpm});
+          const g = Domain.makeGroup({name:"リズムグループ"+s.groupSeq, rhythms:[{num:4,den:4}], reps:8, bpm:s.bpm});
           s.groups.push(g);
           s.activeId = g.id;
         }, {render:true});
