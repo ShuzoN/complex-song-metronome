@@ -3294,7 +3294,7 @@
       card.addEventListener("click", e=>{
         if(Transport.running()) return;                       // 再生中は編集に入らない
         if(e.target.closest("input, select, button")) return;
-        SequenceService.toggleActive(g.id);
+        if(state().activeId !== g.id) SequenceService.setActive(g.id);
       });
       card.addEventListener("keydown", e=>{
         if(Transport.running()) return;
