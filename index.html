@@ -36,7 +36,6 @@
   /* header */
   .head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--ink)}
   .wordmark{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase}
-  .status{display:flex;align-items:center;gap:7px;white-space:nowrap;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dim)}
   /* earphone delay（イヤホン遅延の補正）。ヘッダーと全画面右下のボタンから同じダイアログを開く */
   .lat-open{margin:0 auto 0 10px;height:26px;padding:0 8px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;
     font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--ink);background:var(--panel);
@@ -56,9 +55,6 @@
   .lat-row input{width:72px;height:40px;text-align:center}
   .lat-foot{display:flex;justify-content:center;gap:8px;margin-top:14px}
   .lat-foot .step{height:36px;padding:0 14px}
-  .lamp{width:9px;height:9px;border:1px solid var(--ink);border-radius:50%}
-  body.running .lamp{background:var(--signal);border-color:var(--signal)}
-  body.running .status{color:var(--ink)}
 
   /* tempo */
   .readout{padding:22px 18px 6px;text-align:center}
@@ -93,13 +89,9 @@
   form.entry label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--dim)}
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
 
-  .speed{padding:0 18px 16px;font-family:var(--mono);font-size:12px}
-  .speed-controls,.speed-manual{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-  .speed-controls{margin-top:8px}
-  .speed [hidden]{display:none}
-  .speed input{width:64px}
-  .speed select{height:40px;padding:0 8px;font:inherit;background:var(--panel);color:var(--ink)}
-  .speed-note{margin-top:6px;color:var(--dim);font-size:10px;line-height:1.6}
+  .lat-row[hidden]{display:none}
+  .lat-row select{height:40px;min-width:120px;padding:0 8px;font-family:var(--mono);font-size:14px;text-align:center;
+    background:var(--panel);color:var(--ink);border:1px solid var(--ink);border-radius:0}
 
   /* volume */
   .vol{padding:6px 18px 16px}
@@ -331,7 +323,6 @@
   .beat.on{background:var(--signal);border-color:var(--signal);transform:scale(1.35)}
   .beat.accent.on{background:var(--brass);border-color:var(--brass);box-shadow:none}
 
-  body.waiting .lamp{background:var(--brass);border-color:var(--brass)}
 
   /* 選択中（グループ単体再生の対象）カードの表示 */
   .group.selected{border-color:var(--signal)}
@@ -531,7 +522,8 @@
   <div class="head">
     <div class="wordmark">Metronome</div>
     <button class="lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
-    <div class="status"><span class="lamp"></span><span id="statusText">停止中</span></div>
+    <button class="lat-open" type="button" id="speedOpen" aria-haspopup="dialog">speed <span class="lat-open-val" id="speedOpenVal">100%</span></button>
+    <span id="statusText" hidden>停止中</span>
   </div>
 
   <section class="readout">
@@ -557,20 +549,6 @@
     <label for="tempoInput">直接入力</label>
     <input type="number" id="tempoInput" min="50" max="250" step="1" value="120" inputmode="decimal">
   </form>
-
-  <section class="speed" aria-label="再生速度">
-    <span>再生速度</span>
-    <div class="speed-controls">
-      <div class="speed-manual" id="speedManual">
-        <button class="step" id="speedDown" type="button" aria-label="再生速度を5ポイント下げる">−5</button>
-        <input id="speedInput" type="number" min="50" max="150" step="1" value="100" aria-label="再生速度（％）" inputmode="numeric"><span>％</span>
-        <button class="step" id="speedUp" type="button" aria-label="再生速度を5ポイント上げる">＋5</button>
-      </div>
-      <select id="speedVideo" aria-label="動画同期の再生速度" hidden></select>
-      <button class="step" id="speedReset" type="button">100％に戻す</button>
-    </div>
-    <div class="speed-note" id="speedNote">曲のBPMを保持したまま、再生時の速度を変更します。</div>
-  </section>
 
   <section class="vol">
     <div class="vol-top">
@@ -722,6 +700,28 @@
     </div>
     <div class="lat-foot">
       <button class="step" id="latReset" type="button">0に戻す</button>
+      <button class="step" type="submit">閉じる</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ speed（再生速度）ダイアログ。ヘッダーの「speed」ボタンから開く ============ -->
+<dialog class="lat-dialog" id="speedDialog" aria-labelledby="speedTitle">
+  <form method="dialog">
+    <div class="lat-dlg-top">
+      <span class="lat-dlg-title" id="speedTitle">speed</span>
+      <span class="lat-dlg-val" id="speedVal">100%</span>
+    </div>
+    <div class="lat-row" id="speedManual">
+      <button class="step" id="speedDown" type="button" aria-label="再生速度を5ポイント下げる">−</button>
+      <input id="speedInput" type="number" min="50" max="150" step="1" value="100" aria-label="再生速度（％）" inputmode="numeric">
+      <button class="step" id="speedUp" type="button" aria-label="再生速度を5ポイント上げる">＋</button>
+    </div>
+    <div class="lat-row" id="speedVideoRow" hidden>
+      <select id="speedVideo" aria-label="動画同期の再生速度"></select>
+    </div>
+    <div class="lat-foot">
+      <button class="step" id="speedReset" type="button">100%に戻す</button>
       <button class="step" type="submit">閉じる</button>
     </div>
   </form>
@@ -3467,8 +3467,9 @@
     function render(){
       const synced = VideoGateway.armed();
       $("speedManual").hidden = synced;
-      video.hidden = !synced;
-      input.value = SpeedService.percent();
+      $("speedVideoRow").hidden = !synced;
+      if(document.activeElement !== input) input.value = SpeedService.percent();
+      $("speedVal").textContent = $("speedOpenVal").textContent = SpeedService.percent() + "%";
       $("speedDown").disabled = SpeedService.percent() <= 50;
       $("speedUp").disabled = SpeedService.percent() >= 150;
       if(synced){
@@ -3483,8 +3484,6 @@
         }
         video.value = String(SpeedService.rate());
       }
-      $("speedNote").textContent = synced ? "動画が対応する速度から選択します。メトロノームも同じ速度で再生します。"
-        : "曲のBPMを保持したまま、再生時の速度を変更します。";
     }
     function change(value){ SpeedService.setPercent(value); render(); }
     function bind(){
@@ -3504,6 +3503,15 @@
         if(VideoGateway.armed()) SpeedService.setVideoRate(1); else change(100);
       });
       video.addEventListener("change", ()=>{ SpeedService.setVideoRate(video.value); render(); });
+      input.addEventListener("blur", render);
+      // ヘッダーの「speed」から開く。枠の外（背景）をタップしたら閉じる
+      const dialog = $("speedDialog");
+      $("speedOpen").addEventListener("click", ()=>{
+        render();
+        if(dialog.open) return;
+        if(typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+      });
+      dialog.addEventListener("click", e=>{ if(e.target === dialog) dialog.close(); });
       render();
     }
     return {bind, render};
