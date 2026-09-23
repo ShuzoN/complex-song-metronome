@@ -36,7 +36,26 @@
   /* header */
   .head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--ink)}
   .wordmark{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase}
-  .status{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dim)}
+  .status{display:flex;align-items:center;gap:7px;white-space:nowrap;font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dim)}
+  /* earphone delay（イヤホン遅延の補正）。ヘッダーと全画面右下のボタンから同じダイアログを開く */
+  .lat-open{margin:0 auto 0 10px;height:26px;padding:0 8px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;flex:none;
+    font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:var(--ink);background:var(--panel);
+    border:1px solid var(--ink);border-radius:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .lat-open .lat-open-val{color:var(--brass);font-variant-numeric:tabular-nums}
+  .lat-open:active{transform:translateY(1px)}
+  @media (max-width:380px){.head{padding:12px 14px}.wordmark{letter-spacing:.14em}.lat-open{letter-spacing:.02em}}
+  .lat-dialog{margin:auto;width:min(360px,calc(100vw - 32px));padding:0;border:1px solid var(--ink);border-radius:0;
+    background:var(--panel);color:var(--ink);box-shadow:0 12px 40px rgba(0,0,0,.35)}
+  .lat-dialog::backdrop{background:rgba(13,15,13,.55)}
+  .lat-dialog form{padding:16px 16px 14px}
+  .lat-dlg-top{display:flex;align-items:baseline;justify-content:center;gap:12px;margin-bottom:12px}
+  .lat-dlg-title{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase}
+  .lat-dlg-val{font-family:var(--mono);font-size:18px;color:var(--brass);font-variant-numeric:tabular-nums}
+  .lat-row{display:flex;align-items:center;justify-content:center;gap:6px}
+  .lat-row .step{width:48px;height:40px;font-size:18px}
+  .lat-row input{width:72px;height:40px;text-align:center}
+  .lat-foot{display:flex;justify-content:center;gap:8px;margin-top:14px}
+  .lat-foot .step{height:36px;padding:0 14px}
   .lamp{width:9px;height:9px;border:1px solid var(--ink);border-radius:50%}
   body.running .lamp{background:var(--signal);border-color:var(--signal)}
   body.running .status{color:var(--ink)}
@@ -446,6 +465,13 @@
   .fs-rep:empty + .fs-sep{display:none}
   .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .fs-meter i{font-style:normal;color:var(--brass)}
+  .fs-lat-open{position:absolute;z-index:3;right:calc(env(safe-area-inset-right) + clamp(10px,2.4vw,18px));
+    bottom:calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px));height:clamp(26px,8dvh,32px);padding:0 clamp(8px,2vw,12px);
+    display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:clamp(9px,2.6dvh,11px);letter-spacing:.06em;
+    color:rgba(245,244,239,.8);background:rgba(245,244,239,.05);border:1px solid rgba(245,244,239,.3);border-radius:0;
+    cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .fs-lat-open .lat-open-val{color:var(--brass);font-variant-numeric:tabular-nums}
+  .fs-lat-open:active{background:rgba(245,244,239,.16)}
   .fs-beats{display:flex;flex-wrap:wrap;gap:clamp(8px,2.2vw,12px);justify-content:center;align-items:center;max-width:82vw}
   .fs-bgroup{display:flex;align-items:center;gap:clamp(4px,1.2vw,7px)}
   .fs-beats.tuplet{gap:clamp(10px,2.6vw,16px)}
@@ -504,6 +530,7 @@
   <div class="content">
   <div class="head">
     <div class="wordmark">Metronome</div>
+    <button class="lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
     <div class="status"><span class="lamp"></span><span id="statusText">停止中</span></div>
   </div>
 
@@ -671,6 +698,8 @@
     </button>
   </div>
 
+  <button class="fs-lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
+
   <div class="fs-flash" id="fsFlash" aria-hidden="true"></div>
   <div class="fs-rotate">
     <div class="ic">⟳</div>
@@ -678,6 +707,25 @@
     <button class="fs-rotate-close" id="fsRotateClose" type="button">✕ 閉じる</button>
   </div>
 </div>
+
+<!-- ============ earphone delay（イヤホン遅延の補正）ダイアログ。showModal で最前面（全画面中も）に出す ============ -->
+<dialog class="lat-dialog" id="latDialog" aria-labelledby="latTitle">
+  <form method="dialog">
+    <div class="lat-dlg-top">
+      <span class="lat-dlg-title" id="latTitle">earphone delay</span>
+      <span class="lat-dlg-val" id="latVal">±0 ms</span>
+    </div>
+    <div class="lat-row">
+      <button class="step" type="button" data-lat-step="-10" title="メトロノームを10ms遅らせる" aria-label="10ms遅らせる">−</button>
+      <input type="number" id="latInput" min="-200" max="600" step="1" value="0" inputmode="numeric" aria-label="イヤホン遅延の補正（ミリ秒）">
+      <button class="step" type="button" data-lat-step="10" title="メトロノームを10ms早める" aria-label="10ms早める">＋</button>
+    </div>
+    <div class="lat-foot">
+      <button class="step" id="latReset" type="button">0に戻す</button>
+      <button class="step" type="submit">閉じる</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (function(){
@@ -1228,6 +1276,36 @@
     return { available, read, write, remove, setActive, getActive };
   })();
 
+  /* ---------- LatencyService（イヤホン遅延の補正値。端末ごとの設定なので YAML ではなく localStorage に置く）----------
+     値は「基準（VideoSync の CUE_LATENCY を実測した環境）からの追加遅延」ミリ秒。0＝従来どおり。
+     無線イヤホンのように音が遅れて届く機器では正の値にして、クリックをそのぶん早めに鳴らす。
+     拍の進行・比率には触れず、時刻を一律にずらすだけ（BT の遅延はテンポによらず一定のため）。 */
+  const LatencyService = (() => {
+    const KEY = "csm:latency.ms", MIN = -200, MAX = 600;
+    const listeners = [];
+    const clamp = v => Math.max(MIN, Math.min(MAX, Math.round(v)));
+    let ms = 0;
+    try{
+      const raw = window.localStorage.getItem(KEY);
+      if(raw != null && isFinite(Number(raw))) ms = clamp(Number(raw));
+    }catch(_){}
+    function set(value){
+      const next = clamp(Number(value));
+      if(!isFinite(next) || next === ms) return;
+      const prev = ms;
+      ms = next;
+      try{ window.localStorage.setItem(KEY, String(ms)); }catch(_){}
+      for(const fn of listeners) fn(prev, ms);
+    }
+    return {
+      MIN, MAX, set,
+      ms: () => ms,
+      seconds: () => ms / 1000,
+      nudge(delta){ set(ms + delta); },
+      onChange(fn){ listeners.push(fn); }
+    };
+  })();
+
   /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
   const SoundGateway = (() => {
     let ctx = null;
@@ -1275,7 +1353,16 @@
         click(note.level, at + (note.time - at) * ratio, note.span * ratio);
       }
     }
-    return { ensure, now, click, setVolume, retimePending, cancelPending, get ready(){ return !!ctx; } };
+    // 予約済みの発音を一律に delta 秒ずらす（再生中のイヤホン遅延の微調整用）。過去へずれるものは捨てる
+    function shiftPending(at, delta){
+      for(const note of [...pending]){
+        if(note.time <= at) continue;
+        pending.delete(note);
+        note.osc.stop();
+        if(note.time + delta > at) click(note.level, note.time + delta, note.span);
+      }
+    }
+    return { ensure, now, click, setVolume, retimePending, shiftPending, cancelPending, get ready(){ return !!ctx; } };
   })();
 
   /* ---------- ClockGateway（タイミング源。刻みは AudioContext 時刻、UI 更新は rAF、先読みは setInterval） ---------- */
@@ -2084,6 +2171,12 @@
     }
     return {
       LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump, syncRate,
+      // 以降の刻みを一律に delta 秒ずらす（再生中のイヤホン遅延の微調整。予約済みの音は SoundGateway 側で動かす）
+      shift(now, delta){
+        nextTime = Math.max(now, nextTime + delta);
+        if(finished) endTime = Math.max(now, endTime + delta);
+        for(const event of queue){ if(event.time > now) event.time += delta; }
+      },
       setLoop(value){ looping = !!value; },
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
@@ -2096,11 +2189,11 @@
     let view = {};
     // 動画同期の遅延補正（秒）。メトロノームの発音は「音声出力遅延 − 動画出力遅延」ぶん
     // 動画より遅れて聞こえるため、記録位置より少し手前を狙って刻み出す＝実音が cue に重なる。
-    // 実測でおおよそ 8分音符ぶん（♩=115 換算 ≒ 0.26 秒）。耳で合わせて調整可。
+    // 実測でおおよそ 8分音符ぶん（♩=115 換算 ≒ 0.26 秒）。イヤホンごとの差は LatencyService で上乗せする。
     const CUE_LATENCY = 0.26;
     // 記録位置(cue) → メトロノーム再生の狙い位置。発音遅延ぶん手前へ。cue を再生に使うときは
     // 必ずこの関数を通す（頭出し・カウントインの基準はすべて compensate(cue)）。
-    function compensate(cue){ return Math.max(0, cue - CUE_LATENCY * SpeedService.rate()); }
+    function compensate(cue){ return Math.max(0, cue - (CUE_LATENCY + LatencyService.seconds()) * SpeedService.rate()); }
     function cancel(){ topWatch = null; cueWatch = null; }
 
     function startFromTop(kind){
@@ -2332,19 +2425,22 @@
       if(!running) return;
       syncSpeed();
       const now = ClockGateway.now();
-      if(firstBeatTime && now < firstBeatTime){
-        view.prerollTick(Math.max(0, firstBeatTime - now).toFixed(2));
+      // 表示は「音が耳に届く時刻」に合わせる。イヤホン遅延の補正ぶん、予約時刻より遅らせて拍ドットを点ける
+      const lag = LatencyService.seconds();
+      const heard = now - lag;
+      if(firstBeatTime && heard < firstBeatTime){
+        view.prerollTick(Math.max(0, firstBeatTime - heard).toFixed(2));
       }else if(view.isWaiting()){
         view.endWaiting(baseStatus());
       }
       const queue = PlaybackScheduler.queue;
-      while(queue.length && queue[0].time <= now){
+      while(queue.length && queue[0].time <= heard){
         const e = queue.shift();
         const key = e.cycle + ":" + e.gid + ":" + e.rep + ":" + e.bar;
         if(key !== shown){
           shown = key;
           if(recording && e.bar === 0){    // 各くり返し(rep)の頭で記録（rep0=グループ先頭も含む）
-            VideoSync.stampCue(e.gid, e.rep, e.time);
+            VideoSync.stampCue(e.gid, e.rep, e.time + lag);   // 聞こえた時刻の動画位置で記録（端末に依存しない cue にする）
           }
           cur = {gid:e.gid, bar:e.bar, rep:e.rep};
           view.paintBeats(e.meter);
@@ -2357,6 +2453,15 @@
       }
       if(PlaybackScheduler.finished() && now >= PlaybackScheduler.endTime()){ finishCycle(); return; }
       ClockGateway.frame(draw);
+    }
+
+    // 再生中にイヤホン遅延の補正が変わったら、以降のクリックを一律にずらして動画へ合わせ直す
+    function shiftAudio(delta){
+      if(!running || !delta) return;
+      const now = ClockGateway.now();
+      SoundGateway.shiftPending(now, delta);
+      PlaybackScheduler.shift(now, delta);
+      if(firstBeatTime > now) firstBeatTime = Math.max(now, firstBeatTime + delta);
     }
 
     // 単一の再生開始経路。ボタン再生は index 0（＝先頭）、パッドは opts.index（動画位置に一致する拍）から。
@@ -2539,6 +2644,7 @@
       soloId: () => soloId,
       armKind: () => armKind,
       recording: () => recording,
+      shiftAudio,
       looping: () => loopGroup,
       cur: () => cur,
       soloTarget, countInFor,
@@ -3418,6 +3524,43 @@
     return { bind };
   })();
 
+  /* ---------- LatencyView（earphone delay ダイアログ。ヘッダーと全画面右下のボタンから同じダイアログを開く） ---------- */
+  const LatencyView = (() => {
+    const input = $("latInput"), valView = $("latVal"), dialog = $("latDialog");
+    const fmt = ms => (ms > 0 ? "+" : ms < 0 ? "−" : "±") + Math.abs(ms) + " ms";
+    function render(){
+      const ms = LatencyService.ms();
+      valView.textContent = fmt(ms);
+      if(document.activeElement !== input) input.value = ms;
+      for(const n of document.querySelectorAll("[data-lat-val]")) n.textContent = fmt(ms).replace(" ", "");
+    }
+    function bind(){
+      input.min = LatencyService.MIN; input.max = LatencyService.MAX;
+      for(const b of document.querySelectorAll("[data-lat-step]")){
+        b.addEventListener("click", ()=> LatencyService.nudge(Number(b.dataset.latStep)));
+      }
+      input.addEventListener("change", ()=>{ if(input.value !== "") LatencyService.set(Number(input.value)); render(); });
+      input.addEventListener("blur", render);
+      $("latReset").addEventListener("click", ()=> LatencyService.set(0));
+      for(const b of document.querySelectorAll("[data-lat-open]")) b.addEventListener("click", open);
+      // 枠の外（背景）をタップしたら閉じる
+      dialog.addEventListener("click", e=>{ if(e.target === dialog) dialog.close(); });
+      // 補正を増やす＝クリックを早める。動画同期で再生中なら、予約済みの刻みもその場でずらす
+      LatencyService.onChange((prev, next)=>{
+        if(VideoGateway.armed()) Transport.shiftAudio(-(next - prev) / 1000);
+        render();
+      });
+      render();
+    }
+    // showModal はトップレイヤーに出すので、全画面（requestFullscreen 中）でも最前面に表示される
+    function open(){
+      render();
+      if(dialog.open) return;
+      if(typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
+    }
+    return { bind, render, open };
+  })();
+
   /* ---------- TransportView（再生ボタン・状態・拍表示・ハイライト・空白／待機の表示） ---------- */
   const TransportView = (() => {
     /* 拍ドット。拍ごとに .bgroup でくくるので、折り返しても拍のまとまりが縦に揃う。
@@ -3548,7 +3691,7 @@
         if(mod && e.key.toLowerCase() === "y"){ e.preventDefault(); HistoryService.redo(); return; }
         if(e.code !== "Space") return;
         const t = e.target.tagName;
-        if(t==="INPUT" || t==="SELECT" || t==="BUTTON") return;
+        if(t==="INPUT" || t==="SELECT" || t==="BUTTON" || e.target.closest("dialog")) return;
         e.preventDefault();
         Transport.running() ? Transport.stop(false) : Transport.start("all");
       });
@@ -3855,7 +3998,8 @@
         const seg = e.target.closest(".fs-seg");
         if(seg && seg.dataset.id) playGroup(seg.dataset.id);
       });
-      document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened) close(); });
+      // ダイアログ（earphone delay）が開いていれば Esc はそちらを閉じるだけにする
+      document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened && !document.querySelector("dialog[open]")) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
       // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
@@ -4044,6 +4188,7 @@
   TempoView.bind();
   SpeedView.bind();
   VolumeView.bind();
+  LatencyView.bind();
   SequenceView.bind();
   TransportView.bind();
   PlaybarView.bind();
