@@ -458,8 +458,9 @@
   .fs-rep:empty + .fs-sep{display:none}
   .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .fs-meter i{font-style:normal;color:var(--brass)}
-  .fs-lat-open{position:absolute;z-index:3;right:calc(env(safe-area-inset-right) + clamp(10px,2.4vw,18px));
-    bottom:calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px));height:clamp(26px,8dvh,32px);padding:0 clamp(8px,2vw,12px);
+  .fs-settings{position:absolute;z-index:3;display:flex;gap:8px;right:calc(env(safe-area-inset-right) + clamp(10px,2.4vw,18px));
+    bottom:calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px))}
+  .fs-lat-open{height:clamp(26px,8dvh,32px);padding:0 clamp(8px,2vw,12px);
     display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:clamp(9px,2.6dvh,11px);letter-spacing:.06em;
     color:rgba(245,244,239,.8);background:rgba(245,244,239,.05);border:1px solid rgba(245,244,239,.3);border-radius:0;
     cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -560,6 +561,7 @@
   .dr-chip.play{border-color:var(--drec)}
   .dr-chip i{font-style:normal;color:var(--dfaint);margin-left:5px;font-family:var(--mono);font-size:10.5px}
   .dr-chip.has::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ddrm);margin-left:6px;vertical-align:2px}
+  .dr-span{flex:none;max-width:9.5em}
   .dr-meter{flex:none;font-family:var(--mono);font-size:11px;color:var(--dmuted);white-space:nowrap;max-width:40%;overflow:hidden;text-overflow:ellipsis}
   .dr-meter b{font-weight:500;color:var(--dtext)}
   .dr-status{margin-left:auto;padding-left:6px;color:var(--dmuted);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11.5px;flex:none}
@@ -658,7 +660,7 @@
   <div class="head">
     <div class="wordmark">Metronome</div>
     <button class="lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
-    <button class="lat-open" type="button" id="speedOpen" aria-haspopup="dialog">speed <span class="lat-open-val" id="speedOpenVal">100%</span></button>
+    <button class="lat-open" type="button" id="speedOpen" data-speed-open aria-haspopup="dialog">speed <span class="lat-open-val" id="speedOpenVal" data-speed-val>100%</span></button>
     <span id="statusText" hidden>停止中</span>
   </div>
 
@@ -816,7 +818,10 @@
     </button>
   </div>
 
+  <div class="fs-settings">
   <button class="fs-lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
+    <button class="fs-lat-open" type="button" data-speed-open aria-haspopup="dialog">speed <span class="lat-open-val" data-speed-val>100%</span></button>
+  </div>
 
   <div class="fs-flash" id="fsFlash" aria-hidden="true"></div>
   <div class="fs-rotate">
@@ -833,6 +838,7 @@
     <div class="dr-bar1">
       <button class="dr-close" id="drClose" type="button" aria-label="ドラム入力を閉じる">✕</button>
       <div class="dr-groups" id="drGroups"></div>
+      <select class="dr-span" id="drSpan" aria-label="パターンの長さ" title="何小節ぶんを1つのパターンとしてくり返すか"></select>
       <span class="dr-meter" id="drMeter"></span>
     </div>
     <div class="dr-stage" id="drStage">
@@ -925,7 +931,7 @@
   </form>
 </dialog>
 
-<!-- ============ speed（再生速度）ダイアログ。ヘッダーの「speed」ボタンから開く ============ -->
+<!-- ============ speed（再生速度）ダイアログ。ヘッダーと練習モードの「speed」ボタンから開く ============ -->
 <dialog class="lat-dialog" id="speedDialog" aria-labelledby="speedTitle">
   <form method="dialog">
     <div class="lat-dlg-top">
@@ -999,8 +1005,9 @@
      ======================================================================== */
   /* ========================================================================
      DrumDomain … ドラムパターン（打点）の純粋計算。Domain と同じく DOM・状態・音を持たない。
-     打点は RhythmGroup に付く1レイヤー（group.drums）で、1周＝グループの拍子の並び（rhythms）1回ぶん。
-     くり返し（reps）は同じ打点をくり返し鳴らす。
+     打点は RhythmGroup に付く1レイヤー（group.drums）で、1周（＝1パターン）はグループの拍子の並び（rhythms）の
+     drumSpan 回ぶん。既定は拍子が1つのグループなら2回（4/4 なら 4/4×2＝2小節で1パターン）、2つ以上なら1回。
+     くり返し（reps）の間は、同じパターンを rep % drumSpan 回目の位置から順に鳴らす（4/4 ×8 なら 2小節 ×4）。
        Hit {p, inst} … p＝周の先頭からの拍位置（拍＝その小節の分母の音価。7/8 なら8分音符）。
                        0 <= p < 周の拍数。秒ではなく拍で持つので、グループBPM・到達BPM・speed・
                        動画同期のどれで鳴らしても拍からずれない
@@ -1036,8 +1043,36 @@
     /* 1拍の基本分割数：拍が4分音符なら 16分＝4分割、8分音符なら 2分割、16分以下なら分割なし。
        慣用の音価でない分母（5, 7, 11…）は 4分割を既定にする */
     const baseSub = den => { const b = 16/den; return Number.isInteger(b) ? Math.max(1, b) : (b < 1 ? 1 : 4); };
-    // 周の拍数（拍子の並び1回ぶん）
+    // 拍子の並びの拍数（渡した並びの合計。パターン1周ぶんなら cycleRhythms を渡す）
     const cycleBeats = rhythms => (rhythms || []).reduce((n, r) => n + r.num, 0);
+    /* パターンの長さ（拍子の並びの何回ぶんか）。1〜8、null＝自動。
+       自動は「拍子が1つだけなら2回、2つ以上なら1回」＝既定で2小節以上を1つのパターンとして扱う。
+       打点を置いたグループでは値を固定する（DrumService / PatternService）。拍子を足しても長さが勝手に変わらないように */
+    const SPAN_MAX = 8;
+    const normSpan = v => { const n = Math.round(Number(v)); return (v == null || v === "" || !(n >= 1 && n <= SPAN_MAX)) ? null : n; };
+    const autoSpan = rhythms => (rhythms && rhythms.length === 1) ? 2 : 1;
+    const spanOf = g => (g && g.drumSpan != null) ? g.drumSpan : autoSpan(g && g.pattern.rhythms);
+    function repeatRhythms(rhythms, span){
+      const out = [];
+      for(let k = 0; k < span; k++) (rhythms || []).forEach(r => out.push(r));
+      return out;
+    }
+    const cycleRhythms = g => repeatRhythms(g.pattern.rhythms, spanOf(g));
+    // くり返し rep 回目・その周の cb 拍目 → パターン内の拍位置
+    const cyclePos = (g, rep, cb) => (rep % spanOf(g)) * cycleBeats(g.pattern.rhythms) + cb;
+    // 並び1回ぶんの小節の移り先 map を、パターン（span 回ぶん）の小節の移り先へ広げる
+    function expandMap(map, oldLen, newLen, span){
+      const out = [];
+      for(let k = 0; k < span; k++) for(let i = 0; i < oldLen; i++) out.push(map[i] < 0 ? -1 : map[i] + k * newLen);
+      return out;
+    }
+    /* パターンの長さを from → to 回ぶんへ。長くするときは今のパターンを後ろへ敷き詰め（2小節目以降は複製から直す）、
+       短くするときははみ出した打点を落とす。passBeats＝拍子の並び1回ぶんの拍数 */
+    function respan(hits, passBeats, from, to){
+      const end = to * passBeats, len = from * passBeats, out = [];
+      (hits || []).forEach(h => { for(let q = h.p; q < end - 1e-9; q += len) out.push({p: round3(q), inst: h.inst}); });
+      return out.sort((a, b) => a.p - b.p);
+    }
     // 各小節の先頭の拍位置
     function barStarts(rhythms){
       const out = []; let p = 0;
@@ -1183,7 +1218,8 @@
     const identityMap = n => Array.from({length:n}, (_, i) => i);
 
     return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
-            quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap};
+            quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
+            SPAN_MAX, normSpan, autoSpan, spanOf, repeatRhythms, cycleRhythms, cyclePos, expandMap, respan};
   })();
 
   const Domain = (() => {
@@ -1394,8 +1430,11 @@
         cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
         repCues: fitCues(spec.repCues, reps),   // 各くり返し(rep)の動画位置。パッドの位置突き合わせに使う（UI なし）
         pattern,
-        // ドラムの打点（1周＝拍子の並び1回ぶん。DrumDomain の Hit の配列）。空＝ドラムなし
-        drums: DrumDomain.normHits(spec.drums, DrumDomain.cycleBeats(pattern.rhythms))
+        // ドラムのパターンの長さ（拍子の並びの何回ぶんか）。null＝自動（拍子が1つなら2回＝2小節）
+        drumSpan: DrumDomain.normSpan(spec.drumSpan),
+        // ドラムの打点（1周＝パターン1回ぶん。DrumDomain の Hit の配列）。空＝ドラムなし
+        drums: DrumDomain.normHits(spec.drums, DrumDomain.cycleBeats(DrumDomain.repeatRhythms(pattern.rhythms,
+          DrumDomain.normSpan(spec.drumSpan) || DrumDomain.autoSpan(pattern.rhythms))))
       };
     }
     function cloneGroup(g){
@@ -1408,6 +1447,7 @@
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
         pattern: makePattern(g.pattern.rhythms),
+        drumSpan: g.drumSpan != null ? g.drumSpan : null,
         drums: (g.drums || []).map(h => ({p:h.p, inst:h.inst}))
       };
     }
@@ -1646,7 +1686,8 @@
         }else{
           L.push("    pattern: [" + g.pattern.join(", ") + "]");
         }
-        // ドラムの打点：楽器ごとに、周の先頭からの拍位置（拍＝その小節の分母の音価）を並べる
+        if(g.drumSpan != null) L.push("    drumSpan: " + g.drumSpan);
+        // ドラムの打点：楽器ごとに、パターンの先頭からの拍位置（拍＝その小節の分母の音価）を並べる
         if(g.drums){
           L.push("    drums:");
           Object.keys(g.drums).forEach(inst => L.push("      " + inst + ": [" + g.drums[inst].join(", ") + "]"));
@@ -2275,10 +2316,16 @@
   const PatternService = (() => {
     // 拍子の並びを変える操作の共通部：打点を「何小節目の何拍目」に付いたまま新しい並びへ引っ越す。
     // barMap(n) は旧 i 小節目の移り先の配列（-1＝消えた小節）を返す
+    // パターンが拍子の並びの複数回ぶん（drumSpan）なら、各回の中で同じように引っ越す
     function reshape(g, mutate, barMap){
+      const has = g.drums && g.drums.length;
+      if(has && g.drumSpan == null) g.drumSpan = DrumDomain.spanOf(g);   // 並びが変わってもパターンの長さ（回数）は保つ
       const before = g.pattern.rhythms.map(r => ({num:r.num, den:r.den}));
       mutate();
-      if(g.drums && g.drums.length) g.drums = DrumDomain.remap(before, g.pattern.rhythms, g.drums, barMap(before.length));
+      if(!has) return;
+      const span = g.drumSpan;
+      g.drums = DrumDomain.remap(DrumDomain.repeatRhythms(before, span), DrumDomain.cycleRhythms(g), g.drums,
+        DrumDomain.expandMap(barMap(before.length), before.length, g.pattern.rhythms.length, span));
     }
     return {
       setMeter(id, i, num, den){
@@ -2299,7 +2346,10 @@
       },
       addRhythm(id, num, den){
         HistoryService.commit();
-        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          reshape(g, () => { g.pattern.rhythms.push(Domain.makeRhythm(num, den)); }, DrumDomain.identityMap);
+        }, {render:true, idle:true});
       },
       moveRhythm(id, i, dir){
         const g = Store.findGroup(id);
@@ -2392,14 +2442,14 @@
      commit:false は重ね録りの2打目以降（1回のレックを1手の履歴にまとめる） */
   const DrumService = (() => {
     const cache = new Map();   // gid → {hits, sig, grid, play}
-    const sigOf = g => g.pattern.rhythms.map(r => r.num + "/" + r.den).join(",");
+    const sigOf = g => DrumDomain.spanOf(g) + ":" + g.pattern.rhythms.map(r => r.num + "/" + r.den).join(",");
     const hitsOf = g => (g && Array.isArray(g.drums)) ? g.drums : [];
-    const nbOf = g => DrumDomain.cycleBeats(g.pattern.rhythms);
+    const nbOf = g => DrumDomain.cycleBeats(DrumDomain.cycleRhythms(g));
     function entry(g){
       const hits = hitsOf(g), sig = sigOf(g);
       let c = cache.get(g.id);
       if(!c || c.hits !== hits || c.sig !== sig){
-        const grid = DrumDomain.quantize(g.pattern.rhythms, hits);
+        const grid = DrumDomain.quantize(DrumDomain.cycleRhythms(g), hits);
         c = {hits, sig, grid, play: DrumDomain.playSlots(grid)};
         cache.set(g.id, c);
       }
@@ -2411,6 +2461,7 @@
       if(!g) return;
       if(!opts || opts.commit !== false) HistoryService.commit();
       Store.apply(() => {
+        if(g.drumSpan == null) g.drumSpan = DrumDomain.spanOf(g);   // 打点を置いたらパターンの長さを固定する
         const next = fn(hitsOf(g).slice(), g);
         if(next) g.drums = next.sort(byPos);
       }, {drums:true});
@@ -2420,8 +2471,20 @@
     const inRange = (h, a, b) => h.p >= a - 1e-6 && h.p < b - 1e-6;
     return {
       grid(gid){ const g = Store.findGroup(gid); return g ? entry(g).grid : {beats:[]}; },
-      // 再生用：周の cb 拍目で鳴らす [{f, inst}]
-      playAt(gid, cb){ const g = Store.findGroup(gid); if(!g || !hitsOf(g).length) return []; return entry(g).play[cb] || []; },
+      // 再生用：くり返し rep 回目・その周の cb 拍目で鳴らす [{f, inst}]
+      playAt(gid, rep, cb){ const g = Store.findGroup(gid); if(!g || !hitsOf(g).length) return []; return entry(g).play[DrumDomain.cyclePos(g, rep, cb)] || []; },
+      cyclePos(gid, rep, cb){ const g = Store.findGroup(gid); return g ? DrumDomain.cyclePos(g, rep, cb) : cb; },
+      span(gid){ const g = Store.findGroup(gid); return g ? DrumDomain.spanOf(g) : 1; },
+      // パターンの長さ（拍子の並びの何回ぶんか）を変える。長くすると今のパターンを複製して敷き詰める
+      setSpan(gid, span){
+        const g = Store.findGroup(gid), to = DrumDomain.normSpan(span);
+        if(!g || to == null || to === DrumDomain.spanOf(g)) return;
+        HistoryService.commit();
+        Store.apply(() => {
+          g.drums = DrumDomain.respan(hitsOf(g), DrumDomain.cycleBeats(g.pattern.rhythms), DrumDomain.spanOf(g), to);
+          g.drumSpan = to;
+        }, {drums:true, render:true});
+      },
       hits(gid){ return hitsOf(Store.findGroup(gid)); },
       cycleBeats(gid){ const g = Store.findGroup(gid); return g ? nbOf(g) : 0; },
       add(gid, p, inst, opts){
@@ -2504,14 +2567,14 @@
     const KEY = "csm:drums.on";
     let on = true, force = false;   // on＝メトロノーム画面でも鳴らす（端末に保存）／force＝ドラム入力を開いている間は常に鳴らす
     try{ on = window.localStorage.getItem(KEY) !== "0"; }catch(_){}
-    const log = [];            // 予約した拍の頭 {time, len, gid, cb}（新しい順に探す）
+    const log = [];            // 予約した拍の頭 {time, len, gid, rep, cb}（新しい順に探す）
     let flash = null;          // 発音時刻に合わせてパッドを光らせる（ドラム入力画面）
     const hook = {
       beat(e, time, len){
-        log.push({time, len, gid:e.gid, cb:e.cb});
+        log.push({time, len, gid:e.gid, rep:e.rep, cb:e.cb});
         if(log.length > 64) log.shift();
         if(!on && !force) return;
-        for(const h of DrumService.playAt(e.gid, e.cb)){
+        for(const h of DrumService.playAt(e.gid, e.rep, e.cb)){
           const t = time + h.f * len;
           SoundGateway.drum(h.inst, t);
           if(flash) flash(h.inst, t);
@@ -2534,10 +2597,10 @@
         if(l.time > T) continue;
         const f = (T - l.time) / l.len;
         if(f > 2) return null;                 // 古い控え（止めたあと等）
-        return wrap(l.gid, l.cb + f);
+        return wrap(l.gid, DrumService.cyclePos(l.gid, l.rep, l.cb) + f);
       }
       const first = log[0];
-      if(first && first.time - T < first.len * 0.5) return wrap(first.gid, first.cb - (first.time - T) / first.len);
+      if(first && first.time - T < first.len * 0.5) return wrap(first.gid, DrumService.cyclePos(first.gid, first.rep, first.cb) - (first.time - T) / first.len);
       return null;
     }
     function wrap(gid, p){
@@ -2587,6 +2650,8 @@
                  tupletAccent: Domain.tupletAccentDto(r),
                  ...((r.muted || []).length ? {muted: r.muted.slice()} : {})}
               : Domain.formatRhythm(r)),
+            // ドラムのパターンの長さは、打点があるか長さを指定したときだけ出力
+            drumSpan: (g.drumSpan != null || (g.drums || []).length) ? DrumDomain.spanOf(g) : null,
             // ドラムの打点は1つでもあるときだけ出力（楽器ごとの拍位置。無ければ非出力＝後方互換）
             drums: DrumDomain.toDto(g.drums)
           };
@@ -2624,6 +2689,7 @@
           cue: g.cue,
           repCues: Array.isArray(g.repCues) ? g.repCues : null,
           rhythms,
+          drumSpan: g.drumSpan,                          // 無指定は自動（拍子が1つなら2回ぶん）
           drums: g.drums                                 // 楽器ごとの拍位置。不明な楽器・周の外の位置は落とす
         });
       });
@@ -3933,8 +3999,9 @@
         }
         if((g.drums || []).length){      // ドラム入力で打点を置いたグループ
           const d = document.createElement("span");
-          d.className = "chip drm"; d.textContent = "ドラム " + g.drums.length;
-          d.title = "ドラムの打点 " + g.drums.length + " 音（ドラム入力で編集）";
+          const bars = DrumDomain.cycleRhythms(g).length;
+          d.className = "chip drm"; d.textContent = "ドラム " + bars + "小節";
+          d.title = bars + "小節のドラムパターン（打点 " + g.drums.length + " 音）をくり返します。ドラム入力で編集";
           sub.appendChild(d);
         }
         const times = document.createElement("span");
@@ -4017,7 +4084,7 @@
       card.addEventListener("click", e=>{
         if(Transport.running()) return;                       // 再生中は編集に入らない
         if(e.target.closest("input, select, button")) return;
-        SequenceService.toggleActive(g.id);
+        if(state().activeId !== g.id) SequenceService.setActive(g.id);
       });
       card.addEventListener("keydown", e=>{
         if(Transport.running()) return;
@@ -4161,6 +4228,13 @@
     }
 
     function bind(){
+      // カード外の余白だけで閉じる。capture でカード自身の再描画より先に判定する。
+      document.addEventListener("click", e=>{
+        if(!state().activeId || Transport.running() || Transport.armKind()) return;
+        const protectedArea = e.composedPath().some(el => el instanceof Element &&
+          el.matches(".group, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));
+        if(!protectedArea) SequenceService.setActive(null);
+      }, true);
       let typing = false;
       seqNameEl.addEventListener("focus", ()=>{ typing = false; });
       seqNameEl.addEventListener("blur", ()=>{
@@ -4212,7 +4286,8 @@
       const p = SpeedService.shown(), [lo, hi] = SpeedService.bounds();
       if(document.activeElement !== input) input.value = p;
       input.min = lo; input.max = hi;
-      $("speedVal").textContent = $("speedOpenVal").textContent = p + "%";
+      $("speedVal").textContent = p + "%";
+      document.querySelectorAll("[data-speed-val]").forEach(n => { n.textContent = p + "%"; });
       $("speedDown").disabled = p <= lo;
       $("speedUp").disabled = p >= hi;
     }
@@ -4238,13 +4313,14 @@
         if(VideoGateway.armed()){ SpeedService.setVideoRate(1); render(); } else change(100);
       });
       input.addEventListener("blur", render);
-      // ヘッダーの「speed」から開く。枠の外（背景）をタップしたら閉じる
+      // ヘッダーと練習モードの「speed」から開く。枠の外（背景）をタップしたら閉じる
       const dialog = $("speedDialog");
-      $("speedOpen").addEventListener("click", ()=>{
+      document.querySelectorAll("[data-speed-open]").forEach(b => b.addEventListener("click", e=>{
+        e.stopPropagation();
         render();
         if(dialog.open) return;
         if(typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
-      });
+      }));
       dialog.addEventListener("click", e=>{ if(e.target === dialog) dialog.close(); });
       render();
     }
@@ -4903,7 +4979,10 @@
       return g;
     }
     const grid = () => ui.gid ? DrumService.grid(ui.gid) : {beats:[]};
-    const nbOf = g => DrumDomain.cycleBeats(g.pattern.rhythms);
+    const nbOf = g => DrumDomain.cycleBeats(DrumDomain.cycleRhythms(g));
+    // パターンのくり返し回数（くり返し ÷ パターンの長さ）。割り切れなければ小数1桁（最後は途中で終わる）
+    const loopsOf = g => { const v = g.reps / DrumDomain.spanOf(g); return Number.isInteger(v) ? v : Math.round(v * 10) / 10; };
+    const barsOf = g => DrumDomain.cycleRhythms(g).length;
 
     function select(gid){
       if(gid === ui.gid) return;
@@ -4931,11 +5010,11 @@
       function layout(BW){
         let x = X0, prevR = null;
         const spans = playable().map(g => {
-          const rs = g.pattern.rhythms, nb = nbOf(g), starts = DrumDomain.barStarts(rs);
+          const rs = DrumDomain.cycleRhythms(g), nb = nbOf(g), starts = DrumDomain.barStarts(rs);
           const first = rs[0], changed = !prevR || prevR.num !== first.num || prevR.den !== first.den;
-          const gap = !prevR ? 0 : (changed ? TS * 1.7 + 14 : 10) + (g.reps > 1 ? 12 : 0);
+          const gap = !prevR ? 0 : (changed ? TS * 1.7 + 14 : 10) + (loopsOf(g) > 1 ? 12 : 0);
           x += gap;
-          const sp = {g, gid:g.id, rs, nb, starts, reps:g.reps, gap, x0:x, xs:[], meters:[], grid:DrumService.grid(g.id)};
+          const sp = {g, gid:g.id, rs, nb, starts, reps:loopsOf(g), gap, x0:x, xs:[], meters:[], grid:DrumService.grid(g.id)};
           let bx = x;
           rs.forEach((r, i) => {
             const pr = i === 0 ? prevR : rs[i-1];
@@ -5189,7 +5268,7 @@
 
     /* ---------- 入力：パッド・ステップ・重ね録り ---------- */
     function stepDiv(b){
-      const den = DrumDomain.denAt(group().pattern.rhythms, b);
+      const den = DrumDomain.denAt(DrumDomain.cycleRhythms(group()), b);
       return ui.stepSize === 0 ? DrumDomain.baseSub(den) : ui.stepSize;
     }
     // ステップ入力のカーソルを 1 歩進める／戻す（拍をまたぐと隣の拍の歩幅で数える）
@@ -5294,7 +5373,7 @@
     }
     function onBeat(e){
       if(!ui.open) return;
-      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:e.cb, gid:e.gid};
+      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:DrumService.cyclePos(e.gid, e.rep, e.cb), gid:e.gid};
       // 再生に合わせて編集対象のグループも移る（通し再生・グループ間の移動）
       if(e.gid !== ui.gid){ ui.gid = e.gid; ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; render(); }
       else if(e.bar === 0 && e.beat === 0) controls();
@@ -5310,7 +5389,7 @@
         const ok = x.pattern.rhythms.length > 0;
         return '<span class="dr-chip' + (x.id === ui.gid ? " cur" : "") + (running && cur.gid === x.id ? " play" : "") +
           ((x.drums || []).length ? " has" : "") + '" data-gid="' + x.id + '"' + (ok ? "" : ' aria-disabled="true"') + ">" +
-          esc(x.name) + "<i>×" + x.reps + "</i></span>";
+          esc(x.name) + "<i>" + (ok ? barsOf(x) + "小節 ×" + loopsOf(x) : "") + "</i></span>";
       }).join("") + '<span class="dr-chip" id="drGroupAdd" title="リズムグループを追加">＋</span>';
       chips.scrollLeft = keep;
       const curChip = chips.querySelector(".dr-chip.cur");
@@ -5320,6 +5399,18 @@
         else if(c.right > box.right) chips.scrollLeft += (c.right - box.right) + 8;
       }
       $("drMeter").innerHTML = g ? "<b>" + g.pattern.rhythms.map(Domain.formatRhythm).join(" · ") + "</b>  ♩=" + Fmt.bpmSpan(g, state().bpm) : "";
+      // パターンの長さ：拍子の並びの 1・2・4・8 回ぶん（4/4 なら 1・2・4・8 小節）
+      if(g){
+        const span = DrumDomain.spanOf(g), n = g.pattern.rhythms.length, sel = $("drSpan");
+        const opts = [1, 2, 4, 8].concat(span).filter((v, i, a) => a.indexOf(v) === i && v <= DrumDomain.SPAN_MAX).sort((a, b) => a - b);
+        const key = n + ":" + opts.join(",");
+        if(sel.dataset.key !== key){
+          sel.dataset.key = key;
+          sel.innerHTML = opts.map(v => '<option value="' + v + '">' + (v * n) + "小節パターン</option>").join("");
+        }
+        sel.value = String(span);
+        sel.disabled = Transport.running();
+      }
       // 状態
       const st = $("drStatus");
       if(running){
@@ -5341,7 +5432,7 @@
       $("drHint").style.display = (g && !(g.drums || []).length && !ui.sel && !ui.rangeMode) ? "block" : "none";
       // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
       if(g){
-        const b = Math.min(nbOf(g) - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(g.pattern.rhythms, Math.max(0, b)), base = DrumDomain.baseSub(den);
+        const b = Math.min(nbOf(g) - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(DrumDomain.cycleRhythms(g), Math.max(0, b)), base = DrumDomain.baseSub(den);
         const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
         const sel = $("drStepSize"), key = den + ":" + base;
         if(sel.dataset.key !== key){
@@ -5494,6 +5585,7 @@
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); ui.stepMode = !ui.stepMode; controls(); });
       $("drStepSize").addEventListener("change", () => { ui.stepSize = Number($("drStepSize").value); controls(); });
+      $("drSpan").addEventListener("change", () => { if(ui.gid){ ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; DrumService.setSpan(ui.gid, Number($("drSpan").value)); } });
       on("drStepBack", () => stepMove(-1));
       on("drStepFwd", () => stepMove(+1));
       on("drUndo", () => HistoryService.undo());
