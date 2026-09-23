@@ -3438,6 +3438,13 @@
     }
 
     function bind(){
+      // カード外の余白だけで閉じる。capture でカード自身の再描画より先に判定する。
+      document.addEventListener("click", e=>{
+        if(!state().activeId || Transport.running() || Transport.armKind()) return;
+        const protectedArea = e.composedPath().some(el => el instanceof Element &&
+          el.matches(".group, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));
+        if(!protectedArea) SequenceService.setActive(null);
+      }, true);
       let typing = false;
       seqNameEl.addEventListener("focus", ()=>{ typing = false; });
       seqNameEl.addEventListener("blur", ()=>{
