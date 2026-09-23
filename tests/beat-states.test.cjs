@@ -288,7 +288,7 @@ test('existing unusual meters survive loading and saving', () => {
 
 
 function playbackHarness(video = false) {
-  const run = load(['Domain', 'SpeedService', 'PlaybackService', 'PlaybackScheduler', 'Transport']);
+  const run = load(['Domain', 'SpeedService', 'LatencyService', 'PlaybackService', 'PlaybackScheduler', 'Transport']);
   run(`
     const group = Domain.makeGroup({reps:2, rhythms:[{num:1, den:4}]});
     const state = {groups:[group], activeId:group.id, bpm:120};
@@ -297,7 +297,8 @@ function playbackHarness(video = false) {
     const clearTimeout = () => {};
     let now = 0, videoTime = 12, videoState = 1, videoRate = 1, requestedRate = null;
     const clicks = [], seeks = [];
-    const SoundGateway = {ensure(){}, retimePending(){}, cancelPending(){}, ready:true, click:(level,time)=>clicks.push({level,time})};
+    const shifts = [];
+    const SoundGateway = {ensure(){}, retimePending(){}, cancelPending(){}, shiftPending:(at,delta)=>shifts.push({at,delta}), ready:true, click:(level,time)=>clicks.push({level,time})};
     const ClockGateway = {now:()=>now, hidden:()=>false, every:()=>()=>{}, frame(){}};
     const VideoGateway = {armed:()=>${video}, time:()=>videoTime, rate:()=>videoRate, rates:()=>[0.5,1,1.25,1.5,2], setRate:r=>{requestedRate=r;}, pause(){},
       syncOn:()=>${video}, stateCode:()=>videoState};
@@ -411,7 +412,7 @@ test('future audio nodes are cancelled and rescheduled on a live speed change', 
 });
 
 test('video count-in and recorded cues convert between video seconds and wall seconds', () => {
-  const run = load(['Domain','SpeedService','VideoSync']);
+  const run = load(['Domain','SpeedService','LatencyService','VideoSync']);
   run(`let videoRate=0.5, target=null, frame=null, args=null;
     const group={reps:1,repCues:[null]};
     const Store={findGroup:()=>group};
@@ -461,4 +462,54 @@ test('new groups capture the current BPM and retain it after global tempo change
   assert.equal(run('second.bpm'), 185.5);
   assert.equal(run('restored.groups[0].bpm'), 179);
   assert.equal(run('restored.groups[1].bpm'), 185.5);
+});
+
+test('earphone latency is clamped per device and notifies the previous and next value', () => {
+  const run = load(['LatencyService']);
+  run('var seen=[]; LatencyService.onChange((a,b)=>seen.push([a,b]));');
+  assert.equal(run('LatencyService.ms()'), 0);
+  run('LatencyService.nudge(10); LatencyService.nudge(10); LatencyService.set(9999); LatencyService.set(-9999); LatencyService.set(-200);');
+  assert.equal(run('JSON.stringify(seen)'), '[[0,10],[10,20],[20,600],[600,-200]]');
+  assert.equal(run('LatencyService.seconds()'), -0.2);
+});
+
+test('earphone latency moves the video aim earlier in video seconds', () => {
+  const run = load(['Domain','SpeedService','LatencyService','VideoSync']);
+  run(`let target=null;
+    const group={reps:1,repCues:[null]};
+    const VideoGateway={armed:()=>true,rate:()=>0.5,time:()=>10,ready:()=>true,seekTo:t=>{target=t;},play(){},stateCode:()=>1};
+    const ClockGateway={now:()=>4,perf:()=>0,frame(){}};
+    const Transport={soloTarget:()=>group,countInFor:()=>({dur:4}),clearArm(){},beginPlayback(){}};
+    VideoSync.init({view:{status(){},videoMsg(){},stampCueView(){}}});
+    LatencyService.set(100);
+    VideoSync.startAtCue('solo',12);`);
+  // 12 − (0.26 + 0.10) × 0.5 − 4 × 0.5
+  assert.ok(Math.abs(run('target') - 9.82) < 1e-9);
+});
+
+test('a live latency nudge shifts queued beats and scheduled clicks uniformly', () => {
+  const run = playbackHarness(true);
+  run(`Transport.start('solo'); now=0; Transport.beginPlayback('solo',{skipWait:true}); PlaybackScheduler.pump(2); now=0.25;
+    var before=PlaybackScheduler.queue.map(e=>e.time);
+    Transport.shiftAudio(-0.1);`);
+  assert.equal(run('JSON.stringify(shifts)'), '[{"at":0.25,"delta":-0.1}]');
+  assert.equal(run('PlaybackScheduler.queue.every((e,i)=>before[i] <= now ? e.time===before[i] : Math.abs(e.time-(before[i]-0.1))<1e-9)'), true);
+  run('Transport.stop(false); Transport.shiftAudio(-0.1);');
+  assert.equal(run('shifts.length'), 1);
+});
+
+test('shifted audio nodes are rescheduled and ones pushed into the past are dropped', () => {
+  const run = load(['SoundGateway']);
+  run(`const nodes=[];
+    const window={AudioContext:class {
+      currentTime=0.25;
+      createOscillator(){ const n={frequency:{}, connect(){return {connect(){}};}, start(t){this.startTime=t;},
+        stop(t){this.stopTime=t;}, disconnect(){}}; nodes.push(n); return n; }
+      createGain(){return {gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},disconnect(){}};}
+    }};
+    SoundGateway.ensure(); SoundGateway.click('beat',0.1,0.5); SoundGateway.click('beat',0.3,0.5); SoundGateway.click('beat',0.5,0.5);
+    SoundGateway.shiftPending(0.25,-0.1);`);
+  assert.equal(run('nodes.length'), 4);
+  assert.equal(run('nodes[0].stopTime > 0.1'), true);
+  assert.ok(Math.abs(run('nodes[3].startTime') - 0.4) < 1e-9);
 });
