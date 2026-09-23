@@ -94,10 +94,7 @@
   form.entry label{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--dim)}
   input[type=number]{width:82px;height:40px;text-align:center;font-family:var(--mono);font-size:15px;color:var(--ink);background:#FFF;border:1px solid var(--ink);border-radius:0}
 
-  .lat-row[hidden]{display:none}
-  .lat-row select{height:40px;min-width:120px;padding:0 8px;font-family:var(--mono);font-size:14px;text-align:center;text-align-last:center;
-    background:var(--panel);color:var(--ink);border:1px solid var(--ink);border-radius:0}
-
+  
   /* volume */
   .vol{padding:6px 18px 16px}
   .vol-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px}
@@ -721,9 +718,6 @@
       <button class="step" id="speedDown" type="button" aria-label="再生速度を5ポイント下げる">−</button>
       <input id="speedInput" type="number" min="50" max="150" step="1" value="100" aria-label="再生速度（％）" inputmode="numeric">
       <button class="step" id="speedUp" type="button" aria-label="再生速度を5ポイント上げる">＋</button>
-    </div>
-    <div class="lat-row" id="speedVideoRow" hidden>
-      <select id="speedVideo" aria-label="動画同期の再生速度"></select>
     </div>
     <div class="lat-foot">
       <button class="step" id="speedReset" type="button">100%に戻す</button>
@@ -1576,7 +1570,29 @@
       const r = Number(value);
       if(VideoGateway.armed() && VideoGateway.rates().includes(r)) VideoGateway.setRate(r);
     }
-    return {rate, percent:()=>percent, setPercent, setVideoRate};
+    // 動画同期中は 5% 刻みで直接指定する。プレイヤが任意の速度に対応せず据え置いた場合は、
+    // その方向で目標に最も近い対応速度に切り替える（± が効かなくならないように）
+    function requestVideoPercent(value){
+      const n = Number(value);
+      if(!VideoGateway.armed() || String(value).trim() === "" || !Number.isFinite(n)) return;
+      const rs = VideoGateway.rates(), cur = VideoGateway.rate();
+      const target = Math.min(rs[rs.length-1], Math.max(rs[0], Math.round(n / 5) * 5 / 100));
+      if(Math.abs(target - cur) < 1e-6) return;
+      VideoGateway.setRate(target);
+      setTimeout(()=>{
+        if(!VideoGateway.armed() || Math.abs(VideoGateway.rate() - cur) > 1e-6) return;
+        const ahead = rs.filter(r => target > cur ? r > cur + 1e-6 : r < cur - 1e-6);
+        if(ahead.length) VideoGateway.setRate(ahead.reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a));
+      }, 400);
+    }
+    // 画面に出す現在の速度（％）。動画同期中は実際の動画速度
+    const shown = () => Math.round(rate() * 100);
+    function bounds(){
+      if(!VideoGateway.armed()) return [50, 150];
+      const rs = VideoGateway.rates();
+      return [Math.round(rs[0] * 100), Math.round(rs[rs.length-1] * 100)];
+    }
+    return {rate, percent:()=>percent, shown, bounds, setPercent, setVideoRate, requestVideoPercent};
   })();
 
   /* ---------- HistoryService（汎用：past/future スタックと undo/redo。記録/復元は capture/apply に委譲） ---------- */
@@ -3468,46 +3484,36 @@
   })();
 
   const SpeedView = (() => {
-    const input = $("speedInput"), video = $("speedVideo");
+    const input = $("speedInput");
     function render(){
-      const synced = VideoGateway.armed();
-      $("speedManual").hidden = synced;
-      $("speedVideoRow").hidden = !synced;
-      if(document.activeElement !== input) input.value = SpeedService.percent();
-      $("speedVal").textContent = $("speedOpenVal").textContent = SpeedService.percent() + "%";
-      $("speedDown").disabled = SpeedService.percent() <= 50;
-      $("speedUp").disabled = SpeedService.percent() >= 150;
-      if(synced){
-        const rates = VideoGateway.rates();
-        const key = rates.join(",");
-        if(video.dataset.rates !== key){
-          video.replaceChildren(...rates.map(rate=>{
-            const option = document.createElement("option"); option.value = rate;
-            option.textContent = Math.round(rate * 100) + "％"; return option;
-          }));
-          video.dataset.rates = key;
-        }
-        video.value = String(SpeedService.rate());
-      }
+      const p = SpeedService.shown(), [lo, hi] = SpeedService.bounds();
+      if(document.activeElement !== input) input.value = p;
+      input.min = lo; input.max = hi;
+      $("speedVal").textContent = $("speedOpenVal").textContent = p + "%";
+      $("speedDown").disabled = p <= lo;
+      $("speedUp").disabled = p >= hi;
     }
-    function change(value){ SpeedService.setPercent(value); render(); }
+    // 単体再生は倍率を直接変更、動画同期中は動画の速度を変更（メトロノームは onRateChange で追従）
+    function change(value){
+      if(VideoGateway.armed()) SpeedService.requestVideoPercent(value); else SpeedService.setPercent(value);
+      render();
+    }
     function bind(){
       input.addEventListener("change", ()=>change(input.value));
       input.addEventListener("keydown", e=>{
         if(e.key === "ArrowUp" || e.key === "ArrowDown"){
-          e.preventDefault(); change(SpeedService.percent() + (e.key === "ArrowUp" ? 1 : -1));
+          e.preventDefault(); change(SpeedService.shown() + (e.key === "ArrowUp" ? 5 : -5));
         }else if(e.key === "Enter"){ e.preventDefault(); change(input.value); }
       });
       input.addEventListener("wheel", e=>{
         if(document.activeElement !== input) return;
-        e.preventDefault(); if(e.deltaY) change(SpeedService.percent() + (e.deltaY < 0 ? 1 : -1));
+        e.preventDefault(); if(e.deltaY) change(SpeedService.shown() + (e.deltaY < 0 ? 5 : -5));
       }, {passive:false});
-      $("speedDown").addEventListener("click", ()=>change(SpeedService.percent()-5));
-      $("speedUp").addEventListener("click", ()=>change(SpeedService.percent()+5));
+      $("speedDown").addEventListener("click", ()=>change(SpeedService.shown()-5));
+      $("speedUp").addEventListener("click", ()=>change(SpeedService.shown()+5));
       $("speedReset").addEventListener("click", ()=>{
-        if(VideoGateway.armed()) SpeedService.setVideoRate(1); else change(100);
+        if(VideoGateway.armed()){ SpeedService.setVideoRate(1); render(); } else change(100);
       });
-      video.addEventListener("change", ()=>{ SpeedService.setVideoRate(video.value); render(); });
       input.addEventListener("blur", render);
       // ヘッダーの「speed」から開く。枠の外（背景）をタップしたら閉じる
       const dialog = $("speedDialog");
