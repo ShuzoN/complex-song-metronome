@@ -428,7 +428,9 @@
     -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
             mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
   .fs-strip-wrap::-webkit-scrollbar{display:none}
-  .fs-track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw}
+  .fs-track{display:flex;align-items:center;padding:0 50vw}
+  .fs-group-region{display:flex;align-items:center;flex:none;gap:clamp(8px,1.8vw,14px);padding:0 clamp(4px,.9vw,7px);height:clamp(84px,34dvh,150px);cursor:pointer}
+  .fs-group-region:focus-visible{outline:1px solid var(--brass);outline-offset:-2px}
   .fs-fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
     width:clamp(42px,15dvh,66px);height:clamp(42px,16dvh,64px);font-size:clamp(13px,4.4dvh,20px);
@@ -3836,27 +3838,30 @@
       lastStripKey = key;
       el.track.innerHTML = "";
       state().groups.forEach((g,gi)=>{
+        const region = document.createElement("div");
+        region.className = "fs-group-region"; region.dataset.gid = g.id;
+        region.setAttribute("role", "button"); region.tabIndex = 0;
+        region.setAttribute("aria-label", g.name + "の先頭へ移動");
+        el.track.appendChild(region);
         if(gi > 0){
           const sep=document.createElement("div");
           sep.className="fs-gsep";
           const nm=document.createElement("span");
           nm.className="fs-gsep-name"; nm.textContent=g.name;
           sep.appendChild(nm);
-          el.track.appendChild(sep);
+          region.appendChild(sep);
         }
         g.pattern.rhythms.forEach((r,i)=>{
           const t=document.createElement("div");
           t.className="fs-fbar"; t.dataset.gid=g.id; t.dataset.bi=i;
-          t.setAttribute("role", "button"); t.tabIndex = 0;
-          t.setAttribute("aria-label", g.name + "の先頭へ移動（" + r.num + "/" + r.den + "）");
           t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
-          el.track.appendChild(t);
+          region.appendChild(t);
         });
       });
     }
     // 連結した帯の中から、あるグループの指定小節タイルを探す（区切りは飛ばす）
     function findTile(gid, bar){
-      return [...el.track.children].find(t=>
+      return [...el.track.querySelectorAll(".fs-fbar")].find(t=>
         t.classList.contains("fs-fbar") && t.dataset.gid===gid && +t.dataset.bi===bar) || null;
     }
     // 現在（再生中）／プレビュー（停止中）の小節を帯の中央へ寄せる（横スクロール位置を動かす）。
@@ -3943,7 +3948,7 @@
       const inst = instantNext; instantNext = false;   // この同期での中央寄せを即時にするか（開いた直後・リサイズ時）
       // フォーカス帯：全グループを連結した帯の中で、現在小節=大・赤／再生済み=薄く
       const idxOf = {}; groups.forEach((g,i)=>{ idxOf[g.id]=i; });
-      [...el.track.children].forEach(t=>{
+      [...el.track.querySelectorAll(".fs-fbar")].forEach(t=>{
         if(!t.classList.contains("fs-fbar")) return;
         const tgi = idxOf[t.dataset.gid], tb = +t.dataset.bi;
         t.classList.toggle("now", t.dataset.gid===ctx.g.id && tb===bar);
@@ -4063,7 +4068,7 @@
       strip.addEventListener("scroll", ()=>{ if(tap){ tap.moved = true; holdBrowse(); } }, {passive:true});
       strip.addEventListener("pointerdown", e=>{
         if(e.button !== 0 || !e.isPrimary) return;
-        const tile = e.target.closest(".fs-fbar");
+        const tile = e.target.closest(".fs-group-region");
         tap = {x:e.clientX, y:e.clientY, t:performance.now(), gid:tile && tile.dataset.gid, moved:false};
         holdBrowse();
       });
@@ -4075,13 +4080,13 @@
       strip.addEventListener("pointerup", e=>{
         const start = tap; tap = null;
         if(!start || start.moved || performance.now()-start.t >= 500) return;
-        const tile = e.target.closest(".fs-fbar");
+        const tile = e.target.closest(".fs-group-region");
         if(tile && tile.dataset.gid === start.gid && Math.abs(e.clientX-start.x) < 8 && Math.abs(e.clientY-start.y) < 8){
           jumpGroup(start.gid);
         }
       });
       strip.addEventListener("keydown", e=>{
-        const tile = e.target.closest(".fs-fbar");
+        const tile = e.target.closest(".fs-group-region");
         if(tile && (e.key === "Enter" || e.key === " ")){
           e.preventDefault(); jumpGroup(tile.dataset.gid);
         }
