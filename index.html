@@ -428,7 +428,9 @@
     -webkit-mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%);
             mask-image:linear-gradient(to right,transparent 0,#000 18%,#000 82%,transparent 100%)}
   .fs-strip-wrap::-webkit-scrollbar{display:none}
-  .fs-track{display:flex;align-items:center;gap:clamp(8px,1.8vw,14px);padding:0 50vw}
+  .fs-track{display:flex;align-items:center;padding:0 50vw}
+  .fs-group-region{display:flex;align-items:center;flex:none;gap:clamp(8px,1.8vw,14px);padding:0 clamp(4px,.9vw,7px);height:clamp(84px,34dvh,150px);cursor:pointer}
+  .fs-group-region:focus-visible{outline:1px solid var(--brass);outline-offset:-2px}
   .fs-fbar{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
     border:1px solid rgba(245,244,239,.26);background:rgba(245,244,239,.04);
     width:clamp(42px,15dvh,66px);height:clamp(42px,16dvh,64px);font-size:clamp(13px,4.4dvh,20px);
@@ -3786,6 +3788,7 @@
      syncIdle）経由で受け取り、この HUD にも反映する。 */
   const FullscreenView = (() => {
     const STEP = 5;                         // 1タップぶんの秒数（tap-pad と同じ）
+    let selectedStartId = null;              // 停止中に選んだグループから次の再生を始める
     let opened = false, lastStripKey = "", lastTLKey = "", flashTimer = null;
     let userBrowseUntil = 0, tlBrowseUntil = 0, instantNext = false;   // 手動スワイプ中は自動追従を止める（帯／タイムライン別）／次の中央寄せを即時にする
     const el = {};
@@ -3835,25 +3838,30 @@
       lastStripKey = key;
       el.track.innerHTML = "";
       state().groups.forEach((g,gi)=>{
+        const region = document.createElement("div");
+        region.className = "fs-group-region"; region.dataset.gid = g.id;
+        region.setAttribute("role", "button"); region.tabIndex = 0;
+        region.setAttribute("aria-label", g.name + "の先頭へ移動");
+        el.track.appendChild(region);
         if(gi > 0){
           const sep=document.createElement("div");
           sep.className="fs-gsep";
           const nm=document.createElement("span");
           nm.className="fs-gsep-name"; nm.textContent=g.name;
           sep.appendChild(nm);
-          el.track.appendChild(sep);
+          region.appendChild(sep);
         }
         g.pattern.rhythms.forEach((r,i)=>{
           const t=document.createElement("div");
           t.className="fs-fbar"; t.dataset.gid=g.id; t.dataset.bi=i;
           t.innerHTML='<div class="fs-fr"><span class="fs-num">'+r.num+'</span><span class="fs-line"></span><span class="fs-den">'+r.den+'</span></div>';
-          el.track.appendChild(t);
+          region.appendChild(t);
         });
       });
     }
     // 連結した帯の中から、あるグループの指定小節タイルを探す（区切りは飛ばす）
     function findTile(gid, bar){
-      return [...el.track.children].find(t=>
+      return [...el.track.querySelectorAll(".fs-fbar")].find(t=>
         t.classList.contains("fs-fbar") && t.dataset.gid===gid && +t.dataset.bi===bar) || null;
     }
     // 現在（再生中）／プレビュー（停止中）の小節を帯の中央へ寄せる（横スクロール位置を動かす）。
@@ -3940,7 +3948,7 @@
       const inst = instantNext; instantNext = false;   // この同期での中央寄せを即時にするか（開いた直後・リサイズ時）
       // フォーカス帯：全グループを連結した帯の中で、現在小節=大・赤／再生済み=薄く
       const idxOf = {}; groups.forEach((g,i)=>{ idxOf[g.id]=i; });
-      [...el.track.children].forEach(t=>{
+      [...el.track.querySelectorAll(".fs-fbar")].forEach(t=>{
         if(!t.classList.contains("fs-fbar")) return;
         const tgi = idxOf[t.dataset.gid], tb = +t.dataset.bi;
         t.classList.toggle("now", t.dataset.gid===ctx.g.id && tb===bar);
@@ -3982,13 +3990,31 @@
       VideoPadService.seekBy(STEP * dir);
     }
     function center(){
+      if(!Transport.running() && selectedStartId){
+        const id = selectedStartId; selectedStartId = null;
+        if(findGroup(id) && state().activeId === id){ playGroup(id); return; }
+      }
       SoundGateway.ensure();
       if(VideoGateway.ready()) VideoPadService.togglePause();          // 動画あり：tap-pad と同じ統括
       else Transport.running() ? Transport.stop(false) : Transport.start("all");   // 動画なし：全体再生の開始/停止
     }
     // タイムラインのグループをタップ → そのグループの先頭から再生（現状の「グループ再生」と同じヘッド）。
     // 全画面を閉じずにグループ間を飛べる。再生中なら一旦止めてから当該グループで開始する。
+    function jumpGroup(id){
+      const g = findGroup(id);
+      if(!g || !g.pattern.rhythms.length) return;
+      userBrowseUntil = 0; tlBrowseUntil = 0; instantNext = true;
+      if(Transport.running()){
+        selectedStartId = null; playGroup(id);
+      }else{
+        if(Transport.armKind() || VideoPadService.isPaused() || VideoPadService.isBusy()) Transport.stop(false);
+        selectedStartId = id;
+        SequenceService.setActive(id);
+        sync();
+      }
+    }
     function playGroup(id){
+      selectedStartId = null;
       const g = findGroup(id);
       if(!g || !g.pattern.rhythms.length) return;                     // 空グループは無視
       SoundGateway.ensure();
@@ -4034,23 +4060,35 @@
       document.addEventListener("keydown", e=>{ if(e.key === "Escape" && opened && !document.querySelector("dialog[open]")) close(); });
       window.addEventListener("resize", ()=>{ if(opened){ centerCurrent(true, true); scrollTimeline(true, true); } });
 
-      // 帯を横スワイプでスクロール（カルーセル）。手で動かしている間は自動追従を一時停止し、
-      // 動かさずに軽くタップした時だけ（左半分＝5秒戻す／右半分＝5秒送る）シークにフォールバックする。
+      // スワイプ中は追従を止め、動かずにタップした拍子だけを移動先にする。
       const strip = el.track.parentElement;
       let tap = null;
       const holdBrowse = ()=>{ userBrowseUntil = performance.now() + 3500; };
-      strip.addEventListener("wheel", holdBrowse, {passive:true});
-      strip.addEventListener("scroll", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointerdown", e=>{ tap = {x:e.clientX, y:e.clientY, t:performance.now()}; holdBrowse(); });
-      strip.addEventListener("pointermove", ()=>{ if(tap) holdBrowse(); }, {passive:true});
-      strip.addEventListener("pointercancel", ()=>{ tap = null; });   // ネイティブのパン開始でキャンセル＝スワイプ扱い
+      strip.addEventListener("wheel", ()=>{ tap = null; holdBrowse(); }, {passive:true});
+      strip.addEventListener("scroll", ()=>{ if(tap){ tap.moved = true; holdBrowse(); } }, {passive:true});
+      strip.addEventListener("pointerdown", e=>{
+        if(e.button !== 0 || !e.isPrimary) return;
+        const tile = e.target.closest(".fs-group-region");
+        tap = {x:e.clientX, y:e.clientY, t:performance.now(), gid:tile && tile.dataset.gid, moved:false};
+        holdBrowse();
+      });
+      strip.addEventListener("pointermove", e=>{
+        if(tap && (Math.abs(e.clientX-tap.x) >= 8 || Math.abs(e.clientY-tap.y) >= 8)) tap.moved = true;
+        if(tap) holdBrowse();
+      }, {passive:true});
+      strip.addEventListener("pointercancel", ()=>{ tap = null; });
       strip.addEventListener("pointerup", e=>{
-        if(!tap) return;
-        const dx = Math.abs(e.clientX - tap.x), dy = Math.abs(e.clientY - tap.y), dt = performance.now() - tap.t;
-        tap = null;
-        if(dx < 8 && dy < 8 && dt < 300){          // 動いていない＝タップ → シーク（追従もすぐ戻す）
-          userBrowseUntil = 0;
-          seek(e.clientX < window.innerWidth/2 ? -1 : 1);
+        const start = tap; tap = null;
+        if(!start || start.moved || performance.now()-start.t >= 500) return;
+        const tile = e.target.closest(".fs-group-region");
+        if(tile && tile.dataset.gid === start.gid && Math.abs(e.clientX-start.x) < 8 && Math.abs(e.clientY-start.y) < 8){
+          jumpGroup(start.gid);
+        }
+      });
+      strip.addEventListener("keydown", e=>{
+        const tile = e.target.closest(".fs-group-region");
+        if(tile && (e.key === "Enter" || e.key === " ")){
+          e.preventDefault(); jumpGroup(tile.dataset.gid);
         }
       });
 
