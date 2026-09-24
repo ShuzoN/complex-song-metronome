@@ -2960,7 +2960,11 @@
 
   /* DrumPlayback … 再生中のドラム。PlaybackScheduler の拍の頭ごとの通知を受けて、
      ① その拍の打点を同じ時刻軸で予約する（BPM・到達BPM・speed・遅延補正はクリックと同じものに乗る）
-     ② 予約した拍の時刻を控え、パッドを叩いた時刻を「どのグループのどのパートの何拍目」へ引き直す（重ね録り） */
+     ② 予約した拍の時刻を控え、パッドを叩いた時刻を「どのグループのどのパートの何拍目」へ引き直す（重ね録り）
+     ③ 選んだ範囲だけをくり返す再生（range*）。通常の再生とは別に、自前の先読みループで
+        クリックとドラムをその都度予約する。編集対象（DrumTarget）が変わったら自動で止まる。
+        画面（DrumView）は開始・停止・いま鳴っている位置の読み取りだけを行い、
+        カーソルの表示位置の描画・アニメーションは画面側に残す */
   const DrumPlayback = (() => {
     const KEY = "csm:drums.on";
     let on = true;             // on＝メトロノーム画面でも鳴らす（端末に保存）
@@ -2968,6 +2972,7 @@
     try{ on = window.localStorage.getItem(KEY) !== "0"; }catch(_){}
     const log = [];            // 予約した拍の頭 {time, len, gid, rep, cb}（時刻順）
     let flash = null;          // 発音時刻に合わせてパッドを光らせる（ドラム入力画面）
+    let rangeStopped = null;   // 範囲の再生が止まったとき（対象が変わっての自動停止も含む）に画面へ知らせる
     const hook = {
       beat(e, time, len){
         log.push({time, len, gid:e.gid, rep:e.rep, cb:e.cb});
@@ -3010,13 +3015,65 @@
       const p = DrumService.unswing(l.gid, loc.pi, loc.p + f);
       return {gid: l.gid, pi: loc.pi, p: ((p % nb) + nb) % nb};
     }
+    /* ---- 範囲の再生（RangeDrumのくり返し再生） ---- */
+    const RANGE_AHEAD = 0.12;
+    let rangeTimer = null, rangeStartRev = null, rangePos = 0, rangeNext = 0;
+    const rangeMarks = [];   // 予約した区切り {time, p, len, end}（いま鳴っている位置の算出に使う）
+    const rangeValid = () => DrumRange.valid();
+    function rangePump(){
+      const t = DrumTarget.get(), g = rangeStartRev != null && Store.findGroup(t.gid), pt = g && DrumDomain.partsOf(g)[t.part];
+      if(!pt || !rangeValid() || DrumTarget.rev() !== rangeStartRev){ stopRange(); return; }
+      const rs = DrumDomain.partRhythms(g, pt), slots = DrumService.playSlots(g.id, t.part);
+      const bpm = Domain.effectiveBpm(g, Store.getState().bpm) * SpeedService.rate(), limit = SoundGateway.now() + RANGE_AHEAD;
+      for(let guard = 0; rangeNext < limit && guard < 256; guard++){
+        if(rangePos < DrumRange.rin() - 1e-9 || rangePos >= DrumRange.rout() - 1e-9) rangePos = DrumRange.rin();   // 範囲の頭へ戻る
+        const b = Math.floor(rangePos + 1e-9), end = Math.min(b + 1, DrumRange.rout());
+        const loc = DrumDomain.locate(rs, b), r = rs[loc.bar] || rs[rs.length - 1];
+        const len = Domain.rhythmSeconds(r.den, bpm), tp = Domain.tupletOf(r), at = q => rangeNext + (q - rangePos) * len;
+        const inside = q => q >= rangePos - 1e-9 && q < end - 1e-9;
+        for(let k = 0; k < tp; k++){ const q = b + k / tp; if(inside(q)) SoundGateway.click(Domain.clickLevel(r, loc.beat, k), at(q), len / tp); }
+        for(const h of (slots[b] || [])){ const q = b + h.f; if(inside(q)){ SoundGateway.drum(h.inst, at(q)); if(flash) flash(h.inst, at(q)); } }
+        rangeMarks.push({time: rangeNext, p: rangePos, len, end});
+        if(rangeMarks.length > 32) rangeMarks.shift();
+        rangeNext = at(end); rangePos = end;
+      }
+    }
+    // 選んだ範囲の再生を始める。始められなければ false（画面は何もしないでよい）
+    function startRange(){
+      if(!rangeValid()) return false;
+      if(Transport.armKind()) Transport.armCancel(); else if(Transport.running()) Transport.stop(false);
+      SoundGateway.ensure();
+      rangeStartRev = DrumTarget.rev(); rangePos = DrumRange.rin(); rangeNext = SoundGateway.now() + 0.08; rangeMarks.length = 0;
+      rangeTimer = setInterval(rangePump, 25); rangePump();
+      DrumEditSession.clearSelection();
+      return true;
+    }
+    // 止める。もともと鳴っていなければ false（画面は何もしないでよい）
+    function stopRange(){
+      if(!rangeTimer) return false;
+      clearInterval(rangeTimer); rangeTimer = null; rangeStartRev = null; rangeMarks.length = 0;
+      SoundGateway.cancelPending();
+      if(rangeStopped) rangeStopped();
+      return true;
+    }
+    // いま鳴っている位置（パートの拍）
+    function rangeHeardPos(){
+      const now = SoundGateway.now();
+      let m = null; for(const x of rangeMarks) if(x.time <= now) m = x;
+      return m ? Math.min(m.end, m.p + (now - m.time) / m.len) : null;
+    }
     return {
       hook, locate,
       clearLog(){ log.length = 0; },
       isOn: () => on,
       setOn(v){ on = !!v; try{ window.localStorage.setItem(KEY, on ? "1" : "0"); }catch(_){} },
       forceWhen(fn){ forced = fn; },
-      onFlash(fn){ flash = fn; }
+      onFlash(fn){ flash = fn; },
+      onRangeStop(fn){ rangeStopped = fn; },
+      startRange, stopRange,
+      toggleRange: () => rangeTimer ? stopRange() : startRange(),
+      rangePlaying: () => !!rangeTimer,
+      rangeValid, rangeHeardPos
     };
   })();
 
@@ -6245,53 +6302,26 @@
        選んだ範囲（パートの拍位置 rin〜rout）だけをくり返す。Transport とは別の小さな先読みスケジューラで、
        クリックと打点を同じ AudioContext 時刻に予約する。テンポはグループの BPM（到達BPM があれば開始側）× speed。
        範囲だけを確かめる用途なので、動画とは同期しない。範囲を動かすと次の拍から新しい範囲で回る */
+    /* 選んだ範囲の再生：スケジューリングは DrumPlayback（range*）に任せ、ここでは開始に
+       あわせた再描画・アニメーションの起動と、止まったとき（手動・対象が変わっての自動を問わず）の
+       画面の後始末（カーソル線を消して再描画）だけを行う */
     const RangePlay = (() => {
-      const AHEAD = 0.12;
-      let timer = null, startRev = null, pos = 0, next = 0;   // startRev＝始めたときの編集対象の版（変わったら止まる）
-      const marks = [];            // 予約した区切り {time, p, len, end}（再生位置の表示用）
-      const valid = () => DrumRange.valid();
-      function pump(){
-        const t = DrumTarget.get(), g = startRev != null && findGroup(t.gid), pt = g && DrumDomain.partsOf(g)[t.part];
-        if(!pt || !valid() || DrumTarget.rev() !== startRev){ stop(); return; }
-        const rs = DrumDomain.partRhythms(g, pt), slots = DrumService.playSlots(g.id, t.part);
-        const bpm = Domain.effectiveBpm(g, state().bpm) * SpeedService.rate(), limit = SoundGateway.now() + AHEAD;
-        for(let guard = 0; next < limit && guard < 256; guard++){
-          if(pos < DrumRange.rin() - 1e-9 || pos >= DrumRange.rout() - 1e-9) pos = DrumRange.rin();      // 範囲の頭へ戻る
-          const b = Math.floor(pos + 1e-9), end = Math.min(b + 1, DrumRange.rout());
-          const loc = DrumDomain.locate(rs, b), r = rs[loc.bar] || rs[rs.length - 1];
-          const len = Domain.rhythmSeconds(r.den, bpm), tp = Domain.tupletOf(r), at = q => next + (q - pos) * len;
-          const inside = q => q >= pos - 1e-9 && q < end - 1e-9;
-          for(let k = 0; k < tp; k++){ const q = b + k / tp; if(inside(q)) SoundGateway.click(Domain.clickLevel(r, loc.beat, k), at(q), len / tp); }
-          for(const h of (slots[b] || [])){ const q = b + h.f; if(inside(q)){ SoundGateway.drum(h.inst, at(q)); Pads.flashAt(h.inst, at(q)); } }
-          marks.push({time: next, p: pos, len, end});
-          if(marks.length > 32) marks.shift();
-          next = at(end); pos = end;
-        }
-      }
+      DrumPlayback.onRangeStop(() => {
+        headEl.classList.remove("range"); headEl.style.display = "none";
+        render();
+      });
       function start(){
-        if(!valid()) return;
-        if(Transport.armKind()) Transport.armCancel(); else if(Transport.running()) Transport.stop(false);
-        SoundGateway.ensure();
-        startRev = DrumTarget.rev(); pos = DrumRange.rin(); next = SoundGateway.now() + 0.08; marks.length = 0;
-        timer = setInterval(pump, 25); pump();
-        DrumEditSession.clearSelection();
+        if(!DrumPlayback.startRange()) return;
         render();
         if(!raf) raf = requestAnimationFrame(frame);
       }
-      function stop(){
-        if(!timer) return;
-        clearInterval(timer); timer = null; startRev = null; marks.length = 0;
-        SoundGateway.cancelPending();
-        headEl.classList.remove("range"); headEl.style.display = "none";
-        render();
-      }
-      // いま鳴っている位置（パートの拍）
-      function heardPos(){
-        const now = SoundGateway.now();
-        let m = null; for(const x of marks) if(x.time <= now) m = x;
-        return m ? Math.min(m.end, m.p + (now - m.time) / m.len) : null;
-      }
-      return {start, stop, toggle: () => timer ? stop() : start(), playing: () => !!timer, valid, heardPos};
+      return {
+        start, stop: DrumPlayback.stopRange,
+        toggle: () => DrumPlayback.rangePlaying() ? DrumPlayback.stopRange() : start(),
+        playing: DrumPlayback.rangePlaying,
+        valid: DrumPlayback.rangeValid,
+        heardPos: DrumPlayback.rangeHeardPos
+      };
     })();
     const playing = () => Transport.running() || RangePlay.playing();
 
