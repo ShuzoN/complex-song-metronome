@@ -5463,9 +5463,12 @@
         if(!total){ rulerEl.innerHTML = ""; return; }
         const W = rulerEl.clientWidth || 300, H = 18;
         let x = 0, g = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="曲全体">`;
-        spans.forEach(sp => {
-          const w = sp.nb / total * W;
-          g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" fill="${sp.gid === ui.gid && sp.pi === ui.part ? C.dcell_cur : C.dcell}"/>`;
+        // 区切りはグループ単位（パート・くり返しの帯はまとめる）
+        const cells = [];
+        spans.forEach(sp => { const c = cells[cells.length - 1]; if(c && !sp.head && c.gid === sp.gid) c.nb += sp.nb; else cells.push({gid: sp.gid, nb: sp.nb}); });
+        cells.forEach(c => {
+          const w = c.nb / total * W;
+          g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" fill="${c.gid === ui.gid ? C.dcell_cur : C.dcell}"/>`;
           x += w;
         });
         const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
