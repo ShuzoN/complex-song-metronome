@@ -81,8 +81,10 @@ class App {
   async currentGroupName(){ return (await this.page.locator("#drGroups .dr-chip.cur").innerText()).replace(/×\d+$/, "").trim(); }
   async currentPart(){ return Number(await this.page.locator("#drParts .dr-chip.cur").getAttribute("data-pi")); }
   async click(id){ await this.page.click("#" + id); }
-  async setStepSize(label){ await this.page.selectOption("#drStepSize", {label}); }
-  async stepSizeOptions(){ return this.page.locator("#drStepSize option").allInnerTexts(); }
+  // 歩幅は横に並んだボタン。並び順は粗い→細かい
+  async stepSizeOptions(){ return this.page.locator("#drStepSize button").evaluateAll(ts => ts.map(t => t.dataset.name)); }
+  async setStepSize(label){ await this.page.click(`#drStepSize button[data-name="${label}"]`); }
+  async stepSize(){ return this.page.locator("#drStepSize button.on").getAttribute("data-name"); }
 
   // パッド：指1本で叩いて離す（ステップ入力なら置いて1歩進む）
   async pad(inst){
