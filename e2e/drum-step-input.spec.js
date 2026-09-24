@@ -1,19 +1,19 @@
 /* ステップ入力：止まっているときにパッドを叩くと、カーソルの位置に置いて1歩進む */
-const { test, expect, groupOf } = require("./support/app");
+const { test, expect, groupOf, groupHits } = require("./support/app");
 
 const drumsOf = async (app, name) => groupOf(await app.exportFromDrums(), name).drums;
 
 test.describe("ステップ入力", () => {
   test.beforeEach(async ({app}) => { await app.loadFixture("01-plain"); await app.openDrums(); });
 
-  test("既定は8分で置いて進み、同時押しは同じ位置に置く。拍子1つのグループは2小節のパートになる", async ({app}) => {
+  test("既定は8分で置いて進み、同時押しは同じ位置に置く。置いていない小節は空きのまま（くり返さない）", async ({app}) => {
     await app.chord(["kick", "hh_close"]);
     await app.pad("hh_close");
     await app.pad("snare");
     await app.click("drStepFwd");            // 休符
     await app.pad("kick");
     const drums = await drumsOf(app, "A");
-    expect(drums).toEqual([{span: 2, hits: {hh_close: [0, 0.5], snare: [1], kick: [0, 2]}}]);
+    expect(drums).toEqual([{span: 1, hits: {hh_close: [0, 0.5], snare: [1], kick: [0, 2]}}, {span: 1, repeat: 3}]);
   });
 
   test("歩幅の候補は拍子の分母で決まり、よく使う順に横に並ぶ。16分の歩幅で細かく置ける", async ({app}) => {
@@ -89,32 +89,31 @@ test.describe("ステップ入力", () => {
   });
 });
 
-test.describe("ステップ入力とパートの境目", () => {
-  test("パートの終わりを越えると次のパートの頭へ移り、戻ると前のパートの最後の歩へ戻る", async ({app}) => {
+test.describe("ステップ入力と小節の境目", () => {
+  test("小節の境目はそのまま越えて進み、戻れる。どの小節にも置ける", async ({app}) => {
     await app.loadFixture("03-parts");
     await app.openDrums();
     await app.selectGroup("Aメロ");
     await app.setStepSize("4分");
-    for(let i = 0; i < 7; i++) await app.click("drStepFwd");      // パートA（2小節＝8拍）の最後の拍
-    expect(await app.currentPart()).toBe(0);
-    await app.click("drStepFwd");                                   // 終わりを越える
-    expect(await app.currentPart()).toBe(1);
-    await app.pad("kick");                                          // Bの頭に置く
+    for(let i = 0; i < 8; i++) await app.click("drStepFwd");      // 3小節目の頭（シミレだった小節）
+    await app.pad("crash");
     await app.click("drStepBack"); await app.click("drStepBack");
-    expect(await app.currentPart()).toBe(0);
-    await app.pad("crash");                                         // Aの最後の拍（7拍目）に置く
-    const drums = groupOf(await app.exportFromDrums(), "Aメロ").drums;
-    expect(drums[0].hits.crash).toEqual([7]);
-    expect(drums[1].hits.kick).toEqual([0]);
+    await app.pad("crash");                                         // 2小節目の最後の拍（7拍目）
+    for(let i = 0; i < 8; i++) await app.click("drStepFwd");      // 置いて1歩進んだ8拍目から、5小節目（フィル）の頭へ
+    await app.pad("kick");
+    const doc = await app.exportFromDrums();
+    const h = groupHits(groupOf(doc, "Aメロ"));
+    expect(h.crash).toEqual([7, 8, 19.5]);                          // 19.5 はフィルに元からある crash
+    expect(h.kick.filter(p => p >= 16)).toEqual([16]);
   });
 
-  test("最後のパートの終わりより先には置けない", async ({app}) => {
+  test("グループの終わりより先には置けない", async ({app}) => {
     await app.loadFixture("02-basic-beat");
     await app.openDrums();
     await app.setStepSize("4分");
-    for(let i = 0; i < 8; i++) await app.click("drStepFwd");
+    for(let i = 0; i < 16; i++) await app.click("drStepFwd");
     await app.pad("crash");
     const drums = groupOf(await app.exportFromDrums(), "Aメロ").drums;
-    expect(drums[0].hits.crash).toBeUndefined();
+    expect(drums.every(d => !d.hits.crash)).toBe(true);
   });
 });

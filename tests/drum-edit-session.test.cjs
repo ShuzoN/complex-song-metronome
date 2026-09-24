@@ -39,10 +39,10 @@ test('DrumEditSession は具体の計算（DrumDomain・DOM）を持たない中
 
 test('DrumEditSession が公開する操作の一覧', () => {
   const expected = [
-    'selectTarget', 'selectOccurrence', 'followPlayhead', 'guardRangeTap', 'toggleHit',
+    'selectTarget', 'followPlayhead', 'guardRangeTap', 'toggleHit',
     'setSelection', 'clearSelection', 'seekTo',
     'beginRangeDrag', 'dragRangeTo', 'spanRange', 'normalizeRange', 'openRangeAt', 'setRangeOut', 'closeRange',
-    'commitCopy', 'clearEdit', 'retreatPart'
+    'commitCopy', 'clearEdit'
   ];
   for (const name of expected) {
     assert.ok(new RegExp(`function ${name}\\(`).test(drumEditSession), `DrumEditSession.${name} が見つからない`);

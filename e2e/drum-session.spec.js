@@ -10,16 +10,17 @@ async function expandCard(page, i){
 }
 
 test.describe("編集対象", () => {
-  test("閉じて開き直すと、前に編集していたグループとパートのまま", async ({app, page}) => {
+  test("閉じて開き直すと、前に編集していたグループとカーソルの位置のまま", async ({app, page}) => {
     await app.loadFixture("03-parts");
     await app.openDrums();
-    await app.selectGroup("Aメロ");
-    await app.selectPart(1);
+    await app.selectGroup("イントロ");
+    for(let i = 0; i < 3; i++) await app.click("drStepFwd");      // 7/8 の既定の歩幅（16分＝半拍）で3歩
     await page.keyboard.press("Escape");
     await expect(page.locator("#drum")).toBeHidden();
     await app.openDrums();
-    await expect(app.groupChip("Aメロ")).toHaveClass(/\bcur\b/);
-    expect(await app.currentPart()).toBe(1);
+    await expect(app.groupChip("イントロ")).toHaveClass(/\bcur\b/);
+    await app.pad("crash");                                        // 1.5拍目に置かれる
+    expect(groupOf(await app.exportFromDrums(), "イントロ").drums[0].hits.crash).toEqual([1.5]);
   });
 
   test("編集していたグループが消えたら、別のグループへ移る", async ({app, page}) => {
@@ -81,18 +82,18 @@ test.describe("拍子の変更への追随", () => {
 });
 
 test.describe("メトロノーム画面との行き来", () => {
-  test("パートを作ったグループのカードに、ドラムの構成が出る", async ({app, page}) => {
+  test("ドラムのあるグループのカードに、ドラムの構成が出る", async ({app, page}) => {
     await app.loadFixture("03-parts");
     await expect(card(page, 0).locator(".chip.drm")).toHaveText("ドラム 2小節×2 + 1小節");
     await expect(card(page, 1).locator(".chip.drm")).toHaveCount(0);
   });
 
-  test("ドラム画面でパートを作ると、閉じたあとのカードにも出る", async ({app, page}) => {
+  test("ドラム画面で置くと、閉じたあとのカードにも出る（空いている小節は休み）", async ({app, page}) => {
     await app.loadFixture("01-plain");
     await app.openDrums();
     await app.pad("kick");
     await app.closeDrums();
-    await expect(card(page, 0).locator(".chip.drm")).toHaveText("ドラム 2小節");
+    await expect(card(page, 0).locator(".chip.drm")).toHaveText("ドラム 1小節 + 休み3小節");
   });
 });
 
