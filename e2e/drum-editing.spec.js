@@ -282,3 +282,25 @@ test.describe("連符の置き直しの解除", () => {
   });
 
 });
+
+test.describe("選んだ音をまるごと1つの連符にする", () => {
+  const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
+  test("6つ選んで6連を押すと選んだ拍全体が1つの6連になって均等に並び、もう一度押すと入り切るストレートに置き直す", async ({app, page}) => {
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    // 8分で 0 kick・1 snare・1.5 snare・2 kick・3 snare・3.5 snare（4拍に6つ）
+    for(const i of ["kick", null, "snare", "snare", "kick", null, "snare", "snare"]) i ? await app.pad(i) : await app.click("drStepFwd");
+    for(let i = 0; i < 8; i++) await app.click("drStepBack");
+    await app.click("drRange"); for(let i = 0; i < 8; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await stepBtn(app, "8分6連");
+    let d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toEqual([[0, 4, 6]]);
+    expect(d.hits).toEqual({snare: [0.667, 1.333, 2.667, 3.333], kick: [0, 2]});
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "4分6連");
+    await stepBtn(app, "4分6連");                         // 解除：4分には6つ入らないので8分へ
+    d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits).toEqual({snare: [0.5, 1.5, 2.5, 3.5], kick: [0, 2]});
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
+  });
+});
