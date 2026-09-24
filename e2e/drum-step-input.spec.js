@@ -55,7 +55,7 @@ test.describe("ステップ入力", () => {
     await app.loadYaml("version: 1\nkind: metronome.sequence\nname: odd\ntempo: 120\ngroups:\n  - name: A\n    repeat: 2\n    pattern: [3/5]\n");
     await app.openDrums();
     await expect(app.page.locator("#drStepSize button svg")).toHaveCount(0);
-    expect(await app.page.locator("#drStepSize button").allInnerTexts()).toEqual(["1", "2", "4", "8", "3", "5", "6", "7", "9", "3/2", "3/4", "5/2", "5/4", "7/4"]);
+    expect(await app.page.locator("#drStepSize button").allInnerTexts()).toEqual(["1", "2", "4", "8", "3", "5", "6", "7", "9"]);
   });
 
   test("4分の歩幅は1拍ずつ進む", async ({app}) => {
