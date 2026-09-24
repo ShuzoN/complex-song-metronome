@@ -625,8 +625,8 @@
   .dr-rangetext{color:var(--dmuted);white-space:nowrap;font-size:11px}
   #drAutofix.warn{border-color:var(--dwarn);color:var(--dwarn)}
 
-  .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);gap:8px;min-height:0}
-  .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0}
+  .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:8px;min-height:0}
+  .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0;grid-row:2}
   .dr-prow{display:grid;gap:4px;min-height:0}
   .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:0;border:1px solid var(--dline2);
     background:var(--dpanel);font-size:12px;color:var(--dmuted);position:relative;overflow:hidden;min-width:0;cursor:pointer}
@@ -640,7 +640,7 @@
   .dr-pad.hit.cym{box-shadow:inset 0 0 0 2px var(--dcym)}
   .dr-pad.hit.drm{box-shadow:inset 0 0 0 2px var(--ddrm)}
   .dr-pad.hit.kick{box-shadow:inset 0 0 0 2px var(--dtext)}
-  .dr-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:0}
+  .dr-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:0;grid-row:2}
   .dr-mid button{width:52px;height:28px;padding:0;font-size:11px}
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
@@ -648,23 +648,35 @@
   .dr-mid .prim{background:var(--patina);border-color:var(--patina);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
-  #drStepSize{display:none}
-  .dr-mid.stepping .dr-steprow,.dr-mid.stepping #drStepSize{display:flex}
+  .dr-mid.stepping .dr-steprow{display:flex}
+  /* 歩幅のボタン列：パッドの上の1段。粗い→細かいの順に横に並べ、いまの歩幅だけ点灯させる。
+     幅が足りなければ横にスクロールする（縦持ちでは「2拍／3連」を2行にして詰める） */
+  .dr-stepbar{grid-column:1 / -1;grid-row:1;display:flex;align-items:center;gap:8px;height:36px;min-width:0;transition:opacity .15s}
+  .dr-stepbar.off{opacity:.4}
+  .dr-steplbl{flex:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--dmuted);white-space:nowrap}
+  .dr-steps{display:flex;gap:3px;flex:1 1 0;min-width:0;height:100%;overflow-x:auto;scrollbar-width:none;touch-action:pan-x}
+  .dr-steps::-webkit-scrollbar{display:none}
+  .dr .dr-steps button{flex:1 0 auto;min-width:40px;height:100%;padding:0 4px;gap:0;flex-direction:column;font-family:var(--body);
+    font-size:11px;line-height:12px;letter-spacing:0;color:var(--dmuted)}
+  .dr-steps button svg{display:block;height:22px;width:auto;flex:none}
+  .dr-steps button small{font-family:var(--mono);font-size:8.5px;line-height:9px;color:var(--dfaint)}
+  .dr-steps button.on small{color:var(--dmuted)}
+  .dr-steps button b{font-weight:inherit;font-family:var(--mono);font-size:12px}
+  .dr .dr-steps button.on{border-color:var(--don);color:var(--dtext);background:var(--don-bg);font-weight:600}
   .dr-dot{width:9px;height:9px;border-radius:50%;background:var(--dfaint)}
   #drRec.on{border-color:var(--drec);color:var(--drec)}
   #drRec.on .dr-dot{background:var(--drec);animation:dr-blink 1s steps(2) infinite}
   @keyframes dr-blink{50%{opacity:.25}}
   @media (prefers-reduced-motion:reduce){#drRec.on .dr-dot{animation:none}}
 
-  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（▶■ / STEP・● / ←→・歩幅） */
+  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（▶■ / STEP・● / ←→） */
   @media (orientation:landscape){
     .dr-pads{grid-template-columns:minmax(0,1fr) 110px minmax(0,1fr)}
     .dr-mid{display:grid;grid-template-columns:52px 52px;align-content:center;justify-content:center;gap:4px 6px}
     .dr-mid .dr-playrow{grid-column:1 / 3;grid-row:1;justify-content:center}
     #drStep{grid-column:1;grid-row:2}
     #drRec{grid-column:2;grid-row:2}
-    .dr-steprow{grid-column:1;grid-row:3}
-    #drStepSize{grid-column:2;grid-row:3}
+    .dr-steprow{grid-column:1 / 3;grid-row:3;justify-content:center}
   }
   /* 横持ちで背が低い（スマホ）：グループとパートの2行を横に並べて1行にし、ボタンも低くして譜面に高さを回す */
   @media (orientation:landscape) and (max-height:480px){
@@ -680,17 +692,22 @@
     .dr-bar2 button,.dr-bar2 select,.dr-bar3 button{height:22px}
     .dr-mid button,.dr-mid select{height:24px}
     .dr-mid .dr-playrow button{height:28px}
+    .dr-pads{row-gap:4px}
+    .dr-stepbar{height:32px}
+    .dr-steps button svg{height:19px}
   }
 
   /* 縦持ち：パッドを 2 列に積み、中央の操作列は横一列にする */
   @media (orientation:portrait){
     .dr{grid-template-rows:minmax(0,.9fr) minmax(0,.555fr)}
-    .dr-pads{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:6px}
-    .dr-mid{grid-column:1 / 3;grid-row:1;flex-direction:row;justify-content:center;gap:8px}
+    .dr-pads{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);gap:6px}
+    .dr-mid{grid-column:1 / 3;grid-row:2;flex-direction:row;justify-content:center;gap:8px}
     .dr-mid button{width:auto;min-width:44px;padding:0 10px}
     .dr-mid .dr-playrow button{height:30px}
     .dr-steprow{gap:6px}
-    .dr-side{grid-row:2}
+    .dr-side{grid-row:3}
+    .dr-steplbl{display:none}
+    .dr .dr-steps button{min-width:34px;padding:0 2px}
     .dr-pad{font-size:11px}
     .dr-pad.big{font-size:12px}
     .dr-meter{display:none}
@@ -955,6 +972,11 @@
     </div>
   </section>
   <section class="dr-pads" id="drPads">
+    <!-- 歩幅（ステップ入力で1歩ぶん進む長さ）。粗い→細かいの順に横に並べたボタンから選ぶ -->
+    <div class="dr-stepbar" id="drStepBar">
+      <span class="dr-steplbl">歩幅</span>
+      <div class="dr-steps" id="drStepSize" role="radiogroup" aria-label="歩幅"></div>
+    </div>
     <div class="dr-side" id="drLeft"></div>
     <div class="dr-mid" id="drMid">
       <div class="dr-playrow">
@@ -966,7 +988,6 @@
         <button id="drStepBack" type="button" aria-label="1歩戻る">←</button>
         <button id="drStepFwd" type="button" aria-label="1歩進む（休符）">→</button>
       </div>
-      <select id="drStepSize" aria-label="歩幅"></select>
       <button id="drRec" type="button" aria-label="重ね録り" title="重ね録り"><span class="dr-dot"></span></button>
     </div>
     <div class="dr-side" id="drRight"></div>
@@ -1257,6 +1278,13 @@
       });
       return out.sort((a, b) => a.at - b.at);
     }
+    /* 連符の音符の分母：beats 拍を n 等分したとき、譜面ではどの音符の n 連か（4/4 の2拍3連→4＝4分3連、4拍5連→4、
+       1拍6連→16）。n 連は「n 以下で最大の2の冪」個ぶんの長さで数える。慣用の音価（2の冪）にならなければ 0 */
+    const pow2Floor = n => 2 ** Math.floor(Math.log2(n));
+    function tupletNote(den, beats, n){
+      const x = den * pow2Floor(n) / beats;
+      return Number.isInteger(x) && x >= 1 && (x & (x - 1)) === 0 ? x : 0;
+    }
     const tupletAt = (tuplets, b) => (tuplets || []).find(t => b >= t.at && b < t.at + t.beats) || null;
     // 区間 t を置く（重なる区間は外す）／拍 b を含む区間を外す。どちらも新しい配列を返す
     const withTuplet = (tuplets, t, nb) => normTuplets((tuplets || []).filter(u => !overlaps(u, t)).concat([t]), nb);
@@ -1524,7 +1552,7 @@
             SPAN_MAX, REPEAT_MAX, normSpan, normRepeat, autoSpan, repeatRhythms, passBeats, partRhythms, partBeats,
             makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto,
             SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
-            baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
+            baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, pow2Floor, tupletNote, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
             respanTuplets, remapTuplets, remapParts,
             MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet};
   })();
@@ -5877,7 +5905,8 @@
           (sp.grid.tuplets || []).forEach(t => {
             if(t.at >= sp.nb) return;
             const yy = stemTop - 6, x1 = xAt(sp, t.at) + 1, x2 = xAt(sp, Math.min(sp.nb - 1e-6, t.at + t.beats * (t.n - 1) / t.n)) + 8, cx = (x1 + x2) / 2;
-            const label = t.beats > 1 ? t.n + ":" + t.beats : String(t.n);
+            // 慣用の音符の連符（4分3連・8分5連…）は数だけ。音価にならない割り方だけ「n:拍数」で示す
+            const label = t.beats === 1 || DrumDomain.tupletNote(DrumDomain.denAt(sp.rs, t.at), t.beats, t.n) ? String(t.n) : t.n + ":" + t.beats;
             g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="${C.dtext}" stroke-width="1"/>`;
             g += `<rect x="${cx-label.length*3.5-2}" y="${yy-6}" width="${label.length*7+4}" height="11" fill="${C.dpanel}"/>`;
             g += `<text x="${cx}" y="${yy+3}" fill="${C.dtext}" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${label}</text>`;
@@ -6404,6 +6433,27 @@
 
     /* ---------- 操作列・状態表示 ---------- */
     const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+    /* 歩幅のボタンの音符記号（SVG）。x＝音符の分母（2・4・8・16・32・64）、n＝連符の数（0なら単音）。
+       単音は旗付きの1音、連符は3つの音を連桁でつなぎ、上に括弧と n を置く（5連・7連なども代表の3音で描く） */
+    function noteSymbol(x, n){
+      const beams = Math.max(0, Math.log2(x) - 2), hollow = x <= 2;
+      const head = cx => '<ellipse cx="' + cx + '" cy="20" rx="3.1" ry="2.2" transform="rotate(-20 ' + cx + ' 20)"' +
+        (hollow ? ' fill="none" stroke="currentColor" stroke-width="1.1"' : ' fill="currentColor"') + "/>";
+      const stem = (cx, top) => '<line x1="' + (cx + 2.8) + '" y1="19.5" x2="' + (cx + 2.8) + '" y2="' + top + '" stroke="currentColor" stroke-width="1.1"/>';
+      if(!n){
+        const top = beams > 2 ? 2 : 4;
+        let g = head(5) + stem(5, top);
+        for(let k = 0; k < beams; k++) g += '<path d="M7.8 ' + (top + k * 2.9) + ' c0.3 2.2 4.4 2.6 3.3 6.2" fill="none" stroke="currentColor" stroke-width="1.2"/>';
+        return '<svg viewBox="0 0 14 24" width="14" height="24" aria-hidden="true">' + g + "</svg>";
+      }
+      let g = "";
+      [5, 13, 21].forEach(cx => { g += head(cx) + stem(cx, 8.5); });
+      for(let k = 0; k < beams; k++) g += '<rect x="7.3" y="' + (8 + k * 3.1) + '" width="17" height="1.9" fill="currentColor"/>';
+      g += '<path d="M3.5 6V3.6H10M18 3.6H24.5V6" fill="none" stroke="currentColor" stroke-width=".8"/>' +
+        '<text x="14" y="6.3" font-size="7.5" font-weight="700" text-anchor="middle" fill="currentColor" font-family="var(--mono)">' + n + "</text>";
+      return '<svg viewBox="0 0 28 24" width="28" height="24" aria-hidden="true">' + g + "</svg>";
+    }
+    let stepSizes = {key: null, list: []};   // 歩幅のボタン列（controls が拍子の分母・基本分割ごとに作り直す）
     function controls(){
       const g = group(), running = Transport.running(), cur = Transport.cur();
       const chips = $("drGroups"), keep = chips.scrollLeft;
@@ -6482,26 +6532,62 @@
       $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
       $("drAutofix").classList.toggle("warn", unc > 0);
       $("drHint").style.display = (pt && !pt.hits.length && !DrumSelection.get() && !DrumRange.mode()) ? "block" : "none";
-      // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
+      // 歩幅：単音と連符を音符の記号のボタンで並べる（拍が4分音符なら 1拍3等分＝8分3連、2拍3等分＝4分3連…）。
+      // 並びは 単音（4分・8分・16分・32分）→ 8分の連符 → 4分の連符 → 16分の連符 → その他の連符（2分・32分）
+      $("drStepBar").classList.toggle("off", !(DrumStepInput.mode() && !playing()));
       if(g){
         const b = Math.min(nbOf() - 1, Math.floor(DrumCursor.get() + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
-        const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
-        const sel = $("drStepSize"), key = den + ":" + base;
-        if(sel.dataset.key !== key){
-          sel.dataset.key = key;
-          sel.innerHTML = '<option value="0">' + divName(base) + '</option><option value="1">拍</option>' +
-            [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("") +
-            DrumDomain.MULTI_STEPS.map(([m, n]) => '<option value="' + m + ":" + n + '">' + m + "拍" + n + "連</option>").join("");
+        const key = den + ":" + base;
+        if(stepSizes.key !== key){
+          const note = x => ({1:"全",2:"2分",4:"4分",8:"8分",16:"16分",32:"32分",64:"64分"})[x] || "";
+          const pow2 = DrumDomain.pow2Floor;
+          let list;
+          if(note(den)){
+            /* 慣用の分母（4分・8分…が1拍）：音符で組み立てる。
+               単音 4分・8分・16分・32分（拍が4分音符のとき）→ 連符は音符ごとに 3・5・6・7・9 連。
+               x 分音符の n 連は「n 以下で最大の2の冪」個ぶんの長さ＝ m 拍にわたる。m が整数で 1〜TUP_BEATS_MAX のものだけ出す
+               （m=1 なら1拍を n 等分する歩幅 n、m>1 なら "m:n" の区間） */
+            const simple = [1, 2, 4, 8].map(d => ({v: d === base ? 0 : d, top: "", name: note(den * d) || "拍", x: den * d, n: 0, plain: String(d)}));
+            const GROUPS = [[8, [3, 5, 6, 7, 9]], [4, [3, 5, 6, 7, 9]], [16, [3, 5, 6, 7, 9]], [2, [3, 5]], [32, [3, 5, 6, 7, 9]]];
+            const tuplets = [];
+            GROUPS.forEach(([x, ns]) => ns.forEach(n => {
+              const m = den * pow2(n) / x;
+              if(!Number.isInteger(m) || m < 1 || m > DrumDomain.TUP_BEATS_MAX) return;
+              tuplets.push({v: m === 1 ? (n === base ? 0 : n) : m + ":" + n, top: note(x), name: n + "連", x, n, plain: m === 1 ? String(n) : n + "/" + m});
+            }));
+            list = simple.concat(tuplets);
+            // 基本の格子が上のどれにも当たらない（分母が1・2で基本が16分・8分など）ときは頭に足す
+            if(!list.some(o => o.v === 0)) list.unshift({v: 0, top: "", name: note(den * base) || base + "分割", x: den * base, n: 0, plain: String(base)});
+          } else {
+            // 分母が 5・7… の拍子：音符にならないので、1拍を d 等分（d）と m 拍を n 等分（n/m）の数字で出す
+            const single = d => ({v: d === base ? 0 : d, top: "", name: d === 1 ? "拍" : d + "連", x: 0, n: 0, plain: String(d)});
+            list = (base > 9 ? [single(base)] : []).concat([1, 2, 4, 8, 3, 5, 6, 7, 9].map(single))
+              .concat(DrumDomain.MULTI_STEPS.map(([m, n]) => ({v: m + ":" + n, top: m + "拍", name: n + "連", x: 0, n, plain: n + "/" + m})));
+          }
+          list = list.filter((o, i, a) => a.findIndex(y => y.v === o.v) === i);
+          // 全音符以上の歩幅（分母が1・2の拍子で出る）は使わないので出さない。並びは上で組んだ順のまま
+          stepSizes = {key, list: list.filter(o => o.v === 0 || !note(den) || o.x > 1)};
+          $("drStepSize").innerHTML = stepSizes.list.map((o, i) =>
+            '<button type="button" role="radio" data-i="' + i + '" data-name="' + o.top + o.name + '" title="' + o.top + o.name + '" aria-label="' + o.top + o.name + '">' +
+            (note(den) && o.x > 1 ? noteSymbol(o.x, o.n) + "<small>" + o.x + "</small>" : "<b>" + o.plain + "</b>") + "</button>").join("");
         }
-        if(DrumStepInput.size() === base) DrumStepInput.setSize(0);
-        sel.value = String(DrumStepInput.size());
-        if(!sel.selectedOptions.length){ DrumStepInput.setSize(0); sel.value = "0"; }
+        if(DrumStepInput.size() === base || (base === 1 && DrumStepInput.size() === 1)) DrumStepInput.setSize(0);
+        let idx = stepSizes.list.findIndex(o => o.v === DrumStepInput.size());
+        if(idx < 0){ DrumStepInput.setSize(0); idx = stepSizes.list.findIndex(o => o.v === 0); }
+        [...$("drStepSize").children].forEach((t, i) => { t.classList.toggle("on", i === idx); t.setAttribute("aria-checked", String(i === idx)); });
+        const btn = $("drStepSize").children[idx], box = $("drStepSize");
+        if(btn && (btn.offsetLeft < box.scrollLeft || btn.offsetLeft + btn.offsetWidth > box.scrollLeft + box.clientWidth))
+          box.scrollLeft = btn.offsetLeft - (box.clientWidth - btn.offsetWidth) / 2;
       }
       $("drRange").disabled = running;
-      // カーソルが連符の区間の中にあるときだけ「◯拍◯連を外す」
+      // カーソルが連符の区間の中にあるときだけ「◯分◯連を外す」
       const tup = !running && DrumTarget.gid() && DrumCursor.get() < nbOf() ? DrumService.tupletAt(DrumTarget.gid(), DrumTarget.part(), Math.floor(DrumCursor.get() + 1e-6)) : null;
       $("drTupOff").hidden = !tup;
-      if(tup) $("drTupOff").textContent = (tup.beats > 1 ? tup.beats + "拍" : "") + tup.n + "連を外す";
+      if(tup){
+        // 歩幅のボタンと同じ呼び方（8分3連・4分5連…）。音符にならない割り方は「2拍5連」のように拍数で
+        const x = DrumDomain.tupletNote(DrumDomain.denAt(partRs(), tup.at), tup.beats, tup.n), nm = {2:"2分",4:"4分",8:"8分",16:"16分",32:"32分",64:"64分"}[x];
+        $("drTupOff").textContent = (nm || (tup.beats > 1 ? tup.beats + "拍" : "")) + tup.n + "連を外す";
+      }
       $("drPaste").hidden = !DrumClipboard.get();
       $("drPaste").disabled = running;
       if(DrumClipboard.get()) $("drPaste").textContent = "貼り付け " + DrumClipboard.get().items.length + "音";
@@ -6644,7 +6730,7 @@
         controls();
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); DrumStepInput.toggleMode(); controls(); });
-      $("drStepSize").addEventListener("change", () => { const v = $("drStepSize").value; DrumStepInput.setSize(v.indexOf(":") >= 0 ? v : Number(v)); controls(); });
+      $("drStepSize").addEventListener("click", e => { const t = e.target.closest("button[data-i]"), o = t && stepSizes.list[Number(t.dataset.i)]; if(o){ DrumStepInput.setSize(o.v); controls(); } });
       // パート
       $("drSpan").addEventListener("change", () => { if(DrumTarget.gid()){ DrumEditSession.clearEdit(); DrumService.setSpan(DrumTarget.gid(), DrumTarget.part(), Number($("drSpan").value)); } });
       $("drRepeat").addEventListener("change", () => { if(DrumTarget.gid()) DrumService.setRepeat(DrumTarget.gid(), DrumTarget.part(), Number($("drRepeat").value)); });
