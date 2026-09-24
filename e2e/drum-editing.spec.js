@@ -51,8 +51,60 @@ test.describe("範囲", () => {
     for(let i = 0; i < fromSteps; i++) await app.click("drStepFwd");
     await app.click("drRange");
     for(let i = fromSteps; i < toSteps; i++) await app.click("drStepFwd");
-    await app.click("drRout");
+   
   }
+
+  test("範囲を切り取ると、その中の打点が消えてクリップボードに残り、別の位置に貼れる", async ({app, page}) => {
+    await selectRange(app, 0, 2);                       // 1拍目（hh 0・0.5、kick 0）
+    await app.click("drRcut");
+    await expect(page.locator("#drRangebar")).not.toHaveClass(/\bshow\b/);
+    await expect(page.locator("#drPaste")).toHaveText("貼り付け 3音");
+    let d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.hits.hh_close.slice(0, 2)).toEqual([1, 1.5]);
+    expect(d.hits.kick).toEqual([2.5, 4, 6.5]);
+    for(let i = 0; i < 8; i++) await app.click("drStepFwd"); // 4拍目へ
+    await app.click("drPaste");
+    d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.hits.kick).toEqual([2.5, 4, 4, 6.5]);          // 4拍目の頭には元から kick がある（重ねて置く）
+    expect(d.hits.hh_close.filter(p => p === 4 || p === 4.5)).toEqual([4, 4, 4.5, 4.5]);
+  });
+
+  test("五線の外をダブルタップすると、範囲も音符の選択も外れる", async ({app, page}) => {
+    await selectRange(app, 0, 4);
+    await note(app, "snare", 1, 0).click();
+    await expect(page.locator("#drSelbar")).toHaveClass(/\bshow\b/);
+    const box = await page.locator("#drScore").boundingBox();
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + 12);   // 譜面の上の空白
+    await expect(page.locator("#drSelbar")).not.toHaveClass(/\bshow\b/);
+    await expect(page.locator("#drRangebar")).not.toHaveClass(/\bshow\b/);
+  });
+
+  test("元に戻す・やり直すは範囲や音符を選んでいる間も出ている", async ({app, page}) => {
+    await selectRange(app, 0, 2);
+    await expect(page.locator("#drUndo")).toBeVisible();
+    await expect(page.locator("#drRedo")).toBeVisible();
+    await expect(page.locator("#drAutofix")).toBeHidden();
+  });
+
+  test("範囲を選んだまま元に戻せる", async ({app, page}) => {
+    await selectRange(app, 0, 2);
+    await app.click("drRdel");
+    expect((await drumsOf(app, "Aメロ"))[0].hits.kick).toEqual([2.5, 4, 6.5]);
+    await expect(page.locator("#drRangebar")).toHaveClass(/\bshow\b/);
+    await app.click("drUndo");
+    expect((await drumsOf(app, "Aメロ"))[0].hits.kick).toEqual([0, 2.5, 4, 6.5]);
+  });
+
+  test("範囲を選んだまま音符を選んで動かせ、選択を外すと範囲の操作に戻る", async ({app, page}) => {
+    await selectRange(app, 0, 4);                       // 1〜2拍目
+    await note(app, "snare", 1, 0).click();
+    await expect(page.locator("#drSelbar")).toHaveClass(/\bshow\b/);
+    await expect(page.locator("#drRangebar")).not.toHaveClass(/\bshow\b/);
+    await app.click("drSelRight");                      // 格子（16分）1つぶん後ろへ
+    expect((await drumsOf(app, "Aメロ"))[0].hits.snare).toEqual([1.25, 3, 5, 7]);
+    await app.click("drSelClr");
+    await expect(page.locator("#drRangebar")).toHaveClass(/\bshow\b/);
+  });
 
   test("範囲を削除すると、その中の打点だけが消える", async ({app}) => {
     await selectRange(app, 8, 16);                      // 3〜4拍目の頭から2小節目の頭まで（4拍〜8拍）
@@ -176,7 +228,7 @@ test.describe("選んだ部分を連符に置き直す", () => {
     for(let i = 0; i < fromSteps; i++) await app.click("drStepFwd");
     await app.click("drRange");
     for(let i = fromSteps; i < toSteps; i++) await app.click("drStepFwd");
-    await app.click("drRout");
+   
   }
   const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
 
@@ -229,7 +281,7 @@ test.describe("連符の置き直しの解除", () => {
   const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
 
   test("もう8分3連になっている範囲でもう一度8分3連を押すと、8分に置き直して歩幅も8分になる", async ({app, page}) => {
-    await app.click("drRange"); for(let i = 0; i < 2; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await app.click("drRange"); for(let i = 0; i < 2; i++) await app.click("drStepFwd");
     await stepBtn(app, "8分3連");
     await stepBtn(app, "8分3連");                         // 解除
     await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
@@ -244,7 +296,7 @@ test.describe("連符の置き直しの解除", () => {
     await app.openDrums();
     for(const i of ["kick", "snare"]) await app.pad(i);   // 8分で 0・0.5
     await app.click("drStepBack"); await app.click("drStepBack");
-    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd"); await app.click("drRout");   // 1〜2拍目（2拍目は空）
+    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd");   // 1〜2拍目（2拍目は空）
     await stepBtn(app, "8分3連");
     const d = (await drumsOf(app, "A"))[0];
     expect(d.tuplets).toEqual([[0, 1, 3]]);
@@ -257,7 +309,7 @@ test.describe("連符の置き直しの解除", () => {
     await app.openDrums();
     await app.setStepSize("8分3連");
     for(const i of ["kick", "snare"]) await app.pad(i);   // 1拍目だけ 8分3連（0・0.333）
-    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd"); await app.click("drRout");   // 1〜2拍目（2拍目は空）
+    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd");   // 1〜2拍目（2拍目は空）
     await stepBtn(app, "8分3連");
     await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
     const d = (await drumsOf(app, "A"))[0];
@@ -291,7 +343,7 @@ test.describe("選んだ音をまるごと1つの連符にする", () => {
     // 8分で 0 kick・1 snare・1.5 snare・2 kick・3 snare・3.5 snare（4拍に6つ）
     for(const i of ["kick", null, "snare", "snare", "kick", null, "snare", "snare"]) i ? await app.pad(i) : await app.click("drStepFwd");
     for(let i = 0; i < 8; i++) await app.click("drStepBack");
-    await app.click("drRange"); for(let i = 0; i < 8; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await app.click("drRange"); for(let i = 0; i < 8; i++) await app.click("drStepFwd");
     await stepBtn(app, "8分6連");
     let d = (await drumsOf(app, "A"))[0];
     expect(d.tuplets).toEqual([[0, 4, 6]]);
@@ -313,7 +365,7 @@ test.describe("連符からストレートへ戻すとき入り切らない", ()
     await app.setStepSize("8分6連");
     for(let i = 0; i < 6; i++) await app.pad(i % 2 ? "snare" : "kick");
     for(let i = 0; i < 6; i++) await app.click("drStepBack");
-    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd"); await app.click("drRout");   // 2拍
+    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd");   // 2拍
     await stepBtn(app, "8分");
     const d = (await drumsOf(app, "A"))[0];
     expect(d.tuplets).toBeUndefined();
@@ -328,7 +380,7 @@ test.describe("連符からストレートへ戻すとき入り切らない", ()
     await app.setStepSize("4分"); await app.pad("snare");  // 2拍目の頭（6連のすぐ後ろ）
     await app.setStepSize("8分6連");
     for(let i = 0; i < 12; i++) await app.click("drStepBack");   // 先頭まで戻す
-    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd");
     await stepBtn(app, "8分");
     await expect(page.locator("#drToast")).toHaveText(/音があります/);
     expect((await drumsOf(app, "A"))[0].tuplets).toEqual([[0, 2, 6]]);

@@ -41,7 +41,7 @@ test('DrumEditSession が公開する操作の一覧', () => {
   const expected = [
     'selectTarget', 'selectOccurrence', 'followPlayhead', 'guardRangeTap', 'toggleHit',
     'setSelection', 'clearSelection', 'seekTo',
-    'beginRangeDrag', 'dragRangeTo', 'spanRange', 'normalizeRange', 'openRangeAt', 'setRangeIn', 'setRangeOut', 'closeRange',
+    'beginRangeDrag', 'dragRangeTo', 'spanRange', 'normalizeRange', 'openRangeAt', 'setRangeOut', 'closeRange',
     'commitCopy', 'clearEdit', 'retreatPart'
   ];
   for (const name of expected) {

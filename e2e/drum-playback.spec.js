@@ -64,8 +64,7 @@ test.describe("範囲ループ", () => {
     await app.openDrums();
     await app.click("drStepFwd"); await app.click("drStepFwd");        // 1拍目（0 起点）
     await app.click("drRange");
-    await app.click("drStepFwd"); await app.click("drStepFwd");
-    await app.click("drRout");                                          // 1〜2拍
+    await app.click("drStepFwd"); await app.click("drStepFwd");        // 範囲の終わりがカーソルに付いてくる：1〜2拍
     await expect(page.locator("#drPlay")).toHaveAttribute("aria-label", "選択した範囲をくり返し再生");
     await app.click("drPlay");
     await expect(page.locator("#drStatus")).toHaveText("選択を再生中");
