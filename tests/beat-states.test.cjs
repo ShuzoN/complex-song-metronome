@@ -672,3 +672,13 @@ test('drum audio is cancelled and retimed together with clicks', () => {
     SoundGateway.cancelPending();`);
   assert.equal(run('disconnected.length'), 1);   // 未来の kick だけ取り消す（過ぎた snare はそのまま）
 });
+
+test('snapping near the end of a beat moves to the next beat head instead of the last slot', () => {
+  const run = load(['DrumDomain']);
+  run(`var q = DrumDomain.quantize([{num:2,den:4}], []);`);
+  assert.equal(run('JSON.stringify(DrumDomain.snap(q, 0.9))'), JSON.stringify({b:1, k:0, sub:4, p:1}));
+  assert.equal(run('DrumDomain.snap(q, 0.88).p'), 1);       // 0.88 × 4 = 3.52 → 4 番目＝次の拍の頭（以前は 0.75 に留まった）
+  assert.equal(run('DrumDomain.snap(q, 0.8).p'), 0.75);
+  assert.equal(run('DrumDomain.snap(q, 1.9).p'), 2);        // パート末
+  assert.equal(run('DrumDomain.snap(q, -0.2).p'), 0);
+});
