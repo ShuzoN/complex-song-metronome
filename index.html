@@ -625,8 +625,8 @@
   .dr-rangetext{color:var(--dmuted);white-space:nowrap;font-size:11px}
   #drAutofix.warn{border-color:var(--dwarn);color:var(--dwarn)}
 
-  .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);gap:8px;min-height:0}
-  .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0}
+  .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:8px;min-height:0}
+  .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0;grid-row:2}
   .dr-prow{display:grid;gap:4px;min-height:0}
   .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:0;border:1px solid var(--dline2);
     background:var(--dpanel);font-size:12px;color:var(--dmuted);position:relative;overflow:hidden;min-width:0;cursor:pointer}
@@ -640,7 +640,7 @@
   .dr-pad.hit.cym{box-shadow:inset 0 0 0 2px var(--dcym)}
   .dr-pad.hit.drm{box-shadow:inset 0 0 0 2px var(--ddrm)}
   .dr-pad.hit.kick{box-shadow:inset 0 0 0 2px var(--dtext)}
-  .dr-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:0}
+  .dr-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:0;grid-row:2}
   .dr-mid button{width:52px;height:28px;padding:0;font-size:11px}
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
@@ -648,23 +648,43 @@
   .dr-mid .prim{background:var(--patina);border-color:var(--patina);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
-  #drStepSize{display:none}
-  .dr-mid.stepping .dr-steprow,.dr-mid.stepping #drStepSize{display:flex}
+  .dr-mid.stepping .dr-steprow{display:flex}
+  /* 歩幅のスライダー：パッドの上の1段。目盛りの名前は下に並べ、いまの歩幅だけ明るくする。
+     つまみの端から端までが目盛りの端から端になるよう、目盛りの列はつまみの幅の半分だけ内側に寄せる */
+  .dr-stepbar{grid-column:1 / -1;grid-row:1;display:flex;align-items:flex-start;gap:10px;height:40px;min-width:0;transition:opacity .15s}
+  .dr-stepbar.off{opacity:.4}
+  .dr-steplbl{flex:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--dmuted);line-height:16px;white-space:nowrap}
+  .dr-stepscale{position:relative;flex:1 1 0;min-width:0;height:100%;margin:0 14px}
+  .dr-stepscale input[type=range]{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0 0 24px;box-sizing:border-box;touch-action:none}
+  .dr-stepscale input[type=range]::-webkit-slider-runnable-track{background:linear-gradient(to right,var(--signal) var(--p,0%),var(--dline2) var(--p,0%))}
+  .dr-stepscale input[type=range]::-moz-range-track{background:var(--dline2)}
+  .dr-stepscale input[type=range]::-webkit-slider-thumb{width:16px;height:16px;margin-top:-6.5px;border-color:var(--dpanel)}
+  .dr-stepscale input[type=range]::-moz-range-thumb{width:16px;height:16px;border-color:var(--dpanel)}
+  .dr-stepticks{position:absolute;left:8px;right:8px;top:18px;bottom:0;pointer-events:none}
+  .dr-stepticks span{position:absolute;top:0;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;
+    font-size:10px;line-height:11px;color:var(--dfaint);white-space:nowrap}
+  .dr-stepticks span::before{content:"";position:absolute;top:-8px;left:50%;width:1px;height:4px;background:var(--dline2)}
+  .dr-stepticks i,.dr-stepticks b{font-style:normal;font-weight:inherit}
+  .dr-stepticks span.cur{color:var(--dtext);font-weight:600}
+  @media (min-width:720px){
+    .dr-stepbar{height:32px}
+    .dr-stepscale input[type=range]{padding-bottom:16px}
+    .dr-stepticks span{flex-direction:row;font-size:10.5px}
+  }
   .dr-dot{width:9px;height:9px;border-radius:50%;background:var(--dfaint)}
   #drRec.on{border-color:var(--drec);color:var(--drec)}
   #drRec.on .dr-dot{background:var(--drec);animation:dr-blink 1s steps(2) infinite}
   @keyframes dr-blink{50%{opacity:.25}}
   @media (prefers-reduced-motion:reduce){#drRec.on .dr-dot{animation:none}}
 
-  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（▶■ / STEP・● / ←→・歩幅） */
+  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（▶■ / STEP・● / ←→） */
   @media (orientation:landscape){
     .dr-pads{grid-template-columns:minmax(0,1fr) 110px minmax(0,1fr)}
     .dr-mid{display:grid;grid-template-columns:52px 52px;align-content:center;justify-content:center;gap:4px 6px}
     .dr-mid .dr-playrow{grid-column:1 / 3;grid-row:1;justify-content:center}
     #drStep{grid-column:1;grid-row:2}
     #drRec{grid-column:2;grid-row:2}
-    .dr-steprow{grid-column:1;grid-row:3}
-    #drStepSize{grid-column:2;grid-row:3}
+    .dr-steprow{grid-column:1 / 3;grid-row:3;justify-content:center}
   }
   /* 横持ちで背が低い（スマホ）：グループとパートの2行を横に並べて1行にし、ボタンも低くして譜面に高さを回す */
   @media (orientation:landscape) and (max-height:480px){
@@ -680,17 +700,22 @@
     .dr-bar2 button,.dr-bar2 select,.dr-bar3 button{height:22px}
     .dr-mid button,.dr-mid select{height:24px}
     .dr-mid .dr-playrow button{height:28px}
+    .dr-pads{row-gap:4px}
+    .dr-stepbar{height:28px}
+    .dr-stepscale input[type=range]{padding-bottom:13px}
+    .dr-stepticks{top:14px}
   }
 
   /* 縦持ち：パッドを 2 列に積み、中央の操作列は横一列にする */
   @media (orientation:portrait){
     .dr{grid-template-rows:minmax(0,.9fr) minmax(0,.555fr)}
-    .dr-pads{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:6px}
-    .dr-mid{grid-column:1 / 3;grid-row:1;flex-direction:row;justify-content:center;gap:8px}
+    .dr-pads{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto auto minmax(0,1fr);gap:6px}
+    .dr-mid{grid-column:1 / 3;grid-row:2;flex-direction:row;justify-content:center;gap:8px}
     .dr-mid button{width:auto;min-width:44px;padding:0 10px}
     .dr-mid .dr-playrow button{height:30px}
     .dr-steprow{gap:6px}
-    .dr-side{grid-row:2}
+    .dr-side{grid-row:3}
+    .dr-stepscale{margin:0 10px}
     .dr-pad{font-size:11px}
     .dr-pad.big{font-size:12px}
     .dr-meter{display:none}
@@ -955,6 +980,14 @@
     </div>
   </section>
   <section class="dr-pads" id="drPads">
+    <!-- 歩幅（ステップ入力で1歩ぶん進む長さ）。粗い→細かいの順に並べたスライダーで、なぞって選ぶ -->
+    <div class="dr-stepbar" id="drStepBar">
+      <span class="dr-steplbl">歩幅</span>
+      <div class="dr-stepscale">
+        <div class="dr-stepticks" id="drStepTicks" aria-hidden="true"></div>
+        <input type="range" id="drStepSize" min="0" max="0" step="1" value="0" aria-label="歩幅">
+      </div>
+    </div>
     <div class="dr-side" id="drLeft"></div>
     <div class="dr-mid" id="drMid">
       <div class="dr-playrow">
@@ -966,7 +999,6 @@
         <button id="drStepBack" type="button" aria-label="1歩戻る">←</button>
         <button id="drStepFwd" type="button" aria-label="1歩進む（休符）">→</button>
       </div>
-      <select id="drStepSize" aria-label="歩幅"></select>
       <button id="drRec" type="button" aria-label="重ね録り" title="重ね録り"><span class="dr-dot"></span></button>
     </div>
     <div class="dr-side" id="drRight"></div>
@@ -6404,6 +6436,7 @@
 
     /* ---------- 操作列・状態表示 ---------- */
     const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+    let stepSizes = {key: null, list: []};   // 歩幅スライダーの目盛り（controls が拍子の分母・基本分割ごとに作り直す）
     function controls(){
       const g = group(), running = Transport.running(), cur = Transport.cur();
       const chips = $("drGroups"), keep = chips.scrollLeft;
@@ -6482,20 +6515,32 @@
       $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
       $("drAutofix").classList.toggle("warn", unc > 0);
       $("drHint").style.display = (pt && !pt.hits.length && !DrumSelection.get() && !DrumRange.mode()) ? "block" : "none";
-      // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
+      // 歩幅：基本格子・拍・2〜9 分割・複数拍の連符。音価が慣用なら音符名（8分・16分…）、それ以外は N連。
+      // スライダーは1拍あたりの打点の数（粗い→細かい）の順に並べる：4拍3連・拍・4拍5連・2拍3連…8分…3連・16分…9連
+      $("drStepBar").classList.toggle("off", !(DrumStepInput.mode() && !playing()));
       if(g){
         const b = Math.min(nbOf() - 1, Math.floor(DrumCursor.get() + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
-        const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
-        const sel = $("drStepSize"), key = den + ":" + base;
-        if(sel.dataset.key !== key){
-          sel.dataset.key = key;
-          sel.innerHTML = '<option value="0">' + divName(base) + '</option><option value="1">拍</option>' +
-            [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("") +
-            DrumDomain.MULTI_STEPS.map(([m, n]) => '<option value="' + m + ":" + n + '">' + m + "拍" + n + "連</option>").join("");
+        const key = den + ":" + base;
+        if(stepSizes.key !== key){
+          const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
+          const list = [{v: 0, top: "", name: divName(base), per: base}]
+            .concat(base === 1 ? [] : [{v: 1, top: "", name: "拍", per: 1}])
+            .concat([2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => ({v: d, top: "", name: divName(d), per: d})))
+            .concat(DrumDomain.MULTI_STEPS.map(([m, n]) => ({v: m + ":" + n, top: m + "拍", name: n + "連", per: n / m})));
+          stepSizes = {key, list: list.map((o, i) => ({...o, i})).sort((x, y) => x.per - y.per || x.i - y.i)};
+          const last = stepSizes.list.length - 1;
+          $("drStepSize").max = String(last);
+          $("drStepTicks").innerHTML = stepSizes.list.map((o, i) =>
+            '<span data-name="' + o.top + o.name + '" style="left:' + (last ? i / last * 100 : 0) + '%">' + (o.top ? "<i>" + o.top + "</i>" : "") + "<b>" + o.name + "</b></span>").join("");
         }
-        if(DrumStepInput.size() === base) DrumStepInput.setSize(0);
-        sel.value = String(DrumStepInput.size());
-        if(!sel.selectedOptions.length){ DrumStepInput.setSize(0); sel.value = "0"; }
+        if(DrumStepInput.size() === base || (base === 1 && DrumStepInput.size() === 1)) DrumStepInput.setSize(0);
+        let idx = stepSizes.list.findIndex(o => o.v === DrumStepInput.size());
+        if(idx < 0){ DrumStepInput.setSize(0); idx = stepSizes.list.findIndex(o => o.v === 0); }
+        const rng = $("drStepSize"), cur = stepSizes.list[idx], last = stepSizes.list.length - 1;
+        rng.value = String(idx);
+        rng.style.setProperty("--p", (last ? idx / last * 100 : 0) + "%");
+        rng.setAttribute("aria-valuetext", cur.top + cur.name);
+        [...$("drStepTicks").children].forEach((t, i) => t.classList.toggle("cur", i === idx));
       }
       $("drRange").disabled = running;
       // カーソルが連符の区間の中にあるときだけ「◯拍◯連を外す」
@@ -6644,7 +6689,7 @@
         controls();
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); DrumStepInput.toggleMode(); controls(); });
-      $("drStepSize").addEventListener("change", () => { const v = $("drStepSize").value; DrumStepInput.setSize(v.indexOf(":") >= 0 ? v : Number(v)); controls(); });
+      $("drStepSize").addEventListener("input", () => { const o = stepSizes.list[Number($("drStepSize").value)]; if(o){ DrumStepInput.setSize(o.v); controls(); } });
       // パート
       $("drSpan").addEventListener("change", () => { if(DrumTarget.gid()){ DrumEditSession.clearEdit(); DrumService.setSpan(DrumTarget.gid(), DrumTarget.part(), Number($("drSpan").value)); } });
       $("drRepeat").addEventListener("change", () => { if(DrumTarget.gid()) DrumService.setRepeat(DrumTarget.gid(), DrumTarget.part(), Number($("drRepeat").value)); });

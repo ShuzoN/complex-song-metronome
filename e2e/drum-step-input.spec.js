@@ -16,8 +16,9 @@ test.describe("ステップ入力", () => {
     expect(drums).toEqual([{span: 2, hits: {hh_close: [0, 0.5], snare: [1], kick: [0, 2]}}]);
   });
 
-  test("歩幅の候補は拍子の分母で決まり、16分の歩幅で細かく置ける", async ({app}) => {
-    expect(await app.stepSizeOptions()).toEqual(["16分", "拍", "8分", "3連", "5連", "6連", "7連", "32分", "9連", "2拍3連", "4拍3連", "2拍5連", "4拍5連", "4拍7連"]);
+  test("歩幅の候補は拍子の分母で決まり、粗い順にスライダーに並ぶ。16分の歩幅で細かく置ける", async ({app}) => {
+    expect(await app.stepSizeOptions()).toEqual(["4拍3連", "拍", "4拍5連", "2拍3連", "4拍7連", "8分", "2拍5連", "3連", "16分", "5連", "6連", "7連", "32分", "9連"]);
+    expect(await app.stepSize()).toBe("8分");
     await app.setStepSize("16分");
     for(const i of ["kick", "hh_close", "hh_close", "snare"]) await app.pad(i);
     const drums = await drumsOf(app, "A");
@@ -47,6 +48,20 @@ test.describe("ステップ入力", () => {
     const drums = await drumsOf(app, "A");
     expect(drums[0].tuplets).toEqual([[0, 2, 3], [2, 2, 3]]);
     expect(drums[0].hits).toEqual({tom_hi: [0], tom_low: [0.667], floor: [1.333], kick: [2]});
+  });
+
+  test("歩幅のスライダーは目盛りの名前をタップしても、なぞっても選べる", async ({app}) => {
+    const rng = app.page.locator("#drStepSize"), box = await rng.boundingBox();
+    const tick = await app.page.locator('#drStepTicks span[data-name="3連"]').boundingBox();
+    await app.page.mouse.click(tick.x + tick.width / 2, tick.y + tick.height / 2);
+    expect(await app.stepSize()).toBe("3連");
+    await app.page.mouse.move(box.x + 4, box.y + 8);
+    await app.page.mouse.down();
+    await app.page.mouse.move(box.x + box.width - 4, box.y + 8, {steps: 8});
+    await app.page.mouse.up();
+    expect(await app.stepSize()).toBe("9連");
+    await app.page.keyboard.press("ArrowLeft");
+    expect(await app.stepSize()).toBe("32分");
   });
 
   test("「拍」の歩幅は1拍ずつ進む", async ({app}) => {
