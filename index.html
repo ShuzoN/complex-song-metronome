@@ -5354,16 +5354,19 @@
     const Score = (() => {
       let L = 11, TOP = 34, PW = 17, X0 = 44, TS = 14;
       const ZOOM = 0.7;
+      // ピンチ（Ctrl+ホイール）での拡大率。拍の幅に掛ける。線間は枠の高さまでしか大きくならない
+      const ZMIN = 0.35, ZMAX = 3;
+      let zoom = 1;
       let cache = {spans:[], BW:60};
       function setL(v){ L = v; TOP = 26 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6; }
       /* 縮尺：編集中のパートの3小節ぶんが1画面に収まる拍の幅にする（4/4 なら12拍）。
          線間は枠の高さ（上のラベル帯と符幹ぶんを含めて H = 44 + 6.6L）と拍の幅の両方に収まる大きさ */
       function metrics(){
         const h = (scoreEl.clientHeight || 130) - 2, w = scoreEl.clientWidth || 760;
-        setL(Math.max(6, Math.min(17 * ZOOM, (h - 44) / 6.6)));
+        setL(Math.max(6, Math.min(17 * ZOOM * Math.max(1, zoom), (h - 44) / 6.6)));
         const rs = partRs(), bars = rs.length ? [0, 1, 2].map(i => rs[i % rs.length]) : [{num:4}];
         const beats = bars.reduce((n, r) => n + r.num, 0);
-        const BW = Math.max(12, Math.min(110, (w - X0 - 24) / (beats + 0.6)));
+        const BW = Math.max(6, Math.max(12, Math.min(110, (w - X0 - 24) / (beats + 0.6))) * zoom);
         if(L > BW * 0.3) setL(Math.max(5, BW * 0.3));
         return BW;
       }
@@ -5605,9 +5608,18 @@
         const y = clientY - svg.getBoundingClientRect().top;
         return y >= TOP - L * 1.5 && y <= TOP + L * 4.5;
       }
+      /* 拡大率を f 倍する。画面座標 clientX の下にある拍位置は動かさない（redraw で描き直してからスクロールを合わせる） */
+      function zoomBy(f, clientX, redraw){
+        const z = Math.max(ZMIN, Math.min(ZMAX, zoom * f));
+        if(Math.abs(z - zoom) < 1e-4) return;
+        const h = hitTest(clientX), key = h && {gid: h.sp.gid, idx: h.sp.idx};
+        zoom = z; browse(); redraw();
+        const sp = key && cache.spans.find(z => z.gid === key.gid && z.idx === key.idx), svg = scoreEl.firstElementChild;
+        if(sp && svg) scoreEl.scrollLeft += svg.getBoundingClientRect().left + xAt(sp, h.p) - clientX;
+      }
       scoreEl.addEventListener("wheel", () => browse(), {passive:true});
       function browse(){ browseUntil = performance.now() + BROWSE_MS; }
-      return {render, hitTest, headAt, headAtOcc, occAt, reveal, browse, onStaff, get spans(){ return cache.spans; }};
+      return {render, hitTest, headAt, headAtOcc, occAt, reveal, browse, onStaff, zoomBy, get spans(){ return cache.spans; }};
     })();
 
     /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
@@ -5627,7 +5639,7 @@
       return DrumDomain.snap(grid(), h.p).p;
     }
     scoreEl.addEventListener("pointerup", e => {
-      if(Range.dragging) return;              // なぞって範囲を取った直後はタップ扱いしない
+      if(Range.dragging || Pinch.active) return;   // なぞって範囲を取った・ピンチした直後はタップ扱いしない
       e.preventDefault();
       const h = e.target.closest(".hit");
       if(h){
@@ -5717,7 +5729,55 @@
       };
       stageEl.addEventListener("pointerup", end);
       stageEl.addEventListener("pointercancel", end);
-      return {get dragging(){ return dragging; }};
+      // 2本目の指が触れたらピンチに譲る（なぞりかけの範囲選択・スクロールはそこで止める）
+      function cancel(){
+        if(down && dragging && !down.pan){ normalizeRange(); render(); }
+        cancelAnimationFrame(glide);
+        down = null; dragging = false;
+      }
+      return {cancel, get dragging(){ return dragging; }};
+    })();
+
+    /* 2本指のピンチで譜面を拡大・縮小（指の間の位置を中心に）。2本指のまま横に動かすとスクロール。
+       指がすべて離れるまではタップ扱いしない */
+    const Pinch = (() => {
+      const pts = new Map();
+      let active = false, last = null, frame = 0;
+      const span = () => { const [a, b] = [...pts.values()]; return {d: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2}; };
+      scoreEl.addEventListener("pointerdown", e => {
+        if(e.target.closest("button")) return;
+        pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+        if(pts.size < 2) return;
+        Range.cancel();
+        if(pts.size === 2){ active = true; last = span(); }
+      });
+      function apply(){
+        frame = 0;
+        if(pts.size !== 2 || !last) return;
+        const now = span();
+        if(now.x !== last.x){ scoreEl.scrollLeft -= now.x - last.x; Score.browse(); }
+        if(last.d > 0 && now.d > 0) Score.zoomBy(now.d / last.d, now.x, render);
+        last = now;
+      }
+      window.addEventListener("pointermove", e => {
+        const p = pts.get(e.pointerId); if(!p) return;
+        p.x = e.clientX; p.y = e.clientY;
+        if(pts.size === 2 && !frame) frame = requestAnimationFrame(apply);
+      });
+      const up = e => {
+        if(!pts.delete(e.pointerId)) return;
+        last = pts.size === 2 ? span() : null;
+        if(!pts.size && active) setTimeout(() => { active = pts.size > 0; }, 0);
+      };
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+      // トラックパッドのピンチ（ブラウザには Ctrl+ホイールとして届く）
+      scoreEl.addEventListener("wheel", e => {
+        if(!e.ctrlKey) return;
+        e.preventDefault();
+        Score.zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX, render);
+      }, {passive:false});
+      return {get active(){ return active; }};
     })();
     // 1 格子ぶん先の位置（パート末で止まる）
     function stepAfter(p){
