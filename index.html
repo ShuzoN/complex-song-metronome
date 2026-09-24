@@ -10,8 +10,16 @@
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&icon_names=fast_forward,fast_rewind,fullscreen,pause,play_arrow,stop&display=block" rel="stylesheet">
 <style>
   :root{
-    --bg:#A9B0A2; --panel:#F5F4EF; --ink:#191C18; --rule:#C7CABC;
+    --sage:#A9B0A2;
+    --bg:var(--sage); --panel:#F5F4EF; --ink:#191C18; --rule:#C7CABC;
     --signal:#C4362A; --brass:#8E7132; --dim:#6E7268;
+    /* 濃色面（練習モード・ドラム入力）。紙と墨を入れ替え、差し色は signal / brass / sage をそのまま使う。
+       濃色の上では signal / brass が沈むので、文字や線には明るめの -lt を使う */
+    --night:var(--ink); --night-2:#22251F; --night-3:#2D3029;
+    --on-night:var(--panel); --on-night-2:rgba(245,244,239,.62); --on-night-3:rgba(245,244,239,.38);
+    --night-rule:rgba(245,244,239,.14); --night-rule-2:rgba(245,244,239,.30);
+    --signal-lt:#E0574A; --brass-lt:#C9A55C;
+    --patina:#3F8D82;   /* 緑青。brass と対になる寒色。濃色面の再生ボタンに使う */
     --display:"Big Shoulders Display","Zen Kaku Gothic New",sans-serif;
     --mono:"DM Mono",ui-monospace,monospace;
     --body:"Zen Kaku Gothic New",system-ui,sans-serif;
@@ -365,7 +373,7 @@
   .fs-enter:active{transform:translateY(1px)}
   body.fs-lock{overflow:hidden}
 
-  .fs-overlay{position:fixed;inset:0;z-index:9990;background:var(--ink);color:var(--panel);
+  .fs-overlay{position:fixed;inset:0;z-index:9990;background:var(--night);color:var(--on-night);
     display:flex;flex-direction:column;overflow:hidden;
     padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 
@@ -518,7 +526,7 @@
   .pdot.muted,.beat.muted,.fs-beat.muted{border-style:dashed;box-shadow:none;text-decoration:line-through;opacity:.5}
 
   /* ===== ドラム入力（別モード）。リズムグループの拍子・くり返し・BPM に乗せてドラムの打点を置く全画面ビュー。
-     全画面の練習モードと同じく濃色。クラス・id は dr で名前空間（メトロノーム側の .chip / .pad 等と衝突させない） ===== */
+     全画面の練習モードと同じ濃色面トークン（:root の --night 系）を使う。クラス・id は dr で名前空間（メトロノーム側の .chip / .pad 等と衝突させない） ===== */
   .dock-modes{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--rule)}
   .dock-modes .fs-enter{border-top:none;letter-spacing:.06em;font-size:11.5px}
   .dock-modes .fs-enter + .fs-enter{border-left:1px solid var(--rule)}
@@ -527,12 +535,18 @@
   .drums-opt input{accent-color:var(--signal);width:14px;height:14px}
   .chip.drm{border-color:var(--brass);color:var(--brass)}
 
-  .dr{--dbg:#141a24; --dpanel:#1b2331; --dline:#2b3546; --dline2:#3a465b;
-    --dtext:#e6eaf1; --dmuted:#8792a6; --dfaint:#5c6779;
-    --dcym:#d9a441; --dcym-bg:rgba(217,164,65,.14); --dcym-bd:rgba(217,164,65,.45);
-    --ddrm:#5aa4e6; --ddrm-bg:rgba(90,164,230,.14); --ddrm-bd:rgba(90,164,230,.45);
-    --dkick-bg:rgba(230,234,241,.08); --dkick-bd:rgba(230,234,241,.35);
-    --drec:#e4574b; --dwarn:#f08c2e; --dplay:#7fd9c0;
+  /* ドラム入力の色は :root の濃色面トークンから引く（独自の色を持たない）。SVG の譜面もこの変数を読む */
+  .dr{--dbg:var(--night); --dpanel:var(--night-2); --dline:var(--night-3); --dline2:var(--night-rule-2);
+    --dtext:var(--on-night); --dmuted:var(--on-night-2); --dfaint:var(--on-night-3);
+    --dcym:var(--brass-lt); --dcym-bg:rgba(201,165,92,.12); --dcym-bd:rgba(201,165,92,.5); --dcym-ink:#E8D6AA;
+    --ddrm:var(--sage); --ddrm-bg:rgba(169,176,162,.09); --ddrm-bd:rgba(169,176,162,.45); --ddrm-ink:#DDE2D6;
+    --dkick-bg:rgba(245,244,239,.06); --dkick-bd:rgba(245,244,239,.42);
+    --drec:var(--signal-lt); --dwarn:var(--brass-lt); --dplay:var(--signal-lt);
+    --don:var(--on-night); --don-bg:rgba(245,244,239,.08);   /* 入のトグル・選択中（赤は再生・録音・位置だけに使う） */
+    /* 譜面（SVG）用 */
+    --dstaff:rgba(245,244,239,.3); --dsub:rgba(245,244,239,.78); --dbar:rgba(245,244,239,.55);
+    --dplay-bg:rgba(224,87,74,.10); --dcell-cur:rgba(245,244,239,.2); --dcur-bg:rgba(245,244,239,.05); --dsame-bg:rgba(245,244,239,.02); --dwarn-bg:rgba(201,165,92,.16);
+    --dcell:rgba(245,244,239,.07); --druler:#121411;
     position:fixed;inset:0;z-index:9985;background:var(--dbg);color:var(--dtext);
     font-family:var(--body);font-size:13px;overflow:hidden;touch-action:none;overscroll-behavior:none;
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
@@ -540,13 +554,13 @@
     padding:calc(4px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left))}
   .dr[hidden]{display:none !important}
   .dr *{-webkit-tap-highlight-color:transparent}
-  .dr button{font-family:var(--mono);font-size:12px;color:inherit;background:transparent;border:1px solid var(--dline2);border-radius:8px;
+  .dr button{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:inherit;background:transparent;border:1px solid var(--dline2);border-radius:0;
     padding:0 10px;height:30px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;flex:none}
   .dr button:active{background:var(--dline)}
-  .dr button.on{border-color:var(--dplay);color:var(--dplay)}
+  .dr button.on{border-color:var(--don);color:var(--don);background:var(--don-bg)}
   .dr button.off{opacity:.45}
   .dr button:disabled{opacity:.35;cursor:default}
-  .dr select{font-family:var(--mono);font-size:12px;color:var(--dtext);background:var(--dpanel);border:1px solid var(--dline2);border-radius:8px;height:30px;padding:0 4px;min-width:0}
+  .dr select{font-family:var(--mono);font-size:12px;color:var(--dtext);background:var(--dpanel);border:1px solid var(--dline2);border-radius:0;height:30px;padding:0 4px;min-width:0}
 
   .dr-seq{display:grid;grid-template-rows:30px 26px minmax(0,1fr) 26px;gap:4px;min-width:0;min-height:0}
   .dr-bar1,.dr-bar2,.dr-bar3{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
@@ -566,8 +580,8 @@
   .dr-close{width:30px;padding:0 !important}
   /* グループのチップ列は縮められる（flex-basis 0）ようにして、あふれたぶんは列の中で横スクロールさせる */
   .dr-groups{display:flex;gap:6px;width:0;flex:1 1 0;overflow-x:auto;overflow-y:hidden;touch-action:pan-x;scrollbar-width:none;padding-bottom:1px}
-  .dr-chip{flex:none;padding:5px 10px;border:1px solid var(--dline2);border-radius:8px;color:var(--dmuted);white-space:nowrap;font-size:12px;cursor:pointer}
-  .dr-chip.cur{border-color:var(--dplay);color:var(--dtext)}
+  .dr-chip{flex:none;padding:5px 10px;border:1px solid var(--dline2);border-radius:0;color:var(--dmuted);white-space:nowrap;font-size:12px;cursor:pointer}
+  .dr-chip.cur{border-color:var(--don);color:var(--dtext);background:var(--don-bg)}
   .dr-chip.play{border-color:var(--drec)}
   .dr-chip i{font-style:normal;color:var(--dfaint);margin-left:5px;font-family:var(--mono);font-size:10.5px}
   .dr-chip.has::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ddrm);margin-left:6px;vertical-align:2px}
@@ -576,13 +590,13 @@
   .dr-status{margin-left:auto;padding-left:6px;color:var(--dmuted);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11.5px;flex:none}
   .dr-status .rec{color:var(--drec)}
 
-  .dr-stage{position:relative;min-width:0;min-height:0;background:var(--dpanel);border-radius:12px;overflow:hidden}
+  .dr-stage{position:relative;min-width:0;min-height:0;background:var(--dpanel);border-radius:0;overflow:hidden}
   .dr-score{position:absolute;left:0;right:0;top:0;bottom:30px;padding:4px 8px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;display:flex;align-items:center;touch-action:none}
   .dr-score::-webkit-scrollbar{display:none}
   .dr-score svg{display:block;flex:none}
   .dr-score .hit{cursor:pointer}
   .dr-head{position:absolute;top:0;height:100%;width:2px;background:var(--dplay);opacity:.9;pointer-events:none;display:none;left:0}
-  .dr-ruler{position:absolute;left:8px;right:8px;bottom:1px;height:18px;border-radius:5px;background:#151c27;touch-action:none;overflow:hidden}
+  .dr-ruler{position:absolute;left:8px;right:8px;bottom:1px;height:18px;border-radius:0;background:var(--druler);touch-action:none;overflow:hidden}
   .dr-ruler svg{width:100%;height:100%;display:block}
   .dr-hint{position:absolute;left:10px;right:10px;bottom:32px;color:var(--dfaint);font-size:11px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
@@ -594,7 +608,7 @@
   .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
   /* 選択範囲の再生は、選択と同じ橙で示す（通常の再生＝緑と区別する） */
   .dr-rangebar .rplay{border-color:var(--dwarn);color:var(--dwarn)}
-  .dr-rangebar .rplay.on,.dr-mid #drPlay.range.on{background:var(--dwarn);border-color:var(--dwarn);color:#2a1606}
+  .dr-rangebar .rplay.on,.dr-mid #drPlay.range.on{background:var(--dwarn);border-color:var(--dwarn);color:var(--night)}
   .dr-mid #drPlay.range{background:transparent;border-color:var(--dwarn);color:var(--dwarn)}
   .dr-head.range{background:var(--dwarn)}
   .dr-rangetext{color:var(--dmuted);white-space:nowrap;font-size:11px}
@@ -603,14 +617,14 @@
   .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);gap:8px;min-height:0}
   .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0}
   .dr-prow{display:grid;gap:4px;min-height:0}
-  .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--dline2);
+  .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:0;border:1px solid var(--dline2);
     background:var(--dpanel);font-size:12px;color:var(--dmuted);position:relative;overflow:hidden;min-width:0;cursor:pointer}
   .dr-pad span{pointer-events:none;white-space:nowrap}
-  .dr-pad.cym{background:var(--dcym-bg);border-color:var(--dcym-bd);color:#f0d9a4}
-  .dr-pad.drm{background:var(--ddrm-bg);border-color:var(--ddrm-bd);color:#bcd9f5}
+  .dr-pad.cym{background:var(--dcym-bg);border-color:var(--dcym-bd);color:var(--dcym-ink)}
+  .dr-pad.drm{background:var(--ddrm-bg);border-color:var(--ddrm-bd);color:var(--ddrm-ink)}
   .dr-pad.kick{background:var(--dkick-bg);border-color:var(--dkick-bd);color:var(--dtext)}
-  .dr-pad.big{font-size:14px;font-weight:500;border-radius:11px}
-  .dr-pad.soft{color:#8fb3d6;font-weight:400}
+  .dr-pad.big{font-size:14px;font-weight:500;border-radius:0}
+  .dr-pad.soft{color:var(--dmuted);font-weight:400}
   .dr-pad.hit{filter:brightness(1.9)}
   .dr-pad.hit.cym{box-shadow:inset 0 0 0 2px var(--dcym)}
   .dr-pad.hit.drm{box-shadow:inset 0 0 0 2px var(--ddrm)}
@@ -620,7 +634,7 @@
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
   .dr-mid .dr-playrow button{width:34px;height:34px;font-size:14px}
-  .dr-mid .prim{background:var(--dplay);border-color:var(--dplay);color:#10261f;font-weight:600}
+  .dr-mid .prim{background:var(--patina);border-color:var(--patina);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
   #drStepSize{display:none}
@@ -646,9 +660,9 @@
   }
 
   /* 設定シート・タップ補正（ドラム入力の中だけで開く） */
-  .dr-sheet{position:absolute;inset:0;z-index:5;background:rgba(20,26,36,.92);display:none;align-items:center;justify-content:center;padding:16px}
+  .dr-sheet{position:absolute;inset:0;z-index:5;background:rgba(25,28,24,.92);display:none;align-items:center;justify-content:center;padding:16px}
   .dr-sheet.show{display:flex}
-  .dr-card{background:var(--dpanel);border:1px solid var(--dline2);border-radius:14px;padding:16px 18px;width:min(92vw,420px);display:flex;flex-direction:column;gap:12px}
+  .dr-card{background:var(--dpanel);border:1px solid var(--dline2);border-radius:0;padding:16px 18px;width:min(92vw,420px);display:flex;flex-direction:column;gap:12px}
   .dr-card h1{font-size:15px;font-weight:500;margin:0}
   .dr-card label{display:flex;flex-direction:column;gap:6px;color:var(--dmuted);font-size:12px}
   .dr-card label.row{flex-direction:row;align-items:center;gap:8px;color:var(--dtext)}
@@ -662,7 +676,7 @@
   .dr-cal{flex-direction:column;gap:14px;text-align:center}
   .dr-cal h1{font-size:16px;font-weight:500;margin:0}
   .dr-cal p{margin:0;color:var(--dmuted);max-width:36em;line-height:1.6}
-  .dr-calpad{width:min(60vw,320px);height:min(28vh,120px);border-radius:14px;border:1px solid var(--dline2);background:var(--dpanel);display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer}
+  .dr-calpad{width:min(60vw,320px);height:min(28vh,120px);border-radius:0;border:1px solid var(--dline2);background:var(--dpanel);display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer}
   .dr-calpad.hit{filter:brightness(1.8)}
   .dr-calres{font-variant-numeric:tabular-nums;font-family:var(--mono)}
 </style>
@@ -5104,6 +5118,8 @@
     };
     try{ const v = Number(window.localStorage.getItem(OFFSET_KEY)); if(isFinite(v)) ui.offset = v; }catch(_){}
     const Fmt2 = { ms: s => (s >= 0 ? "+" : "−") + Math.round(Math.abs(s)*1000) + "ms" };
+    // SVG の属性には CSS 変数を書けないので、.dr の色トークンを読んで使う（色は CSS 側だけで決める）
+    const C = new Proxy({}, {get: (o, k) => o[k] || (o[k] = getComputedStyle(el).getPropertyValue("--" + k.replace(/_/g, "-")).trim())});
 
     const playable = () => state().groups.filter(g => g.pattern.rhythms.length);
     // 編集対象のグループ。消えていたらアクティブ→先頭へ寄せる
@@ -5204,11 +5220,11 @@
         const cx = k === 1 ? (bar(0) + sp.xs[sp.nb] - PW/2) / 2
           : k % 2 === 0 ? bar(k / 2) - (sp.meters[k / 2].show ? TS * 1.4 + 8 : 0)
           : (bar((k - 1) / 2) + (k === 1 ? sp.xs[sp.nb] : sp.xs[sp.starts[(k + 1) / 2]]) - PW/2) / 2;
-        const cy = TOP + 2 * L, w = L * 1.1, lw = Math.max(2, L * 0.46), col = "#c8d0dc";
+        const cy = TOP + 2 * L, w = L * 1.1, lw = Math.max(2, L * 0.46), col = C.dsub;
         const slash = dx => `<line x1="${cx + dx - w}" y1="${cy + w}" x2="${cx + dx + w}" y2="${cy - w}" stroke="${col}" stroke-width="${lw}" stroke-linecap="butt"/>`;
         const n = k === 1 ? 1 : 2, off = n === 1 ? [0] : [-L * 0.32, L * 0.32], edge = n === 1 ? w * 0.95 : w * 1.25;
-        let out = `<rect x="${cx - edge - L*0.5}" y="${cy - w - 1}" width="${2 * (edge + L*0.5)}" height="${2 * w + 2}" fill="#1b2331"/>`;
-        for(let i = 0; i < 5; i++){ const y = TOP + i * L; if(y > cy - w - 1 && y < cy + w + 1) out += `<line x1="${cx - edge - L*0.5}" y1="${y}" x2="${cx + edge + L*0.5}" y2="${y}" stroke="#7c879b" stroke-width="1"/>`; }
+        let out = `<rect x="${cx - edge - L*0.5}" y="${cy - w - 1}" width="${2 * (edge + L*0.5)}" height="${2 * w + 2}" fill="${C.dpanel}"/>`;
+        for(let i = 0; i < 5; i++){ const y = TOP + i * L; if(y > cy - w - 1 && y < cy + w + 1) out += `<line x1="${cx - edge - L*0.5}" y1="${y}" x2="${cx + edge + L*0.5}" y2="${y}" stroke="${C.dstaff}" stroke-width="1"/>`; }
         out += off.map(slash).join("");
         out += `<circle cx="${cx - edge}" cy="${cy - L * 0.55}" r="${L * 0.24}" fill="${col}"/><circle cx="${cx + edge}" cy="${cy + L * 0.55}" r="${L * 0.24}" fill="${col}"/>`;
         if(k > 1) out += `<text x="${cx}" y="${TOP - 5}" fill="${col}" font-size="${Math.max(10, L * 1.2)}" font-weight="700" text-anchor="middle">${k}</text>`;
@@ -5220,40 +5236,40 @@
         cache = {spans: lay.spans, BW, W};
         const running = playing(), stemTop = yOf(-4.6);
         let g = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="譜面">`;
-        for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="#7c879b" stroke-width="1"/>`;
-        g += `<rect x="7" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/><rect x="13" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/>`;
+        for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="${C.dstaff}" stroke-width="1"/>`;
+        g += `<rect x="7" y="${TOP+L}" width="3" height="${2*L}" fill="${C.dsub}"/><rect x="13" y="${TOP+L}" width="3" height="${2*L}" fill="${C.dsub}"/>`;
         const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
         const cur = curOcc(lay.spans);
         lay.spans.forEach((sp, si) => {
           const isCur = sp === cur, left = sp.x0 - PW/2, xEnd = sp.xs[sp.nb] - PW/2;
           // 同じパートの出現（シミレ含む）は薄く示し、編集中の出現はもう少し濃く
           const samePart = sp.gid === ui.gid && sp.pi === ui.part;
-          if(si > 0){ const bx = left - sp.gap + 4; g += `<line x1="${bx}" y1="${TOP}" x2="${bx}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="${sp.head ? 2 : 1}"/>`; }
+          if(si > 0){ const bx = left - sp.gap + 4; g += `<line x1="${bx}" y1="${TOP}" x2="${bx}" y2="${TOP+4*L}" stroke="${C.dbar}" stroke-width="${sp.head ? 2 : 1}"/>`; }
           // グループ名はグループの先頭に、パート名（パートが複数あるとき）は音符で書く出現に
           const tag = sp.nparts > 1 && sp.mode === "notes" ? letter(sp.pi) : "";
-          if(sp.head || tag) g += `<text x="${left}" y="11" fill="${samePart ? "#7fd9c0" : "#8792a6"}" font-size="11">${sp.head ? `<tspan fill="${samePart ? "#e6eaf1" : "#c8d0dc"}" font-weight="600">${esc(sp.g.name)}</tspan> ` : ""}${tag}</text>`;
+          if(sp.head || tag) g += `<text x="${left}" y="11" fill="${samePart ? C.dplay : C.dmuted}" font-size="11">${sp.head ? `<tspan fill="${samePart ? C.dtext : C.dsub}" font-weight="600">${esc(sp.g.name)}</tspan> ` : ""}${tag}</text>`;
           // 拍子記号（前と変わったときだけ。小節の途中で変わるときはその小節の前に）
           sp.meters.forEach(m => {
             if(!m.show) return;
             const tsx = m.x - PW/2 - 5;
-            g += `<text x="${tsx}" y="${TOP+2*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.num}</text>`;
-            g += `<text x="${tsx}" y="${TOP+4*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.den}</text>`;
+            g += `<text x="${tsx}" y="${TOP+2*L-1}" fill="${C.dsub}" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.num}</text>`;
+            g += `<text x="${tsx}" y="${TOP+4*L-1}" fill="${C.dsub}" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.den}</text>`;
           });
-          if(samePart) g += `<rect x="${left}" y="${TOP-10}" width="${xEnd-left}" height="${4*L+20}" fill="rgba(127,217,192,${isCur ? .07 : .03})"/>`;
+          if(samePart) g += `<rect x="${left}" y="${TOP-10}" width="${xEnd-left}" height="${4*L+20}" fill="${isCur ? C.dcur_bg : C.dsame_bg}"/>`;
           // 小節線・拍の目盛り
           // 拍子が変わる小節は、前の小節の終わり（拍子記号の手前）に線を引く
-          sp.starts.forEach((b, i) => { if(i > 0){ const x = sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0); g += `<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="1"/>`; } });
-          for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="#3a465b"/>`;
+          sp.starts.forEach((b, i) => { if(i > 0){ const x = sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0); g += `<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+4*L}" stroke="${C.dbar}" stroke-width="1"/>`; } });
+          for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="${C.dline2}"/>`;
           if(sp.mode === "simile"){ g += simile(sp); return; }
           // 範囲とシーク（編集中のグループにだけ）
           if(isCur){
             const tx = p => xAt(sp, p);          // 音符と同じ位置（カーソルの上に音が置かれる）
             if(ui.rin != null && ui.rout != null && ui.rout > ui.rin)
-              g += `<rect x="${tx(ui.rin)-3}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="rgba(240,140,46,.16)" stroke="#f08c2e" stroke-width="0.8"/>`;
+              g += `<rect x="${tx(ui.rin)-3}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="${C.dwarn_bg}" stroke="${C.dwarn}" stroke-width="0.8"/>`;
             if(!running){
               const cx = tx(ui.cursor), on = ui.rangeMode;
-              g += `<line x1="${cx}" y1="${TOP-12}" x2="${cx}" y2="${TOP+4*L+12}" stroke="${on ? "#f08c2e" : "#c8d0dc"}" stroke-width="${on ? 2.5 : 1.5}" stroke-dasharray="${on ? "" : "3 3"}"/>`;
-              if(on) g += `<path d="M${cx-5} ${TOP-12} L${cx+5} ${TOP-12} L${cx} ${TOP-5} Z" fill="#f08c2e"/>`;
+              g += `<line x1="${cx}" y1="${TOP-12}" x2="${cx}" y2="${TOP+4*L+12}" stroke="${on ? C.dwarn : C.dsub}" stroke-width="${on ? 2.5 : 1.5}" stroke-dasharray="${on ? "" : "3 3"}"/>`;
+              if(on) g += `<path d="M${cx-5} ${TOP-12} L${cx+5} ${TOP-12} L${cx} ${TOP-5} Z" fill="${C.dwarn}"/>`;
             }
           }
           // 音符
@@ -5271,9 +5287,9 @@
                 const d = DrumDomain.INST[inst], yy = yOf(d.pos), unc = DrumDomain.isUncertain(h);
                 if(d.ghost && cell.has("snare")) return;
                 const isSel = isCur && ui.sel && ui.sel.b === b && ui.sel.k === k && ui.sel.inst === inst;
-                const col = isSel ? "#7fd9c0" : (unc ? "#f08c2e" : "#eef2f8");
+                const col = isSel ? C.dplay : (unc ? C.dwarn : C.dtext);
                 topY = Math.min(topY, yy);
-                if(isSel) g += `<circle cx="${x}" cy="${yy}" r="${L*0.85}" fill="none" stroke="#7fd9c0" stroke-width="1.5"/>`;
+                if(isSel) g += `<circle cx="${x}" cy="${yy}" r="${L*0.85}" fill="none" stroke="${C.dplay}" stroke-width="1.5"/>`;
                 if(h.n > 1) g += `<text x="${x+8}" y="${yy-6}" fill="${col}" font-size="7">×${h.n}</text>`;
                 if(d.ghost) g += `<text x="${x-L*0.95}" y="${yy+L*0.42}" fill="${col}" font-size="${L*1.2}" text-anchor="middle">(</text><text x="${x+L*0.95}" y="${yy+L*0.42}" fill="${col}" font-size="${L*1.2}" text-anchor="middle">)</text>`;
                 const hs = L*0.4;
@@ -5286,20 +5302,20 @@
                 if(d.label) labels.push(d.label);
                 rects += `<rect class="hit" data-gid="${sp.gid}" data-pi="${sp.pi}" data-occ="${sp.idx}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-hw/2}" y="${yy-L*0.9}" width="${hw}" height="${L*1.8}" fill="transparent"/>`;
               });
-              g += `<line x1="${x+4.5}" y1="${topY-1}" x2="${x+4.5}" y2="${stemTop}" stroke="#eef2f8" stroke-width="1.2"/>`;
-              if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="#c8d0dc" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
+              g += `<line x1="${x+4.5}" y1="${topY-1}" x2="${x+4.5}" y2="${stemTop}" stroke="${C.dtext}" stroke-width="1.2"/>`;
+              if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="${C.dsub}" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
               g += rects;
             });
             // 基本の格子と違う割り方（3連など）を選んだ拍には連符の括弧と数字
             if(bt.sub !== bt.base && first != null){
               const yy = stemTop - 6, x1 = first + 1, x2 = Math.max(last + 8, first + sw*0.8);
-              g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="#c8d0dc" stroke-width="1"/>`;
-              g += `<rect x="${(x1+x2)/2-6}" y="${yy-6}" width="12" height="11" fill="#1b2331"/>`;
-              g += `<text x="${(x1+x2)/2}" y="${yy+3}" fill="#c8d0dc" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${bt.sub}</text>`;
+              g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="${C.dsub}" stroke-width="1"/>`;
+              g += `<rect x="${(x1+x2)/2-6}" y="${yy-6}" width="12" height="11" fill="${C.dpanel}"/>`;
+              g += `<text x="${(x1+x2)/2}" y="${yy+3}" fill="${C.dsub}" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${bt.sub}</text>`;
             }
           });
         });
-        g += `<line x1="${W-10}" y1="${TOP}" x2="${W-10}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="2"/></svg>`;
+        g += `<line x1="${W-10}" y1="${TOP}" x2="${W-10}" y2="${TOP+4*L}" stroke="${C.dbar}" stroke-width="2"/></svg>`;
         const keep = scoreEl.scrollLeft;
         scoreEl.innerHTML = g;
         scoreEl.scrollLeft = keep;
@@ -5445,14 +5461,14 @@
         let x = 0, g = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="曲全体">`;
         spans.forEach(sp => {
           const w = sp.nb / total * W;
-          g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" rx="2" fill="${sp.gid === ui.gid && sp.pi === ui.part ? "rgba(127,217,192,.28)" : "rgba(255,255,255,.07)"}"/>`;
-          if(sp.head) g += `<text x="${x+3}" y="${H-7}" fill="#8792a6" font-size="9">${String(sp.g.name).replace(/[&<>]/g, "")}</text>`;
+          g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" fill="${sp.gid === ui.gid && sp.pi === ui.part ? C.dcell_cur : C.dcell}"/>`;
+          if(sp.head) g += `<text x="${x+3}" y="${H-7}" fill="${C.dmuted}" font-size="9">${String(sp.g.name).replace(/[&<>]/g, "")}</text>`;
           x += w;
         });
         const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
         const tw = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
         const tx = (scoreEl.scrollLeft / maxS) * (W - tw);
-        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" rx="3" fill="rgba(127,217,192,.12)" stroke="#7fd9c0" stroke-width="1.2"/></svg>`;
+        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${C.dplay_bg}" stroke="${C.dplay}" stroke-width="1.2"/></svg>`;
         rulerEl.innerHTML = g;
       }
       const maxScroll = () => Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
