@@ -17,7 +17,7 @@ test.describe("ステップ入力", () => {
   });
 
   test("歩幅の候補は拍子の分母で決まり、よく使う順に横に並ぶ。16分の歩幅で細かく置ける", async ({app}) => {
-    expect(await app.stepSizeOptions()).toEqual(["8分", "16分", "8分3連", "16分5連", "16分6連", "16分7連", "32分9連", "4分", "32分", "4分3連", "2分3連", "8分5連", "4分5連", "4分7連"]);
+    expect(await app.stepSizeOptions()).toEqual(["4分", "8分", "16分", "32分", "8分3連", "8分5連", "4分3連", "4分5連", "4分7連", "16分5連", "16分6連", "16分7連", "2分3連", "32分9連"]);
     expect(await app.stepSize()).toBe("8分");
     await app.setStepSize("16分");
     for(const i of ["kick", "hh_close", "hh_close", "snare"]) await app.pad(i);
