@@ -882,7 +882,9 @@
       <button id="drUndo" type="button" aria-label="元に戻す">↶</button>
       <button id="drRedo" type="button" aria-label="やり直す">↷</button>
       <button id="drAutofix" type="button" title="ずれた打点を拍の格子に載せる">自動補正</button>
-      <button id="drClear" type="button" title="このグループの打点をすべて消す">消す</button>
+      <button id="drClear" type="button" title="このパートの打点をすべて消す">消す</button>
+      <button id="drRange" type="button" title="カーソルの位置から範囲を選ぶ（五線をなぞっても選べます）">範囲</button>
+      <button id="drPaste" type="button" title="コピーした範囲をカーソルの位置に貼り付け（別のパートにも貼れます）" hidden>貼り付け</button>
       <button id="drClick" type="button" class="on" title="メトロノームのクリックを鳴らす／止める">クリック</button>
       <button id="drCfgOpen" type="button">設定</button>
       <span class="dr-status" id="drStatus">停止中</span>
@@ -1243,8 +1245,9 @@
       const nb = grid.beats.length;
       let b = Math.floor(p), f = p - b; if(f > 0.92){ b += 1; f -= 1; }
       if(b >= nb) return {b:nb, k:0, sub:1, p:nb};
-      b = Math.max(0, b);
-      const sub = grid.beats[b].sub, k = Math.max(0, Math.min(sub - 1, Math.round(f * sub)));
+      if(b < 0) return {b:0, k:0, sub:grid.beats[0] ? grid.beats[0].sub : 1, p:0};
+      const sub = grid.beats[b].sub, k = Math.max(0, Math.round(f * sub));
+      if(k >= sub) return b + 1 >= nb ? {b:nb, k:0, sub:1, p:nb} : {b:b + 1, k:0, sub:grid.beats[b + 1].sub, p:b + 1};   // 拍末は次の拍の頭へ
       return {b, k, sub, p: slotPos(b, k, sub)};
     }
     const UNCERTAIN = 0.3;  // 採用した格子からさらに 30% 以上ずれた打点は色を変えて知らせる
@@ -5106,14 +5109,18 @@
       let L = 11, TOP = 34, PW = 17, X0 = 44, TS = 14;
       const ZOOM = 0.7;
       let cache = {spans:[], BW:60};
+      function setL(v){ L = v; TOP = 18 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6; }
+      /* 縮尺：編集中のパートの3小節ぶんが1画面に収まる拍の幅にする（4/4 なら12拍）。
+         線間は枠の高さ（上のラベル帯と符幹ぶんを含めて H = 36 + 6.6L）と拍の幅の両方に収まる大きさ */
       function metrics(){
-        const h = (scoreEl.clientHeight || 130) - 2;
-        // 上のラベル帯（18px）と符幹ぶんを含めて H = 36 + 6.6L。これが枠に収まる線間を選ぶ
-        L = Math.max(6, Math.min(17 * ZOOM, (h - 36) / 6.6));
-        TOP = 18 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6;
+        const h = (scoreEl.clientHeight || 130) - 2, w = scoreEl.clientWidth || 760;
+        setL(Math.max(6, Math.min(17 * ZOOM, (h - 36) / 6.6)));
+        const rs = partRs(), bars = rs.length ? [0, 1, 2].map(i => rs[i % rs.length]) : [{num:4}];
+        const beats = bars.reduce((n, r) => n + r.num, 0);
+        const BW = Math.max(12, Math.min(110, (w - X0 - 24) / (beats + 0.6)));
+        if(L > BW * 0.3) setL(Math.max(5, BW * 0.3));
+        return BW;
       }
-      // 画面に入れる拍数：広ければ約 2 小節、狭ければ約 1 小節
-      const bw = () => { const w = scoreEl.clientWidth || 760, want = (w < 560 ? 4.4 : 8.4) / ZOOM; return Math.max(22, Math.min(110, (w - X0 - 20) / want)); };
       const yOf = pos => TOP + pos * L / 2;
       /* グループのパートを左→右に並べる。1パート＝パターン1回ぶんを描き、続けて鳴らす回数はリピート記号と ×N で省略する。
          xs[b] は拍 b の音符の x（xs[nb] はパート末）。拍子が変わる小節の前には拍子記号ぶんの幅を足す */
@@ -5143,8 +5150,7 @@
       }
       const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * cache.BW; };
       function render(){
-        metrics();
-        const BW = bw(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
+        const BW = metrics(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
         cache = {spans: lay.spans, BW, W};
         const running = Transport.running(), stemTop = yOf(-4.6);
         let g = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="譜面">`;
@@ -5176,9 +5182,9 @@
           for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="#3a465b"/>`;
           // 範囲とシーク（編集中のグループにだけ）
           if(isCur){
-            const tx = p => xAt(sp, p) - PW/2;
+            const tx = p => xAt(sp, p);          // 音符と同じ位置（カーソルの上に音が置かれる）
             if(ui.rin != null && ui.rout != null && ui.rout > ui.rin)
-              g += `<rect x="${tx(ui.rin)}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="rgba(240,140,46,.16)" stroke="#f08c2e" stroke-width="0.8"/>`;
+              g += `<rect x="${tx(ui.rin)-3}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="rgba(240,140,46,.16)" stroke="#f08c2e" stroke-width="0.8"/>`;
             if(!running){
               const cx = tx(ui.cursor), on = ui.rangeMode;
               g += `<line x1="${cx}" y1="${TOP-12}" x2="${cx}" y2="${TOP+4*L+12}" stroke="${on ? "#f08c2e" : "#c8d0dc"}" stroke-width="${on ? 2.5 : 1.5}" stroke-dasharray="${on ? "" : "3 3"}"/>`;
@@ -5194,6 +5200,7 @@
               const x = bx + k*sw;
               if(first == null) first = x; last = x;
               let topY = Infinity, labels = [], rects = "";
+              const hw = Math.max(6, Math.min(L * 2, sw * 0.9));   // 音符のタップ範囲。隣の格子の空きを覆わない幅
               cell.forEach((h, inst) => {
                 const d = DrumDomain.INST[inst], yy = yOf(d.pos), unc = DrumDomain.isUncertain(h);
                 if(d.ghost && cell.has("snare")) return;
@@ -5211,7 +5218,7 @@
                   g += `<ellipse cx="${x}" cy="${yy}" rx="${L*0.5}" ry="${L*0.36}" fill="${col}" transform="rotate(-18 ${x} ${yy})"/>`;
                 }
                 if(d.label) labels.push(d.label);
-                rects += `<rect class="hit" data-gid="${sp.gid}" data-pi="${sp.pi}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-L}" y="${yy-L*0.9}" width="${L*2}" height="${L*1.8}" fill="transparent"/>`;
+                rects += `<rect class="hit" data-gid="${sp.gid}" data-pi="${sp.pi}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-hw/2}" y="${yy-L*0.9}" width="${hw}" height="${L*1.8}" fill="transparent"/>`;
               });
               g += `<line x1="${x+4.5}" y1="${topY-1}" x2="${x+4.5}" y2="${stemTop}" stroke="#eef2f8" stroke-width="1.2"/>`;
               if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="#c8d0dc" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
@@ -5238,9 +5245,10 @@
         // グループの境目の余白は半分ずつ前後のグループに割り当てる
         const sp = spans.find((z, i) => x < z.xs[z.nb] - PW/2 + (spans[i+1] ? spans[i+1].gap / 2 : Infinity)) || spans[spans.length-1];
         if(!sp) return null;
+        // 拍 b の音符の少し手前（半拍ぶん）からを拍 b とみなし、位置は音符の x からの距離で測る（格子への吸着は snap）
         let b = 0;
-        for(let i = 0; i < sp.nb; i++) if(x >= sp.xs[i] - PW/2) b = i;
-        const p = Math.max(0, Math.min(sp.nb, b + (x - (sp.xs[b] - PW/2)) / cache.BW));
+        for(let i = 0; i < sp.nb; i++) if(x >= sp.xs[i] - cache.BW / 2) b = i;
+        const p = Math.max(0, Math.min(sp.nb, b + (x - sp.xs[b]) / cache.BW));
         return {sp, p};
       }
       // 再生位置（パートの拍）→ ステージ基準の x。follow なら再生位置が見えるようにスクロールする
@@ -5248,7 +5256,7 @@
         const sp = cache.spans.find(z => z.gid === gid && z.pi === pi);
         const svg = scoreEl.firstElementChild;
         if(!sp || !svg) return null;
-        const x = xAt(sp, p) - PW/2;
+        const x = xAt(sp, p);
         if(follow){
           const want = Math.max(0, x - scoreEl.clientWidth * 0.35);
           if(Math.abs(scoreEl.scrollLeft - want) > 2) scoreEl.scrollLeft = want;
@@ -5265,10 +5273,14 @@
       return {render, hitTest, headAt, reveal, get spans(){ return cache.spans; }};
     })();
 
-    // タップ位置の拍位置（格子に吸着）。別グループなら先にそちらへ切り替える（範囲モード中は切り替えない）
-    function posAt(clientX){
+    /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
+       範囲をなぞっている間は切り替えない。タップ（leave=true）なら範囲を閉じて移る＝コピーしたものを別のパートへ貼れる */
+    function posAt(clientX, leave){
       const h = Score.hitTest(clientX); if(!h) return null;
-      if(h.sp.gid !== ui.gid || h.sp.pi !== ui.part){ if(ui.rangeMode) return null; select(h.sp.gid, h.sp.pi); }
+      if(h.sp.gid !== ui.gid || h.sp.pi !== ui.part){
+        if(ui.rangeMode){ if(!leave) return null; ui.rangeMode = false; ui.rin = ui.rout = null; }
+        select(h.sp.gid, h.sp.pi);
+      }
       return DrumDomain.snap(grid(), h.p).p;
     }
     scoreEl.addEventListener("pointerup", e => {
@@ -5277,14 +5289,14 @@
       const h = e.target.closest(".hit");
       if(h){
         const hpi = Number(h.dataset.pi);
-        if(h.dataset.gid !== ui.gid || hpi !== ui.part){ if(ui.rangeMode) return; select(h.dataset.gid, hpi); }
+        if(h.dataset.gid !== ui.gid || hpi !== ui.part){ ui.rangeMode = false; ui.rin = ui.rout = null; select(h.dataset.gid, hpi); }
         const sel = {b:Number(h.dataset.b), k:Number(h.dataset.k), inst:h.dataset.inst}, bt = grid().beats[sel.b];
         ui.cursor = DrumDomain.slotPos(sel.b, sel.k, bt ? bt.sub : 1);
         ui.sel = ui.rangeMode ? null : (ui.sel && ui.sel.b === sel.b && ui.sel.k === sel.k && ui.sel.inst === sel.inst) ? null : sel;
         render();
         return;
       }
-      const p = posAt(e.clientX);
+      const p = posAt(e.clientX, true);
       ui.sel = null; if(p != null) ui.cursor = p;
       render();
     });
@@ -5385,30 +5397,48 @@
       const den = DrumDomain.denAt(partRs(), b);
       return ui.stepSize === 0 ? DrumDomain.baseSub(den) : ui.stepSize;
     }
-    // ステップ入力のカーソルを 1 歩進める／戻す（拍をまたぐと隣の拍の歩幅で数える）
+    /* ステップ入力のカーソルを 1 歩進める／戻す。歩幅の格子で「いまの位置より先（手前）の最初の点」へ動くので、
+       譜面をタップして16分の位置に置いたカーソルからでも 8分刻みで進める。拍をまたぐと隣の拍の歩幅で数える。
+       パートの端を越えたら、同じグループの隣のパートの頭（末尾の1歩手前）へ移る */
     function stepMove(dir){
       const g = group(); if(!g) return;
-      const nb = nbOf();
-      let b = Math.floor(ui.cursor + 1e-9), k;
-      if(b >= nb){ if(dir > 0) return; b = nb - 1; k = stepDiv(b); }
-      else k = Math.round((ui.cursor - b) * stepDiv(b));
-      k += dir;
-      if(k >= stepDiv(b)){ b += 1; k = 0; }
-      else if(k < 0){ b -= 1; if(b < 0){ b = 0; k = 0; } else k = stepDiv(b) - 1; }
-      ui.cursor = b >= nb ? nb : b + k / stepDiv(b);
+      const nb = nbOf(), x = ui.cursor, eps = 1e-6;
+      if(dir > 0){
+        const b = Math.floor(x + eps);
+        let next = nb;
+        if(b < nb){ const d = stepDiv(b), k = Math.floor((x - b) * d + eps) + 1; next = k >= d ? b + 1 : b + k / d; }
+        if(next >= nb - eps && ui.part + 1 < DrumDomain.partsOf(g).length){ select(g.id, ui.part + 1); Score.reveal(g.id, ui.part); return; }
+        ui.cursor = Math.min(nb, next);
+      }else{
+        if(x <= eps){
+          if(ui.part > 0){
+            select(g.id, ui.part - 1);
+            const last = nbOf() - 1;
+            ui.cursor = last + (stepDiv(last) - 1) / stepDiv(last);
+            Score.reveal(g.id, ui.part);
+            render();
+          }
+          return;
+        }
+        let b = Math.floor(x + eps); if(x - b < eps) b -= 1;
+        b = Math.min(b, nb - 1);
+        const d = stepDiv(b), k = Math.ceil((x - b) * d - eps) - 1;
+        ui.cursor = b + Math.max(0, k) / d;
+      }
       render();
     }
-    /* ステップ入力：カーソルの位置に置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音） */
+    /* ステップ入力：カーソルの位置にそのまま置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音）。
+       パートの末尾にいるときは、次のパートがあればその頭へ移ってから置く */
     let stepPlaced = false;
     function stepTap(inst){
       const g = group(); if(!g) return;
-      const nb = nbOf(), b = Math.floor(ui.cursor + 1e-9);
-      if(b >= nb) return;                                    // パート末より先には置けない
-      const d = stepDiv(b), p = b + Math.round((ui.cursor - b) * d) / d;
-      if(p >= nb - 1e-6) return;
+      if(ui.cursor >= nbOf() - 1e-6){
+        if(ui.part + 1 >= DrumDomain.partsOf(g).length) return;          // 最後のパートの末尾より先には置けない
+        select(g.id, ui.part + 1); Score.reveal(g.id, ui.part);
+      }
+      const p = ui.cursor;
       SoundGateway.drum(inst);
       stepPlaced = true;
-      ui.cursor = p;
       DrumService.add(ui.gid, ui.part, p, inst);
     }
     function stepRelease(){ if(stepPlaced){ stepPlaced = false; stepMove(+1); } }
@@ -5577,6 +5607,10 @@
         sel.value = String(ui.stepSize);
         if(!sel.selectedOptions.length){ ui.stepSize = 0; sel.value = "0"; }
       }
+      $("drRange").disabled = running;
+      $("drPaste").hidden = !ui.clip;
+      $("drPaste").disabled = running;
+      if(ui.clip) $("drPaste").textContent = "貼り付け " + ui.clip.items.length + "音";
       $("drSelbar").classList.toggle("show", !!ui.sel && !ui.rangeMode);
       $("drRangebar").classList.toggle("show", ui.rangeMode);
       $("drBar3").classList.toggle("sub", ui.rangeMode || !!ui.sel);
@@ -5744,8 +5778,13 @@
       // 範囲
       on("drRin", () => { ui.rin = ui.cursor; normalizeRange(); render(); });
       on("drRout", () => { ui.rout = ui.cursor; normalizeRange(); render(); });
-      on("drRcopy", () => { const c = DrumService.copy(ui.gid, ui.part, ui.rin, ui.rout); if(c){ ui.clip = c; controls(); } });
-      on("drRpaste", () => { if(ui.clip){ const next = DrumService.paste(ui.gid, ui.part, ui.cursor, ui.clip); ui.cursor = DrumDomain.snap(grid(), next).p; render(); } });
+      // コピーしたら範囲を閉じる（貼り付けは下の「貼り付け」から。別のパートをタップしてそこへ貼れる）
+      on("drRcopy", () => { const c = DrumService.copy(ui.gid, ui.part, ui.rin, ui.rout); if(c){ ui.clip = c; ui.cursor = ui.rout; ui.rangeMode = false; ui.rin = ui.rout = null; render(); } });
+      // 貼り付けたら、続けて貼れるようにカーソルを貼ったぶんだけ進める
+      const paste = () => { if(ui.clip && !Transport.running()){ const next = DrumService.paste(ui.gid, ui.part, ui.cursor, ui.clip); ui.cursor = DrumDomain.snap(grid(), next).p; render(); } };
+      on("drRpaste", paste);
+      on("drPaste", paste);
+      on("drRange", () => { if(Transport.running()) return; ui.rangeMode = true; ui.sel = null; ui.rin = ui.cursor; ui.rout = stepAfter(ui.cursor); render(); });
       on("drRdel", () => { DrumService.deleteRange(ui.gid, ui.part, ui.rin, ui.rout); });
       on("drRclr", () => { ui.rangeMode = false; ui.rin = ui.rout = null; render(); });
       $("drSelbar").addEventListener("pointerdown", e => e.stopPropagation());
