@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;600;700&family=DM+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&icon_names=fast_forward,fast_rewind,fullscreen,pause,play_arrow,stop&display=block" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&icon_names=content_copy,content_cut,content_paste,fast_forward,fast_rewind,fullscreen,pause,play_arrow,stop&display=block" rel="stylesheet">
 <style>
   :root{
     --sage:#A9B0A2;
@@ -623,6 +623,8 @@
   .dr-selbar .del,.dr-rangebar .del{border-color:var(--drec);color:var(--drec)}
   .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
   /* 選択範囲の再生は、選択と同じ橙で示す（通常の再生＝緑と区別する） */
+  .dr-rangebar button.ic{padding:0 7px}
+  .dr-rangebar button.ic .msym{font-size:17px}
   .dr-rangebar .rplay{border-color:var(--dwarn);color:var(--dwarn)}
   .dr-rangebar .rplay.on,.dr-mid #drPlay.range.on{background:var(--dwarn);border-color:var(--dwarn);color:var(--night)}
   .dr-mid #drPlay.range{background:transparent;border-color:var(--dwarn);color:var(--dwarn)}
@@ -962,11 +964,13 @@
       </div>
       <div class="dr-rangebar" id="drRangebar">
         <button class="rplay" id="drRplay" type="button" title="選んだ範囲だけをくり返し再生">▶ 選択</button>
+        <button id="drRclr" type="button" aria-label="範囲を閉じる" title="範囲を閉じる">✕</button>
         <span class="dr-rangetext" id="drRangeText"></span>
-        <button id="drRcut" type="button" title="範囲の音を切り取る（コピーして消す）">切り取り</button>
-        <button id="drRcopy" type="button">コピー</button><button id="drRpaste" type="button">貼り付け</button>
+        <!-- 切り取り・コピー・貼り付けは Google のアイコンだけで示す（意味は title / aria-label） -->
+        <button class="ic" id="drRcut" type="button" aria-label="切り取り" title="切り取り（コピーして範囲の音を消す）"><span class="msym">content_cut</span></button>
+        <button class="ic" id="drRcopy" type="button" aria-label="コピー" title="コピー"><span class="msym">content_copy</span></button>
+        <button class="ic" id="drRpaste" type="button" aria-label="貼り付け" title="貼り付け"><span class="msym">content_paste</span></button>
         <button class="del" id="drRdel" type="button">削除</button>
-        <button id="drRclr" type="button" aria-label="範囲を閉じる">✕</button>
       </div>
       <button id="drAutofix" type="button" title="ずれた打点を拍の格子に載せる">自動補正</button>
       <button id="drTupOff" type="button" title="カーソルの位置の連符の区間を外す（打点はそのまま）" hidden>連符を外す</button>
