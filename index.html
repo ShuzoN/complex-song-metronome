@@ -1542,27 +1542,46 @@
        範囲 a..b は拍の頭にそろえ、歩幅が複数拍の連符（"m:n"）なら m 拍ずつの区切りにする（足りなければ m 拍まで広げる）。
        区切りの中の音は、同じ位置の音（和音）を1つの打点として、並び順を保ったまま近い格子点へ割り当てる
        （総ずれ最小。数がぴったりなら前から順に1つずつ）。連符の区間は歩幅の置き方（stepTuplet と同じ規則）に張り替える。
-       次のときは何も変えず {error} を返す：パートからはみ出す／既存の連符の区間を途中で切る／格子点より音が多い区切りがある。
+       対象は選んだ中の音：音のない区切りは触らない（連符も張らない・外さない）。
+       次のときは何も変えず {error} を返す：パートからはみ出す／音が無い／選んだ音の連符が選んだところの外へはみ出す／
+       格子点より音が多い区切りがある。
        返り値 {hits, tuplets, lo, hi, moved}（moved: 元の位置 → 新しい位置） */
-    function retuplet(rhythms, tuplets, hits, a, b, size){
-      const nb = cycleBeats(rhythms), m = multiStep(size), span = m ? m[0] : 1;
+    // 置き直す範囲の段取り：拍の頭にそろえた lo..hi と、区切りごとの {c（頭）, len（格子の間隔）, tup（張る連符の区間 or null）}
+    function retupletPlan(rhythms, a, b, size){
+      const m = multiStep(size), span = m ? m[0] : 1;
       const lo = Math.max(0, Math.floor(a + 1e-6));
       let hi = Math.max(lo + 1, Math.ceil(b - 1e-6));
       hi = lo + Math.ceil((hi - lo) / span) * span;
-      if(hi > nb) return {error: "パートの終わりを越えます"};
-      if((tuplets || []).some(t => t.at < hi && t.at + t.beats > lo && (t.at < lo || t.at + t.beats > hi))) return {error: "連符の区間の途中で切れます"};
-      const moved = new Map(), tups = [];
+      const chunks = [];
       for(let c = lo; c < hi; c += span){
-        let len, tup = null;
-        if(m){ len = m[0] / m[1]; tup = {at: c, beats: m[0], n: m[1]}; }
-        else {
-          const d = size === 0 ? baseAt(rhythms, c) : size;
-          len = 1 / d;
-          if(baseAt(rhythms, c) % d !== 0) tup = {at: c, beats: 1, n: d};
-        }
+        if(m){ chunks.push({c, len: m[0] / m[1], tup: {at: c, beats: m[0], n: m[1]}}); continue; }
+        const d = size === 0 ? baseAt(rhythms, c) : size;
+        chunks.push({c, len: 1 / d, tup: baseAt(rhythms, c) % d !== 0 ? {at: c, beats: 1, n: d} : null});
+      }
+      return {lo, hi, span, chunks};
+    }
+    /* 選んだ対象（その中の音）が、もう歩幅 size の連符に乗っているか（同じ連符のボタンをもう一度押したら解除する判定）。
+       音のある区切りだけを見る（音のない拍に連符が掛かっているかは問わない）。音が無い・連符を張らない歩幅（8分・16分など）は false */
+    function isRetupleted(rhythms, tuplets, hits, a, b, size){
+      const pl = retupletPlan(rhythms, a, b, size);
+      const used = pl.chunks.filter(k => (hits || []).some(h => h.p >= k.c - 1e-6 && h.p < k.c + pl.span - 1e-6));
+      return used.length > 0 && used.every(k => k.tup && (tuplets || []).some(t => t.at === k.tup.at && t.beats === k.tup.beats && t.n === k.tup.n));
+    }
+    function retuplet(rhythms, tuplets, hits, a, b, size){
+      const nb = cycleBeats(rhythms), m = multiStep(size), pl = retupletPlan(rhythms, a, b, size), lo = pl.lo, hi = pl.hi, span = pl.span;
+      if(hi > nb) return {error: "パートの終わりを越えます"};
+      // 対象は選んだ中の音。音のない区切りは触らない（連符も張らない・外さない）
+      const inChunk = k => (hits || []).filter(h => h.p >= k.c - 1e-6 && h.p < k.c + span - 1e-6);
+      const used = pl.chunks.filter(k => inChunk(k).length);
+      if(!used.length) return {error: "選んだところに音がありません"};
+      const touches = t => used.some(k => t.at < k.c + span && t.at + t.beats > k.c);
+      if((tuplets || []).some(t => touches(t) && (t.at < lo || t.at + t.beats > hi))) return {error: "選んだ音の連符が、選んだところの外へはみ出しています"};
+      const moved = new Map(), tups = [];
+      for(const k of used){
+        const {c, len, tup} = k;
         if(tup) tups.push(tup);
         const cnt = Math.round(span / len);
-        const on = [...new Set((hits || []).filter(h => h.p >= c - 1e-6 && h.p < c + span - 1e-6).map(h => round3(h.p)))].sort((x, y) => x - y);
+        const on = [...new Set(inChunk(k).map(h => round3(h.p)))].sort((x, y) => x - y);
         if(on.length > cnt) return {error: "音が " + on.length + " 個あって、" + (m ? m[0] + "拍" : "1拍") + "の格子（" + cnt + " 個）に入りません"};
         // 並び順を保つ割り当て（i 番目の音 → j 番目の格子点）の総ずれ最小を DP で求める
         const K = on.length, slot = j => c + j * len, cost = [], from = [];
@@ -1575,7 +1594,7 @@
         for(let i = K, j = cnt; i > 0; j--) if(from[i][j]){ moved.set(on[i - 1], round3(slot(j - 1))); i--; }
       }
       const out = (hits || []).map(h => { const to = moved.get(round3(h.p)); return h.p >= lo - 1e-6 && h.p < hi - 1e-6 && to != null ? {p: to, inst: h.inst} : h; });
-      const keep = (tuplets || []).filter(t => !(t.at >= lo && t.at + t.beats <= hi));
+      const keep = (tuplets || []).filter(t => !touches(t));
       return {hits: out, tuplets: normTuplets(keep.concat(tups), nb), lo, hi, moved};
     }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
@@ -1600,7 +1619,7 @@
             SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
             baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, pow2Floor, tupletNote, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
             respanTuplets, remapTuplets, remapParts,
-            MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet, retuplet};
+            MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet, retuplet, isRetupleted};
   })();
 
   const Domain = (() => {
@@ -2944,6 +2963,10 @@
         if(r.error) return r;
         change(gid, g2 => { const q = g2.drums[pi]; if(!q) return; q.hits = r.hits.slice().sort(byPos); q.tuplets = r.tuplets; }, {render:true});
         return r;
+      },
+      isRetupleted(gid, pi, a, b, size){
+        const g = find(gid), pt = partOf(g, pi);
+        return !!pt && DrumDomain.isRetupleted(DrumDomain.partRhythms(g, pt), pt.tuplets, pt.hits, a, b, size);
       },
       // 拍 b を含む区間を外す（打点はそのまま。格子の推定に戻る）
       removeTuplet(gid, pi, b){
@@ -6514,7 +6537,7 @@
         '<text x="14" y="6.3" font-size="7.5" font-weight="700" text-anchor="middle" fill="currentColor" font-family="var(--mono)">' + n + "</text>";
       return '<svg viewBox="0 0 28 24" width="28" height="24" aria-hidden="true">' + g + "</svg>";
     }
-    let stepSizes = {key: null, list: []};   // 歩幅のボタン列（controls が拍子の分母・基本分割ごとに作り直す）
+    let stepSizes = {key: null, den: 4, base: 4, list: []};   // 歩幅のボタン列（controls が拍子の分母・基本分割ごとに作り直す）
     function controls(){
       const g = group(), running = Transport.running(), cur = Transport.cur();
       const chips = $("drGroups"), keep = chips.scrollLeft;
@@ -6628,7 +6651,7 @@
           }
           list = list.filter((o, i, a) => a.findIndex(y => y.v === o.v) === i);
           // 全音符以上の歩幅（分母が1・2の拍子で出る）は使わないので出さない。並びは上で組んだ順のまま
-          stepSizes = {key, list: list.filter(o => o.v === 0 || !note(den) || o.x > 1)};
+          stepSizes = {key, den, base, list: list.filter(o => o.v === 0 || !note(den) || o.x > 1)};
           $("drStepSize").innerHTML = stepSizes.list.map((o, i) =>
             '<button type="button" role="radio" data-i="' + i + '" data-name="' + o.top + o.name + '" title="' + o.top + o.name + '" aria-label="' + o.top + o.name + '">' +
             (note(den) && o.x > 1 ? noteSymbol(o.x, o.n) + "<small>" + o.x + "</small>" : "<b>" + o.plain + "</b>") + "</button>").join("");
@@ -6809,7 +6832,14 @@
             const cur = DrumService.tupletAt(gid, pi, sel.b);
             a = cur ? cur.at : sel.b; b = cur ? cur.at + cur.beats : sel.b + 1;
           }
-          const r = DrumService.retuplet(gid, pi, a, b, o.v);
+          /* 選んだ音がもう同じ連符に乗っているときにもう一度押したら解除：その連符の音符のストレート（8分3連→8分、16分5連→16分）
+             に置き直し、歩幅もそれに切り替える（そのまま続けて打てる） */
+          let size = o.v;
+          if(o.n && DrumService.isRetupleted(gid, pi, a, b, o.v)){
+            const d = Math.max(1, o.x / stepSizes.den), v = d === stepSizes.base ? 0 : d;
+            if(stepSizes.list.some(z => z.v === v)){ size = v; DrumStepInput.setSize(v); }
+          }
+          const r = DrumService.retuplet(gid, pi, a, b, size);
           if(r.error) toast(r.error);
           else if(DrumRange.valid()) DrumEditSession.spanRange(r.lo, r.hi);
           else {

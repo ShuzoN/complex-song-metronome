@@ -223,3 +223,62 @@ test.describe("選んだ部分を連符に置き直す", () => {
     expect(d.hits.snare).toEqual([3, 5, 7]);
   });
 });
+
+test.describe("連符の置き直しの解除", () => {
+  test.beforeEach(async ({app}) => { await app.loadFixture("02-basic-beat"); await app.openDrums(); });
+  const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
+
+  test("もう8分3連になっている範囲でもう一度8分3連を押すと、8分に置き直して歩幅も8分になる", async ({app, page}) => {
+    await app.click("drRange"); for(let i = 0; i < 2; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await stepBtn(app, "8分3連");
+    await stepBtn(app, "8分3連");                         // 解除
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
+    const d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits.hh_close.slice(0, 3)).toEqual([0, 0.5, 1]);
+  });
+
+  test("置き直すのは選んだ中の音だけで、音のない拍には連符を張らない", async ({app}) => {
+    await app.closeDrums();
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    for(const i of ["kick", "snare"]) await app.pad(i);   // 8分で 0・0.5
+    await app.click("drStepBack"); await app.click("drStepBack");
+    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd"); await app.click("drRout");   // 1〜2拍目（2拍目は空）
+    await stepBtn(app, "8分3連");
+    const d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toEqual([[0, 1, 3]]);
+    expect(d.hits).toEqual({snare: [0.667], kick: [0]});
+  });
+
+  test("解除は選んだ音で判定する：音のある拍がすべて8分3連なら、空の拍が混じっていても解除になる", async ({app, page}) => {
+    await app.closeDrums();
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    await app.setStepSize("8分3連");
+    for(const i of ["kick", "snare"]) await app.pad(i);   // 1拍目だけ 8分3連（0・0.333）
+    await app.click("drRange"); for(let i = 0; i < 4; i++) await app.click("drStepFwd"); await app.click("drRout");   // 1〜2拍目（2拍目は空）
+    await stepBtn(app, "8分3連");
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
+    const d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits).toEqual({snare: [0.5], kick: [0]});
+  });
+
+  test("音符を選んでいても、その音の連符の区間が同じ連符なら解除し、選択はその音に付いてくる", async ({app, page}) => {
+    await app.closeDrums();
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    await app.setStepSize("8分3連");
+    for(const i of ["kick", "snare"]) await app.pad(i);   // 0・0.333
+    await app.hitRects('[data-inst="snare"]').first().click();
+    await stepBtn(app, "8分3連");                         // 解除 → 8分
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
+    await expect(page.locator("#drSelbar")).toHaveClass(/\bshow\b/);
+    await app.click("drSelRight");                        // 選択はスネアに付いてきている（0.5 → その拍の格子＝16分1つぶん後ろへ）
+    const d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits).toEqual({snare: [0.75], kick: [0]});
+  });
+
+});
