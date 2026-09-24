@@ -696,3 +696,64 @@ test('score occurrences write repeated patterns as simile and restart notes afte
   // 1小節パート ×3 → 1小節シミレを小節ぶん
   assert.equal(occ(g(3, [{span:1, repeat:3, hits:[]}])), '["A1","%A1<0","%A1<0"]');
 });
+
+/* ---------- ドラムのスウィング ---------- */
+
+test('swing delays the back half of each pair and leaves tuplet beats and broken pairs straight', () => {
+  const run = load(['DrumDomain']);
+  const r = v => Math.round(v * 1000) / 1000;
+  // 正規化：8 / 16 は既定 67%、割合は 50〜75 にクランプ、50（ストレート）や不正な値は null
+  assert.equal(run('JSON.stringify(DrumDomain.normSwing(8))'), '{"unit":8,"amount":67}');
+  assert.equal(run('JSON.stringify(DrumDomain.normSwing({unit:16, amount:90}))'), '{"unit":16,"amount":75}');
+  assert.equal(run('JSON.stringify([DrumDomain.normSwing({unit:8, amount:50}), DrumDomain.normSwing(12), DrumDomain.normSwing(null)])'), '[null,null,null]');
+  run(`var rs44=[{num:4,den:4}], s8={unit:8,amount:67}, s16={unit:16,amount:60};`);
+  // 4/4 の8分スウィング：裏の8分が 0.67 へ。拍の頭は動かない。16分は組の中で比例して動く
+  assert.deepEqual([0, 0.5, 1, 1.5, 0.25].map(p => r(run(`DrumDomain.swingPos(rs44, ${p}, s8)`))), [0, 0.67, 1, 1.67, 0.335]);
+  // 16分スウィング：組は半拍。8分の裏はそのまま、16分の裏だけ遅れる
+  assert.deepEqual([0.25, 0.5, 0.75].map(p => r(run(`DrumDomain.swingPos(rs44, ${p}, s16)`))), [0.3, 0.5, 0.8]);
+  // 逆変換で元に戻る（重ね録り）
+  assert.equal(r(run('DrumDomain.swingPos(rs44, DrumDomain.swingPos(rs44, 2.5, s8), s8, true)')), 2.5);
+  // 7/8 の8分スウィング：2拍で1組。7拍目は組が欠けるのでストレート
+  run('var rs78=[{num:7,den:8}];');
+  assert.deepEqual([1, 5, 6, 6.5].map(p => r(run(`DrumDomain.swingPos(rs78, ${p}, s8)`))), [1.34, 5.34, 6, 6.5]);
+  // 3連と判定した拍はハネさせない
+  run(`var q = DrumDomain.quantize(rs44, [{p:0,inst:'hh_close'},{p:0.5,inst:'hh_close'},
+      {p:1,inst:'snare'},{p:1.333,inst:'snare'},{p:1.667,inst:'snare'}]);
+    var ps = DrumDomain.playSlots(q, rs44, s8);`);
+  assert.deepEqual(run('JSON.stringify(ps[0].map(h=>Math.round(h.f*1000)/1000))'), '[0,0.67]');
+  assert.deepEqual(run('JSON.stringify(ps[1].map(h=>Math.round(h.f*1000)/1000))'), '[0,0.333,0.667]');
+});
+
+test('swing round-trips through YAML and is omitted for straight groups', () => {
+  const run = load(['Domain', 'Yaml', 'SequenceMapper']);
+  run(`var g = Domain.makeGroup({rhythms:[{num:4,den:4}], swing:{unit:16, amount:58}});
+    var text = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups:[g, Domain.makeGroup({})]})));
+    var back = SequenceMapper.toEntity(Yaml.parse(text)).sequence.groups;`);
+  assert.ok(run('text').includes('    swing:\n      unit: 16\n      amount: 58\n'));
+  assert.equal(run('text.split("swing:").length'), 2);
+  assert.equal(run('JSON.stringify(back.map(x=>x.swing))'), '[{"unit":16,"amount":58},null]');
+  // 短い書き方（swing: 8）は 8分 67%。複製にも引き継ぐ
+  assert.equal(run(`JSON.stringify(SequenceMapper.toEntity(Yaml.parse('groups:\\n  - pattern: [4/4]\\n    swing: 8\\n')).sequence.groups[0].swing)`), '{"unit":8,"amount":67}');
+  assert.equal(run('JSON.stringify(Domain.cloneGroup(g).swing)'), '{"unit":16,"amount":58}');
+});
+
+test('swung playback delays the off-beats and taps are stored back on the straight grid', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'SpeedService', 'PlaybackService', 'PlaybackScheduler', 'DrumService', 'DrumPlayback']);
+  run(`const drums=[];
+    const SoundGateway={click:()=>{}, drum:(inst,time)=>drums.push(inst+'@'+Math.round(time*1e6)/1e6)};
+    const VideoGateway={armed:()=>false};
+    const Transport={running:()=>true, isSolo:()=>false};
+    // 4/4 ×1、♩=120（1拍＝0.5秒）
+    const group=Domain.makeGroup({reps:1, rhythms:[{num:4,den:4}], drums:[{span:1, hits:{hh_close:[0, 0.5, 1, 1.5]}}]});
+    Store.apply({groups:[group], bpm:120});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PlaybackScheduler.setBeatHook(DrumPlayback.hook);
+    DrumService.setSwing(group.id, {unit:8, amount:67});
+    PlaybackService.update('all', null); PlaybackScheduler.prime(0); PlaybackScheduler.pump(10);`);
+  assert.equal(run('JSON.stringify(drums)'), JSON.stringify(['hh_close@0', 'hh_close@0.335', 'hh_close@0.5', 'hh_close@0.835']));
+  // ハネた裏（0.835 秒）を叩くと、ストレートの 1.5 拍目として記録する
+  assert.equal(run('Math.round(DrumPlayback.locate(0.835).p*1000)/1000'), 1.5);
+  // スウィングの変更は1手の履歴。パートは増やさない
+  run('HistoryService.undo();');
+  assert.equal(run('Store.findGroup(group.id).swing'), null);
+});
