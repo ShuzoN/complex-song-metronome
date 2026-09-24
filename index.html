@@ -592,6 +592,11 @@
   .dr-selbar .arrow{min-width:40px;font-size:14px}
   .dr-selbar .del,.dr-rangebar .del{border-color:var(--drec);color:var(--drec)}
   .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
+  /* 選択範囲の再生は、選択と同じ橙で示す（通常の再生＝緑と区別する） */
+  .dr-rangebar .rplay{border-color:var(--dwarn);color:var(--dwarn)}
+  .dr-rangebar .rplay.on,.dr-mid #drPlay.range.on{background:var(--dwarn);border-color:var(--dwarn);color:#2a1606}
+  .dr-mid #drPlay.range{background:transparent;border-color:var(--dwarn);color:var(--dwarn)}
+  .dr-head.range{background:var(--dwarn)}
   .dr-rangetext{color:var(--dmuted);white-space:nowrap;font-size:11px}
   #drAutofix.warn{border-color:var(--dwarn);color:var(--dwarn)}
 
@@ -872,6 +877,7 @@
         <button id="drSelClr" type="button" aria-label="選択解除">✕</button>
       </div>
       <div class="dr-rangebar" id="drRangebar">
+        <button class="rplay" id="drRplay" type="button" title="選んだ範囲だけをくり返し再生">▶ 選択</button>
         <button id="drRin" type="button">In</button><button id="drRout" type="button">Out</button>
         <span class="dr-rangetext" id="drRangeText"></span>
         <button id="drRcopy" type="button">コピー</button><button id="drRpaste" type="button">貼り付け</button>
@@ -2550,6 +2556,8 @@
       parts(gid){ const g = find(gid); return g ? DrumDomain.partsOf(g) : []; },
       grid(gid, pi){ const g = find(gid); return g ? entry(g, pi).grid : {beats:[]}; },
       hits(gid, pi){ const pt = partOf(find(gid), pi); return pt ? pt.hits : []; },
+      // 再生用：パートの拍ごとの発音 [[{f, inst}]]（範囲再生が使う）
+      playSlots(gid, pi){ const g = find(gid); return g ? entry(g, pi).play : []; },
       beats(gid, pi){ const g = find(gid), pt = partOf(g, pi); return pt ? DrumDomain.partBeats(g, pt) : 0; },
       // くり返し rep 回目・その回の cb 拍目 → {pi, p}
       locatePass(gid, rep, cb){ const g = find(gid); return g ? DrumDomain.locatePass(g, rep, cb) : {pi:0, p:cb}; },
@@ -5099,6 +5107,7 @@
     function select(gid, pi){
       pi = pi || 0;
       if(gid === ui.gid && pi === ui.part) return;
+      RangePlay.stop();
       if(Transport.running()) Transport.stop(false);
       ui.gid = gid; ui.part = pi; ui.sel = null; ui.rin = ui.rout = null; ui.rangeMode = false; ui.cursor = 0;
       render();
@@ -5152,7 +5161,7 @@
       function render(){
         const BW = metrics(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
         cache = {spans: lay.spans, BW, W};
-        const running = Transport.running(), stemTop = yOf(-4.6);
+        const running = playing(), stemTop = yOf(-4.6);
         let g = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="譜面">`;
         for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="#7c879b" stroke-width="1"/>`;
         g += `<rect x="7" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/><rect x="13" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/>`;
@@ -5446,7 +5455,7 @@
     // パッドが叩かれた。音はすぐ出し、重ね録り中なら「いま鳴っている周の何拍目か」に打点を積む
     function tap(inst){
       SoundGateway.ensure();
-      if(ui.stepMode && !Transport.running()){ stepTap(inst); return; }
+      if(ui.stepMode && !playing()){ stepTap(inst); return; }
       const now = SoundGateway.now();
       SoundGateway.drum(inst);
       if(!(Transport.running() && ui.rec)) return;
@@ -5493,20 +5502,83 @@
         const up = e => { if(held.delete(e.pointerId) && held.size === 0) stepRelease(); };
         root.addEventListener("pointerup", up); root.addEventListener("pointercancel", up);
         // 再生した打点のパッドも発音時刻に光らせる（録った音がいまどこで鳴っているか分かる）
-        DrumPlayback.onFlash((inst, t) => {
-          if(!ui.open) return;
-          setTimeout(() => document.querySelectorAll('.dr-pad[data-inst="' + inst + '"]').forEach(flashPad),
-            Math.max(0, (t + LatencyService.seconds() - SoundGateway.now()) * 1000));
-        });
+        DrumPlayback.onFlash(flashAt);
       }
-      return {mount};
+      function flashAt(inst, t){
+        if(!ui.open) return;
+        setTimeout(() => document.querySelectorAll('.dr-pad[data-inst="' + inst + '"]').forEach(flashPad),
+          Math.max(0, (t + LatencyService.seconds() - SoundGateway.now()) * 1000));
+      }
+      return {mount, flashAt};
     })();
+
+    /* ---------- 選択範囲の再生 ----------
+       選んだ範囲（パートの拍位置 rin〜rout）だけをくり返す。Transport とは別の小さな先読みスケジューラで、
+       クリックと打点を同じ AudioContext 時刻に予約する。テンポはグループの BPM（到達BPM があれば開始側）× speed。
+       範囲だけを確かめる用途なので、動画とは同期しない。範囲を動かすと次の拍から新しい範囲で回る */
+    const RangePlay = (() => {
+      const AHEAD = 0.12;
+      let timer = null, target = null, pos = 0, next = 0;
+      const marks = [];            // 予約した区切り {time, p, len, end}（再生位置の表示用）
+      const valid = () => ui.rin != null && ui.rout != null && ui.rout > ui.rin;
+      function pump(){
+        const g = target && findGroup(target.gid), pt = g && DrumDomain.partsOf(g)[target.pi];
+        if(!pt || !valid() || ui.gid !== target.gid || ui.part !== target.pi){ stop(); return; }
+        const rs = DrumDomain.partRhythms(g, pt), slots = DrumService.playSlots(g.id, target.pi);
+        const bpm = Domain.effectiveBpm(g, state().bpm) * SpeedService.rate(), limit = SoundGateway.now() + AHEAD;
+        for(let guard = 0; next < limit && guard < 256; guard++){
+          if(pos < ui.rin - 1e-9 || pos >= ui.rout - 1e-9) pos = ui.rin;      // 範囲の頭へ戻る
+          const b = Math.floor(pos + 1e-9), end = Math.min(b + 1, ui.rout);
+          const loc = DrumDomain.locate(rs, b), r = rs[loc.bar] || rs[rs.length - 1];
+          const len = Domain.rhythmSeconds(r.den, bpm), tp = Domain.tupletOf(r), at = q => next + (q - pos) * len;
+          const inside = q => q >= pos - 1e-9 && q < end - 1e-9;
+          for(let k = 0; k < tp; k++){ const q = b + k / tp; if(inside(q)) SoundGateway.click(Domain.clickLevel(r, loc.beat, k), at(q), len / tp); }
+          for(const h of (slots[b] || [])){ const q = b + h.f; if(inside(q)){ SoundGateway.drum(h.inst, at(q)); Pads.flashAt(h.inst, at(q)); } }
+          marks.push({time: next, p: pos, len, end});
+          if(marks.length > 32) marks.shift();
+          next = at(end); pos = end;
+        }
+      }
+      function start(){
+        if(!valid()) return;
+        if(Transport.armKind()) Transport.armCancel(); else if(Transport.running()) Transport.stop(false);
+        SoundGateway.ensure();
+        target = {gid: ui.gid, pi: ui.part}; pos = ui.rin; next = SoundGateway.now() + 0.08; marks.length = 0;
+        timer = setInterval(pump, 25); pump();
+        ui.sel = null;
+        render();
+        if(!raf) raf = requestAnimationFrame(frame);
+      }
+      function stop(){
+        if(!timer) return;
+        clearInterval(timer); timer = null; target = null; marks.length = 0;
+        SoundGateway.cancelPending();
+        headEl.classList.remove("range"); headEl.style.display = "none";
+        render();
+      }
+      // いま鳴っている位置（パートの拍）
+      function heardPos(){
+        const now = SoundGateway.now();
+        let m = null; for(const x of marks) if(x.time <= now) m = x;
+        return m ? Math.min(m.end, m.p + (now - m.time) / m.len) : null;
+      }
+      return {start, stop, toggle: () => timer ? stop() : start(), playing: () => !!timer, valid, heardPos, get target(){ return target; }};
+    })();
+    const playing = () => Transport.running() || RangePlay.playing();
 
     /* ---------- 再生位置（聞こえている拍を rAF で補間） ---------- */
     let raf = null;
     function frame(){
       raf = null;
       if(!ui.open) return;
+      if(RangePlay.playing()){
+        const p = RangePlay.heardPos(), t = RangePlay.target, hp = p != null && t ? Score.headAt(t.gid, t.pi, p, true) : null;
+        headEl.classList.add("range");
+        if(hp){ headEl.style.display = "block"; headEl.style.left = hp.x + "px"; headEl.style.top = hp.top + "px"; headEl.style.height = hp.height + "px"; }
+        raf = requestAnimationFrame(frame);
+        return;
+      }
+      headEl.classList.remove("range");
       const b = ui.beat;
       if(!Transport.running() || !b){ headEl.style.display = "none"; return; }
       const heard = SoundGateway.now() - LatencyService.seconds();
@@ -5580,15 +5652,25 @@
         const pg = findGroup(cur.gid);
         st.innerHTML = (pg ? esc(pg.name) + " " + (cur.rep + 1) + "/" + pg.reps : "再生中") + (ui.rec ? ' <span class="rec">● REC</span>' : "");
       }else st.textContent = Transport.armKind() ? "準備中…" : "停止中";
+      // 範囲を選んでいる間は ▶ が「選択を再生」になり、選択と同じ橙で示す
+      const rangeOn = ui.rangeMode && RangePlay.valid(), rp = RangePlay.playing();
+      $("drPlay").classList.toggle("range", rangeOn || rp);
+      $("drPlay").classList.toggle("on", rp);
+      $("drPlay").textContent = rp ? "■" : "▶";
+      $("drPlay").setAttribute("aria-label", rangeOn || rp ? (rp ? "選択の再生を止める" : "選択した範囲をくり返し再生") : "このグループをくり返し再生");
       $("drPlay").style.opacity = running ? ".55" : "1";
-      $("drStop").style.opacity = running || Transport.armKind() ? "1" : ".45";
+      $("drStop").style.opacity = running || rp || Transport.armKind() ? "1" : ".45";
+      $("drRplay").classList.toggle("on", rp);
+      $("drRplay").textContent = rp ? "■ 停止" : "▶ 選択";
+      $("drRplay").disabled = !RangePlay.valid() && !rp;
+      if(rp) st.textContent = "選択を再生中";
       $("drRec").classList.toggle("on", ui.rec && running);
       $("drSong").classList.toggle("on", running && Transport.mode() === "all");
       $("drUndo").disabled = !HistoryService.canUndo();
       $("drRedo").disabled = !HistoryService.canRedo();
       $("drClick").classList.toggle("on", ui.click); $("drClick").classList.toggle("off", !ui.click);
       $("drStep").classList.toggle("on", ui.stepMode);
-      $("drMid").classList.toggle("stepping", ui.stepMode && !running);
+      $("drMid").classList.toggle("stepping", ui.stepMode && !playing());
       const unc = ui.gid ? DrumService.uncertain(ui.gid, ui.part) : 0;
       $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
       $("drAutofix").classList.toggle("warn", unc > 0);
@@ -5633,6 +5715,7 @@
 
     /* ---------- 再生・レック ---------- */
     function playGroup(){
+      RangePlay.stop();
       if(Transport.running() || Transport.armKind() || !group()) return;
       SequenceService.setActive(ui.gid);                 // グループ無限再生の対象
       DrumPlayback.clearLog();
@@ -5640,6 +5723,7 @@
       Transport.start("solo", {loop:true});
     }
     function stop(){
+      RangePlay.stop();
       if(Transport.armKind()) Transport.armCancel();
       else if(Transport.running()) Transport.stop(false);
     }
@@ -5712,6 +5796,7 @@
     function close(){
       if(!ui.open) return;
       Cal.close();
+      RangePlay.stop();
       $("drCfg").classList.remove("show");
       ui.open = false; ui.rec = false; ui.beat = null;
       el.hidden = true;
@@ -5742,9 +5827,10 @@
         if(c.getAttribute("aria-disabled")) return;
         select(c.dataset.gid, 0); Score.reveal(ui.gid, 0);
       });
-      on("drPlay", playGroup);
+      on("drPlay", () => { if(RangePlay.playing() || (ui.rangeMode && RangePlay.valid())) RangePlay.toggle(); else playGroup(); });
+      on("drRplay", () => RangePlay.toggle());
       on("drStop", stop);
-      on("drSong", () => { if(Transport.running() || Transport.armKind()) stop(); else { DrumPlayback.clearLog(); Transport.start("all"); } });
+      on("drSong", () => { if(Transport.running() || Transport.armKind()) stop(); else { RangePlay.stop(); DrumPlayback.clearLog(); Transport.start("all"); } });
       on("drRec", () => {
         if(!Transport.running()){ ui.rec = true; ui.recCommitted = false; playGroup(); if(!Transport.running() && !Transport.armKind()) ui.rec = false; controls(); return; }
         ui.rec = !ui.rec; ui.recCommitted = false;
@@ -5786,7 +5872,7 @@
       on("drPaste", paste);
       on("drRange", () => { if(Transport.running()) return; ui.rangeMode = true; ui.sel = null; ui.rin = ui.cursor; ui.rout = stepAfter(ui.cursor); render(); });
       on("drRdel", () => { DrumService.deleteRange(ui.gid, ui.part, ui.rin, ui.rout); });
-      on("drRclr", () => { ui.rangeMode = false; ui.rin = ui.rout = null; render(); });
+      on("drRclr", () => { RangePlay.stop(); ui.rangeMode = false; ui.rin = ui.rout = null; render(); });
       $("drSelbar").addEventListener("pointerdown", e => e.stopPropagation());
       $("drRangebar").addEventListener("pointerdown", e => e.stopPropagation());
       // 設定
