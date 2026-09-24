@@ -19,7 +19,6 @@
     --on-night:var(--panel); --on-night-2:rgba(245,244,239,.62); --on-night-3:rgba(245,244,239,.38);
     --night-rule:rgba(245,244,239,.14); --night-rule-2:rgba(245,244,239,.30);
     --signal-lt:#E0574A; --brass-lt:#C9A55C;
-    --orange:#E8893A; --go:#3FB950;   /* 濃色面の差し色：orange＝選択・入・位置、go（Git の追加行の緑）＝再生 */
     --display:"Big Shoulders Display","Zen Kaku Gothic New",sans-serif;
     --mono:"DM Mono",ui-monospace,monospace;
     --body:"Zen Kaku Gothic New",system-ui,sans-serif;
@@ -541,13 +540,12 @@
     --dcym:var(--brass-lt); --dcym-bg:rgba(201,165,92,.12); --dcym-bd:rgba(201,165,92,.5); --dcym-ink:#E8D6AA;
     --ddrm:var(--sage); --ddrm-bg:rgba(169,176,162,.09); --ddrm-bd:rgba(169,176,162,.45); --ddrm-ink:#DDE2D6;
     --dkick-bg:rgba(245,244,239,.06); --dkick-bd:rgba(245,244,239,.42);
-    --drec:var(--signal-lt); --dwarn:var(--brass-lt); --dplay:var(--orange); --dgo:var(--go);
-    --don:var(--orange); --don-bg:rgba(232,137,58,.12);   /* 差し色は orange。赤は録音（Rec）だけ、再生ボタンは go（緑） */
+    --drec:var(--signal-lt); --dwarn:var(--brass-lt); --dplay:var(--signal-lt);
+    --don:var(--on-night); --don-bg:rgba(245,244,239,.08);   /* 入のトグル・選択中（赤は再生・録音・位置だけに使う） */
     /* 譜面（SVG）用 */
     --dstaff:rgba(245,244,239,.3); --dsub:rgba(245,244,239,.78); --dbar:rgba(245,244,239,.55);
-    --dcell-cur:rgba(245,244,239,.16); --dcur-bg:rgba(245,244,239,.035); --dwarn-bg:rgba(201,165,92,.16);
-    /* シークバー（ルーラー）はグレーの濃淡だけで描く */
-    --dcell:rgba(245,244,239,.06); --druler:#262923; --dthumb:rgba(245,244,239,.10); --dthumb-bd:rgba(245,244,239,.55);
+    --dplay-bg:rgba(224,87,74,.10); --dcell-cur:rgba(245,244,239,.2); --dcur-bg:rgba(245,244,239,.035); --dwarn-bg:rgba(201,165,92,.16);
+    --dcell:rgba(245,244,239,.07); --druler:#121411;
     position:fixed;inset:0;z-index:9985;background:var(--dbg);color:var(--dtext);
     font-family:var(--body);font-size:13px;overflow:hidden;touch-action:none;overscroll-behavior:none;
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
@@ -583,7 +581,7 @@
   .dr-groups{display:flex;gap:6px;width:0;flex:1 1 0;overflow-x:auto;overflow-y:hidden;touch-action:pan-x;scrollbar-width:none;padding-bottom:1px}
   .dr-chip{flex:none;padding:5px 10px;border:1px solid var(--dline2);border-radius:0;color:var(--dmuted);white-space:nowrap;font-size:12px;cursor:pointer}
   .dr-chip.cur{border-color:var(--don);color:var(--dtext);background:var(--don-bg)}
-  .dr-chip.play{border-color:var(--dgo)}
+  .dr-chip.play{border-color:var(--drec)}
   .dr-chip i{font-style:normal;color:var(--dfaint);margin-left:5px;font-family:var(--mono);font-size:10.5px}
   .dr-chip.has::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ddrm);margin-left:6px;vertical-align:2px}
   .dr-meter{flex:none;font-family:var(--mono);font-size:11px;color:var(--dmuted);white-space:nowrap;max-width:40%;overflow:hidden;text-overflow:ellipsis}
@@ -605,7 +603,7 @@
   .dr-selbar.show,.dr-rangebar.show{display:flex}
   .dr-bar3.sub > button,.dr-bar3.sub > .dr-status{display:none}
   .dr-selbar .arrow{min-width:40px;font-size:14px}
-  .dr-selbar .del,.dr-rangebar .del{border-color:var(--orange);color:var(--orange)}
+  .dr-selbar .del,.dr-rangebar .del{border-color:var(--drec);color:var(--drec)}
   .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
   /* 選択範囲の再生は、選択と同じ橙で示す（通常の再生＝緑と区別する） */
   .dr-rangebar .rplay{border-color:var(--dwarn);color:var(--dwarn)}
@@ -635,7 +633,7 @@
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
   .dr-mid .dr-playrow button{width:34px;height:34px;font-size:14px}
-  .dr-mid .prim{background:var(--dgo);border-color:var(--dgo);color:var(--night);font-weight:600}
+  .dr-mid .prim{background:var(--signal);border-color:var(--signal);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
   #drStepSize{display:none}
@@ -5391,7 +5389,7 @@
         const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
         const tw = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
         const tx = (scoreEl.scrollLeft / maxS) * (W - tw);
-        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${C.dthumb}" stroke="${C.dthumb_bd}" stroke-width="1"/></svg>`;
+        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${C.dplay_bg}" stroke="${C.dplay}" stroke-width="1.2"/></svg>`;
         rulerEl.innerHTML = g;
       }
       const maxScroll = () => Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
