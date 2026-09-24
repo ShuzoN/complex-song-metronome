@@ -5673,7 +5673,7 @@
                                                 // クリック・タップ補正は DrumClickToggle / DrumTapLatency が持つ
                                                 // カーソル・選んだ音・範囲・コピーは DrumCursor / DrumSelection / DrumRange / DrumClipboard
                                                 // ステップ入力・録音・ハネの記憶は DrumStepInput / DrumTake / DrumSwingMemory が持つ
-      beat:null                                 // いま聞こえている拍 {time, len, cb, gid}
+      beat:null                                 // いま聞こえている拍 {time, len, cb, rep, gid, pi}
     };
     const Fmt2 = { ms: s => (s >= 0 ? "+" : "−") + Math.round(Math.abs(s)*1000) + "ms" };
     // SVG の属性には CSS 変数を書けないので、.dr の色トークンを読んで使う（色は CSS 側だけで決める）
@@ -6349,7 +6349,7 @@
     function onBeat(e){
       if(!ui.open) return;
       const loc = DrumService.locatePass(e.gid, e.rep, e.cb);
-      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:e.cb, rep:e.rep, gid:e.gid};
+      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:e.cb, rep:e.rep, gid:e.gid, pi:loc.pi};
       // 再生に合わせて編集対象のグループ・パート・出現も移る（シミレの間は音符で書いた元の出現）
       const oc = e.gid === DrumTarget.gid() ? Score.occAt(e.gid, e.rep) : null;
       if(e.gid !== DrumTarget.gid() || loc.pi !== DrumTarget.part() || (oc && oc.src !== DrumTarget.occ())){

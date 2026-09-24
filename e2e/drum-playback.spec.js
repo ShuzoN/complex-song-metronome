@@ -179,4 +179,16 @@ test.describe("再生位置への追従", () => {
     await expect(app.partChip(0)).toHaveClass(/\bcur\b/, {timeout: 5000});
     await app.click("drStop");
   });
+
+  test("再生中は、鳴っているフレーズのチップに印が付き、止めると消える", async ({app, page}) => {
+    await app.loadFixture("09-quick-parts");
+    await app.openDrums();
+    await app.selectGroup("速い");
+    await app.click("drPlay");
+    await expect(app.partChip(1)).toHaveClass(/\bplay\b/, {timeout: 5000});
+    await expect(app.partChip(0)).not.toHaveClass(/\bplay\b/);
+    await expect(app.partChip(0)).toHaveClass(/\bplay\b/, {timeout: 5000});
+    await app.click("drStop");
+    await expect(page.locator("#drParts .dr-chip.play")).toHaveCount(0);
+  });
 });
