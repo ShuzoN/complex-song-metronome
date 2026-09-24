@@ -3030,6 +3030,67 @@
     });
   })();
 
+  /* DrumCursor … ドラム入力のカーソル（編集中のパートの先頭からの拍位置）。ステップ入力・貼り付け・範囲の起点 */
+  const DrumCursor = (() => {
+    const st = SessionState.define("drum.cursor", () => ({p: 0}));
+    return Object.freeze({
+      get: () => st.get().p,
+      set(p){ st.put({p}); },
+      // パートが短くなってカーソルがはみ出したら、パートの末尾へ寄せる
+      clamp(nb){ if(st.get().p > nb) st.put({p: nb}); }
+    });
+  })();
+
+  /* DrumSelection … ドラム入力で選んでいる1音 {b, k, inst}（拍 b・その拍の格子の k 番目・楽器）。
+     格子の位置で持つので、編集で拍の格子が変わると同じ値が別の位置を指しうる（現状の仕様） */
+  const DrumSelection = (() => {
+    const st = SessionState.define("drum.selection", () => ({sel: null}));
+    const same = (a, b) => !!a && !!b && a.b === b.b && a.k === b.k && a.inst === b.inst;
+    const put = sel => st.put({sel: sel ? Object.freeze({b: sel.b, k: sel.k, inst: sel.inst}) : null});
+    return Object.freeze({
+      get: () => st.get().sel,
+      set: put,
+      clear(){ put(null); },
+      // 音符をタップしたとき：選んでいる音ならはずし、違う音ならそれを選ぶ
+      toggle(sel){ put(same(st.get().sel, sel) ? null : sel); }
+    });
+  })();
+
+  /* DrumRange … ドラム入力の範囲。mode＝範囲を選んでいる最中か、rin / rout＝範囲の In / Out（パートの拍位置） */
+  const DrumRange = (() => {
+    const EMPTY = {mode: false, rin: null, rout: null};
+    const st = SessionState.define("drum.range", () => EMPTY);
+    const patch = o => st.put(Object.assign({}, st.get(), o));
+    return Object.freeze({
+      mode: () => st.get().mode, rin: () => st.get().rin, rout: () => st.get().rout,
+      // In と Out がそろい、Out が In より後ろ
+      valid(){ const s = st.get(); return s.rin != null && s.rout != null && s.rout > s.rin; },
+      // 範囲を選び始める（In・Out を置く）
+      open(rin, rout){ st.put({mode: true, rin, rout}); },
+      // なぞった2点の前後を In・Out にする
+      span(a, b){ patch({rin: Math.min(a, b), rout: Math.max(a, b)}); },
+      /* In と Out は片方ずつ置ける。前後が逆なら入れ替え、同じ位置なら Out を after(In)（1格子先）へ */
+      setIn(p, after){ patch({rin: p}); normalize(after); },
+      setOut(p, after){ patch({rout: p}); normalize(after); },
+      normalize: after => normalize(after),
+      // 範囲を閉じる（In・Out も消す）
+      clear(){ st.put(EMPTY); }
+    });
+    function normalize(after){
+      const s = st.get();
+      if(s.rin == null || s.rout == null) return;
+      if(s.rout < s.rin) patch({rin: s.rout, rout: s.rin});
+      const t = st.get();
+      if(t.rout - t.rin < 1e-6) patch({rout: after(t.rin)});
+    }
+  })();
+
+  /* DrumClipboard … ドラム入力でコピーした範囲（DrumService.copy の結果）。別のパートへも貼れる */
+  const DrumClipboard = (() => {
+    const st = SessionState.define("drum.clipboard", () => ({clip: null}));
+    return Object.freeze({ get: () => st.get().clip, set(clip){ st.put({clip}); } });
+  })();
+
   /* ---------- SequenceMapper（entity ⇔ 保存用 DTO。書き側 repeat⇔実行時 reps の対応もここ） ---------- */
   const SequenceMapper = (() => {
     function toDto(seq){
@@ -5370,10 +5431,9 @@
     const OFFSET_KEY = "csm:drums.offset", KIT_KEY = "csm:drums.kit", DEFAULT_KIT = "FluidR3_GM_sf2_file:1";
     const ui = {
       open:false,                               // 編集中のグループ・パート・出現は DrumTarget が持つ
-      cursor:0, sel:null,                       // シーク位置（拍）／選択中の音 {b, k, inst}
+                                                // カーソル・選んだ音・範囲・コピーは DrumCursor / DrumSelection / DrumRange / DrumClipboard
       swingAmt: DrumDomain.SWING_DEFAULT,       // スウィングの割合（ストレートにしても覚えておく）
       stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）、"2:3"＝2拍3連（拍数:分割数）
-      rangeMode:false, rin:null, rout:null, clip:null,
       rec:false, recCommitted:false,            // 重ね録り中／このレックぶんの履歴を積んだか
       click:true,
       offset:0,                                 // 入力遅延補正（秒）。叩いた時刻からこれを引く
@@ -5399,7 +5459,7 @@
       if(gid === DrumTarget.gid() && pi === DrumTarget.part()) return;
       RangePlay.stop();
       if(Transport.running()) Transport.stop(false);
-      DrumTarget.set({gid, part: pi, occ: null}); ui.sel = null; ui.rin = ui.rout = null; ui.rangeMode = false; ui.cursor = 0;
+      DrumTarget.set({gid, part: pi, occ: null}); DrumSelection.clear(); DrumRange.clear(); DrumCursor.set(0);
       render();
     }
 
@@ -5515,10 +5575,10 @@
           // 範囲とシーク（編集中のグループにだけ）
           if(isCur){
             const tx = p => xAt(sp, p);          // 音符と同じ位置（カーソルの上に音が置かれる）
-            if(ui.rin != null && ui.rout != null && ui.rout > ui.rin)
-              g += `<rect x="${tx(ui.rin)-3}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="${C.dwarn_bg}" stroke="${C.dwarn}" stroke-width="0.8"/>`;
+            if(DrumRange.rin() != null && DrumRange.rout() != null && DrumRange.rout() > DrumRange.rin())
+              g += `<rect x="${tx(DrumRange.rin())-3}" y="${TOP-10}" width="${tx(DrumRange.rout())-tx(DrumRange.rin())}" height="${4*L+20}" fill="${C.dwarn_bg}" stroke="${C.dwarn}" stroke-width="0.8"/>`;
             if(!running){
-              const cx = tx(ui.cursor), on = ui.rangeMode;
+              const cx = tx(DrumCursor.get()), on = DrumRange.mode();
               g += `<line x1="${cx}" y1="${TOP-12}" x2="${cx}" y2="${TOP+4*L+12}" stroke="${on ? C.dwarn : C.dsub}" stroke-width="${on ? 2.5 : 1.5}" stroke-dasharray="${on ? "" : "3 3"}"/>`;
               if(on) g += `<path d="M${cx-5} ${TOP-12} L${cx+5} ${TOP-12} L${cx} ${TOP-5} Z" fill="${C.dwarn}"/>`;
             }
@@ -5537,7 +5597,7 @@
               cell.forEach((h, inst) => {
                 const d = DrumDomain.INST[inst], yy = yOf(d.pos), unc = DrumDomain.isUncertain(h);
                 if(d.ghost && cell.has("snare")) return;
-                const isSel = isCur && ui.sel && ui.sel.b === b && ui.sel.k === k && ui.sel.inst === inst;
+                const isSel = isCur && DrumSelection.get() && DrumSelection.get().b === b && DrumSelection.get().k === k && DrumSelection.get().inst === inst;
                 const col = isSel ? C.dplay : (unc ? C.dwarn : C.dtext);
                 topY = Math.min(topY, yy);
                 if(isSel) g += `<circle cx="${x}" cy="${yy}" r="${L*0.85}" fill="none" stroke="${C.dplay}" stroke-width="1.5"/>`;
@@ -5682,9 +5742,9 @@
       const simile = h.sp.mode === "simile", occ = h.sp.src;
       if(simile && !leave) return null;
       if(h.sp.gid !== DrumTarget.gid() || h.sp.pi !== DrumTarget.part() || occ !== DrumTarget.occ()){
-        if(ui.rangeMode){ if(!leave) return null; ui.rangeMode = false; ui.rin = ui.rout = null; }
+        if(DrumRange.mode()){ if(!leave) return null; DrumRange.clear(); }
         select(h.sp.gid, h.sp.pi);
-        if(DrumTarget.occ() !== occ){ DrumTarget.set({occ}); ui.sel = null; }
+        if(DrumTarget.occ() !== occ){ DrumTarget.set({occ}); DrumSelection.clear(); }
       }
       if(simile) Score.reveal(DrumTarget.gid(), DrumTarget.part());
       return DrumDomain.snap(grid(), h.p).p;
@@ -5695,16 +5755,16 @@
       const h = e.target.closest(".hit");
       if(h){
         const hpi = Number(h.dataset.pi), hocc = Number(h.dataset.occ);
-        if(h.dataset.gid !== DrumTarget.gid() || hpi !== DrumTarget.part()){ ui.rangeMode = false; ui.rin = ui.rout = null; select(h.dataset.gid, hpi); }
-        if(DrumTarget.occ() !== hocc){ DrumTarget.set({occ: hocc}); ui.rangeMode = false; ui.rin = ui.rout = null; ui.sel = null; }
+        if(h.dataset.gid !== DrumTarget.gid() || hpi !== DrumTarget.part()){ DrumRange.clear(); select(h.dataset.gid, hpi); }
+        if(DrumTarget.occ() !== hocc){ DrumTarget.set({occ: hocc}); DrumRange.clear(); DrumSelection.clear(); }
         const sel = {b:Number(h.dataset.b), k:Number(h.dataset.k), inst:h.dataset.inst}, bt = grid().beats[sel.b];
-        ui.cursor = DrumDomain.slotPos(sel.b, sel.k, bt ? bt.sub : 1);
-        ui.sel = ui.rangeMode ? null : (ui.sel && ui.sel.b === sel.b && ui.sel.k === sel.k && ui.sel.inst === sel.inst) ? null : sel;
+        DrumCursor.set(DrumDomain.slotPos(sel.b, sel.k, bt ? bt.sub : 1));
+        if(DrumRange.mode()) DrumSelection.clear(); else DrumSelection.toggle(sel);
         render();
         return;
       }
       const p = posAt(e.clientX, true);
-      ui.sel = null; if(p != null) ui.cursor = p;
+      DrumSelection.clear(); if(p != null) DrumCursor.set(p);
       render();
     });
 
@@ -5753,10 +5813,10 @@
           down.p0 = posAt(down.x); if(down.p0 == null){ down = null; return; }
           dragging = true;
           try{ stageEl.setPointerCapture(down.id); }catch(_){}
-          ui.rangeMode = true; ui.sel = null; ui.rin = ui.rout = ui.cursor = down.p0;
+          DrumRange.open(down.p0, down.p0); DrumSelection.clear(); DrumCursor.set(down.p0);
         }
         const p = posAt(e.clientX); if(p == null) return;
-        ui.rin = Math.min(down.p0, p); ui.rout = Math.max(down.p0, p); ui.cursor = p;
+        DrumRange.span(down.p0, p); DrumCursor.set(p);
         render();
       });
       const end = e => {
@@ -5771,8 +5831,8 @@
         }
         if(dragging){
           const p = posAt(e.clientX);
-          if(p != null){ ui.rin = Math.min(down.p0, p); ui.rout = Math.max(down.p0, p); }
-          normalizeRange();
+          if(p != null) DrumRange.span(down.p0, p);
+          DrumRange.normalize(stepAfter);
           render();
           setTimeout(() => { dragging = false; }, 0);
         } else dragging = false;
@@ -5782,7 +5842,7 @@
       stageEl.addEventListener("pointercancel", end);
       // 2本目の指が触れたらピンチに譲る（なぞりかけの範囲選択・スクロールはそこで止める）
       function cancel(){
-        if(down && dragging && !down.pan){ normalizeRange(); render(); }
+        if(down && dragging && !down.pan){ DrumRange.normalize(stepAfter); render(); }
         cancelAnimationFrame(glide);
         down = null; dragging = false;
       }
@@ -5834,12 +5894,6 @@
     function stepAfter(p){
       const gr = grid(), s = DrumDomain.snap(gr, p), bt = gr.beats[s.b];
       return Math.min(gr.beats.length, p + (bt ? 1 / bt.sub : 1));
-    }
-    // In と Out は片方ずつ置ける。前後が逆なら入れ替え、同じ位置なら Out を 1 格子先へ
-    function normalizeRange(){
-      if(ui.rin == null || ui.rout == null) return;
-      if(ui.rout < ui.rin){ const t = ui.rin; ui.rin = ui.rout; ui.rout = t; }
-      if(ui.rout - ui.rin < 1e-6) ui.rout = stepAfter(ui.rin);
     }
 
     /* ルーラー＝曲全体のミニマップ。なぞればスクロール、タップでその位置へ */
@@ -5926,23 +5980,23 @@
        パートの端を越えたら、同じグループの隣のパートの頭（末尾の1歩手前）へ移る */
     function stepMove(dir){
       const g = group(); if(!g) return;
-      const nb = nbOf(), x = ui.cursor, eps = 1e-6;
+      const nb = nbOf(), x = DrumCursor.get(), eps = 1e-6;
       if(dir > 0){
         let next = nb;
         if(x < nb - eps){ const gd = stepGrid(x); next = gd.origin + (Math.floor((x - gd.origin) / gd.len + STEP_TOL) + 1) * gd.len; }
         if(next >= nb - eps && DrumTarget.part() + 1 < DrumDomain.partsOf(g).length){ select(g.id, DrumTarget.part() + 1); Score.reveal(g.id, DrumTarget.part()); return; }
-        ui.cursor = Math.min(nb, next);
+        DrumCursor.set(Math.min(nb, next));
       }else{
         if(x <= eps){
           if(DrumTarget.part() > 0){
             select(g.id, DrumTarget.part() - 1);
-            ui.cursor = stepBefore(nbOf());
+            DrumCursor.set(stepBefore(nbOf()));
             Score.reveal(g.id, DrumTarget.part());
             render();
           }
           return;
         }
-        ui.cursor = stepBefore(Math.min(x, nb));
+        DrumCursor.set(stepBefore(Math.min(x, nb)));
       }
       render();
     }
@@ -5967,11 +6021,11 @@
     let stepPlaced = false;
     function stepTap(inst){
       const g = group(); if(!g) return;
-      if(ui.cursor >= nbOf() - 1e-6){
+      if(DrumCursor.get() >= nbOf() - 1e-6){
         if(DrumTarget.part() + 1 >= DrumDomain.partsOf(g).length) return;          // 最後のパートの末尾より先には置けない
         select(g.id, DrumTarget.part() + 1); Score.reveal(g.id, DrumTarget.part());
       }
-      const p = ui.cursor;
+      const p = DrumCursor.get();
       SoundGateway.drum(inst);
       stepPlaced = true;
       DrumService.add(DrumTarget.gid(), DrumTarget.part(), p, inst, stepTuplet(p) || undefined);
@@ -6046,15 +6100,15 @@
       const AHEAD = 0.12;
       let timer = null, startRev = null, pos = 0, next = 0;   // startRev＝始めたときの編集対象の版（変わったら止まる）
       const marks = [];            // 予約した区切り {time, p, len, end}（再生位置の表示用）
-      const valid = () => ui.rin != null && ui.rout != null && ui.rout > ui.rin;
+      const valid = () => DrumRange.valid();
       function pump(){
         const t = DrumTarget.get(), g = startRev != null && findGroup(t.gid), pt = g && DrumDomain.partsOf(g)[t.part];
         if(!pt || !valid() || DrumTarget.rev() !== startRev){ stop(); return; }
         const rs = DrumDomain.partRhythms(g, pt), slots = DrumService.playSlots(g.id, t.part);
         const bpm = Domain.effectiveBpm(g, state().bpm) * SpeedService.rate(), limit = SoundGateway.now() + AHEAD;
         for(let guard = 0; next < limit && guard < 256; guard++){
-          if(pos < ui.rin - 1e-9 || pos >= ui.rout - 1e-9) pos = ui.rin;      // 範囲の頭へ戻る
-          const b = Math.floor(pos + 1e-9), end = Math.min(b + 1, ui.rout);
+          if(pos < DrumRange.rin() - 1e-9 || pos >= DrumRange.rout() - 1e-9) pos = DrumRange.rin();      // 範囲の頭へ戻る
+          const b = Math.floor(pos + 1e-9), end = Math.min(b + 1, DrumRange.rout());
           const loc = DrumDomain.locate(rs, b), r = rs[loc.bar] || rs[rs.length - 1];
           const len = Domain.rhythmSeconds(r.den, bpm), tp = Domain.tupletOf(r), at = q => next + (q - pos) * len;
           const inside = q => q >= pos - 1e-9 && q < end - 1e-9;
@@ -6069,9 +6123,9 @@
         if(!valid()) return;
         if(Transport.armKind()) Transport.armCancel(); else if(Transport.running()) Transport.stop(false);
         SoundGateway.ensure();
-        startRev = DrumTarget.rev(); pos = ui.rin; next = SoundGateway.now() + 0.08; marks.length = 0;
+        startRev = DrumTarget.rev(); pos = DrumRange.rin(); next = SoundGateway.now() + 0.08; marks.length = 0;
         timer = setInterval(pump, 25); pump();
-        ui.sel = null;
+        DrumSelection.clear();
         render();
         if(!raf) raf = requestAnimationFrame(frame);
       }
@@ -6120,7 +6174,7 @@
       // 再生に合わせて編集対象のグループ・パート・出現も移る（シミレの間は音符で書いた元の出現）
       const oc = e.gid === DrumTarget.gid() ? Score.occAt(e.gid, e.rep) : null;
       if(e.gid !== DrumTarget.gid() || loc.pi !== DrumTarget.part() || (oc && oc.src !== DrumTarget.occ())){
-        DrumTarget.set({gid: e.gid, part: loc.pi, occ: oc ? oc.src : null}); ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; render();
+        DrumTarget.set({gid: e.gid, part: loc.pi, occ: oc ? oc.src : null}); DrumSelection.clear(); DrumRange.clear(); render();
       }
       else if(e.bar === 0 && e.beat === 0) controls();
       if(!raf) raf = requestAnimationFrame(frame);
@@ -6211,7 +6265,7 @@
         st.innerHTML = (pg ? esc(pg.name) + " " + (cur.rep + 1) + "/" + pg.reps : "再生中") + (ui.rec ? ' <span class="rec">● REC</span>' : "");
       }else st.textContent = Transport.armKind() ? "準備中…" : "停止中";
       // 範囲を選んでいる間は ▶ が「選択を再生」になり、選択と同じ橙で示す
-      const rangeOn = ui.rangeMode && RangePlay.valid(), rp = RangePlay.playing();
+      const rangeOn = DrumRange.mode() && RangePlay.valid(), rp = RangePlay.playing();
       $("drPlay").classList.toggle("range", rangeOn || rp);
       $("drPlay").classList.toggle("on", rp);
       $("drPlay").textContent = rp ? "■" : "▶";
@@ -6232,10 +6286,10 @@
       const unc = DrumTarget.gid() ? DrumService.uncertain(DrumTarget.gid(), DrumTarget.part()) : 0;
       $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
       $("drAutofix").classList.toggle("warn", unc > 0);
-      $("drHint").style.display = (pt && !pt.hits.length && !ui.sel && !ui.rangeMode) ? "block" : "none";
+      $("drHint").style.display = (pt && !pt.hits.length && !DrumSelection.get() && !DrumRange.mode()) ? "block" : "none";
       // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
       if(g){
-        const b = Math.min(nbOf() - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
+        const b = Math.min(nbOf() - 1, Math.floor(DrumCursor.get() + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
         const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
         const sel = $("drStepSize"), key = den + ":" + base;
         if(sel.dataset.key !== key){
@@ -6250,27 +6304,27 @@
       }
       $("drRange").disabled = running;
       // カーソルが連符の区間の中にあるときだけ「◯拍◯連を外す」
-      const tup = !running && DrumTarget.gid() && ui.cursor < nbOf() ? DrumService.tupletAt(DrumTarget.gid(), DrumTarget.part(), Math.floor(ui.cursor + 1e-6)) : null;
+      const tup = !running && DrumTarget.gid() && DrumCursor.get() < nbOf() ? DrumService.tupletAt(DrumTarget.gid(), DrumTarget.part(), Math.floor(DrumCursor.get() + 1e-6)) : null;
       $("drTupOff").hidden = !tup;
       if(tup) $("drTupOff").textContent = (tup.beats > 1 ? tup.beats + "拍" : "") + tup.n + "連を外す";
-      $("drPaste").hidden = !ui.clip;
+      $("drPaste").hidden = !DrumClipboard.get();
       $("drPaste").disabled = running;
-      if(ui.clip) $("drPaste").textContent = "貼り付け " + ui.clip.items.length + "音";
-      $("drSelbar").classList.toggle("show", !!ui.sel && !ui.rangeMode);
-      $("drRangebar").classList.toggle("show", ui.rangeMode);
-      $("drBar3").classList.toggle("sub", ui.rangeMode || !!ui.sel);
-      if(ui.rangeMode){
-        const has = ui.rin != null && ui.rout != null;
-        $("drRangeText").textContent = ui.clip ? "複製 " + ui.clip.items.length + "音" : "";
-        $("drRin").classList.toggle("set", ui.rin != null); $("drRout").classList.toggle("set", ui.rout != null);
-        $("drRpaste").disabled = !ui.clip; $("drRcopy").disabled = !has; $("drRdel").disabled = !has;
+      if(DrumClipboard.get()) $("drPaste").textContent = "貼り付け " + DrumClipboard.get().items.length + "音";
+      $("drSelbar").classList.toggle("show", !!DrumSelection.get() && !DrumRange.mode());
+      $("drRangebar").classList.toggle("show", DrumRange.mode());
+      $("drBar3").classList.toggle("sub", DrumRange.mode() || !!DrumSelection.get());
+      if(DrumRange.mode()){
+        const has = DrumRange.rin() != null && DrumRange.rout() != null;
+        $("drRangeText").textContent = DrumClipboard.get() ? "複製 " + DrumClipboard.get().items.length + "音" : "";
+        $("drRin").classList.toggle("set", DrumRange.rin() != null); $("drRout").classList.toggle("set", DrumRange.rout() != null);
+        $("drRpaste").disabled = !DrumClipboard.get(); $("drRcopy").disabled = !has; $("drRdel").disabled = !has;
       }
       $("drOffset").textContent = Fmt2.ms(ui.offset);
     }
     function render(){
       if(!ui.open) return;
       const g = group();
-      if(g){ const nb = nbOf(); if(ui.cursor > nb) ui.cursor = nb; }
+      if(g) DrumCursor.clamp(nbOf());
       Score.render();
       Ruler.render();
       controls();
@@ -6282,7 +6336,7 @@
       if(Transport.running() || Transport.armKind() || !group()) return;
       SequenceService.setActive(DrumTarget.gid());                 // グループ無限再生の対象
       DrumPlayback.clearLog();
-      ui.sel = null;
+      DrumSelection.clear();
       Transport.start("solo", {loop:true});
     }
     function stop(){
@@ -6386,7 +6440,7 @@
         if(c.getAttribute("aria-disabled")) return;
         select(c.dataset.gid, 0); Score.reveal(DrumTarget.gid(), 0);
       });
-      on("drPlay", () => { if(RangePlay.playing() || (ui.rangeMode && RangePlay.valid())) RangePlay.toggle(); else playGroup(); });
+      on("drPlay", () => { if(RangePlay.playing() || (DrumRange.mode() && RangePlay.valid())) RangePlay.toggle(); else playGroup(); });
       on("drRplay", () => RangePlay.toggle());
       on("drStop", stop);
       on("drSong", () => { if(Transport.running() || Transport.armKind()) stop(); else { RangePlay.stop(); DrumPlayback.clearLog(); Transport.start("all"); } });
@@ -6398,7 +6452,7 @@
       on("drStep", () => { if(Transport.running()) Transport.stop(false); ui.stepMode = !ui.stepMode; controls(); });
       $("drStepSize").addEventListener("change", () => { const v = $("drStepSize").value; ui.stepSize = v.indexOf(":") >= 0 ? v : Number(v); controls(); });
       // パート
-      const resetEdit = () => { ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; };
+      const resetEdit = () => { DrumSelection.clear(); DrumRange.clear(); };
       $("drSpan").addEventListener("change", () => { if(DrumTarget.gid()){ resetEdit(); DrumService.setSpan(DrumTarget.gid(), DrumTarget.part(), Number($("drSpan").value)); } });
       $("drRepeat").addEventListener("change", () => { if(DrumTarget.gid()) DrumService.setRepeat(DrumTarget.gid(), DrumTarget.part(), Number($("drRepeat").value)); });
       $("drSwingUnit").addEventListener("change", () => applySwing(true));
@@ -6415,32 +6469,33 @@
         select(DrumTarget.gid(), Number(c.dataset.pi)); Score.reveal(DrumTarget.gid(), DrumTarget.part());
       });
       on("drPartDup", () => { if(!DrumTarget.gid()) return; const pi = DrumService.duplicatePart(DrumTarget.gid(), DrumTarget.part()); DrumTarget.set({part: -1}); select(DrumTarget.gid(), pi); Score.reveal(DrumTarget.gid(), pi); });
-      on("drPartDel", () => { if(!DrumTarget.gid()) return; resetEdit(); DrumService.removePart(DrumTarget.gid(), DrumTarget.part()); DrumTarget.set({part: Math.max(0, DrumTarget.part() - 1)}); ui.cursor = 0; render(); });
+      on("drPartDel", () => { if(!DrumTarget.gid()) return; resetEdit(); DrumService.removePart(DrumTarget.gid(), DrumTarget.part()); DrumTarget.set({part: Math.max(0, DrumTarget.part() - 1)}); DrumCursor.set(0); render(); });
       on("drStepBack", () => stepMove(-1));
       on("drStepFwd", () => stepMove(+1));
       on("drUndo", () => HistoryService.undo());
       on("drRedo", () => HistoryService.redo());
       on("drAutofix", () => { if(DrumTarget.gid()) DrumService.autoFix(DrumTarget.gid(), DrumTarget.part()); });
-      on("drTupOff", () => { if(DrumTarget.gid()) DrumService.removeTuplet(DrumTarget.gid(), DrumTarget.part(), Math.floor(ui.cursor + 1e-6)); });
-      on("drClear", () => { if(DrumTarget.gid() && DrumService.hits(DrumTarget.gid(), DrumTarget.part()).length){ ui.sel = null; DrumService.clear(DrumTarget.gid(), DrumTarget.part()); } });
+      on("drTupOff", () => { if(DrumTarget.gid()) DrumService.removeTuplet(DrumTarget.gid(), DrumTarget.part(), Math.floor(DrumCursor.get() + 1e-6)); });
+      on("drClear", () => { if(DrumTarget.gid() && DrumService.hits(DrumTarget.gid(), DrumTarget.part()).length){ DrumSelection.clear(); DrumService.clear(DrumTarget.gid(), DrumTarget.part()); } });
       on("drClick", () => { ui.click = !ui.click; controls(); });
       // 選択した音の操作
-      on("drSelDel", () => { if(ui.sel && !DrumService.deleteAt(DrumTarget.gid(), DrumTarget.part(), ui.sel)){ ui.sel = null; render(); } });
-      on("drSelLeft", () => { if(ui.sel){ ui.sel = DrumService.nudge(DrumTarget.gid(), DrumTarget.part(), ui.sel, -1); render(); } });
-      on("drSelRight", () => { if(ui.sel){ ui.sel = DrumService.nudge(DrumTarget.gid(), DrumTarget.part(), ui.sel, +1); render(); } });
-      on("drSelClr", () => { ui.sel = null; render(); });
+      on("drSelDel", () => { const sel = DrumSelection.get(); if(sel && !DrumService.deleteAt(DrumTarget.gid(), DrumTarget.part(), sel)){ DrumSelection.clear(); render(); } });
+      const nudge = dir => { const sel = DrumSelection.get(); if(sel){ DrumSelection.set(DrumService.nudge(DrumTarget.gid(), DrumTarget.part(), sel, dir)); render(); } };
+      on("drSelLeft", () => nudge(-1));
+      on("drSelRight", () => nudge(+1));
+      on("drSelClr", () => { DrumSelection.clear(); render(); });
       // 範囲
-      on("drRin", () => { ui.rin = ui.cursor; normalizeRange(); render(); });
-      on("drRout", () => { ui.rout = ui.cursor; normalizeRange(); render(); });
+      on("drRin", () => { DrumRange.setIn(DrumCursor.get(), stepAfter); render(); });
+      on("drRout", () => { DrumRange.setOut(DrumCursor.get(), stepAfter); render(); });
       // コピーしたら範囲を閉じる（貼り付けは下の「貼り付け」から。別のパートをタップしてそこへ貼れる）
-      on("drRcopy", () => { const c = DrumService.copy(DrumTarget.gid(), DrumTarget.part(), ui.rin, ui.rout); if(c){ ui.clip = c; ui.cursor = ui.rout; ui.rangeMode = false; ui.rin = ui.rout = null; render(); } });
+      on("drRcopy", () => { const out = DrumRange.rout(), c = DrumService.copy(DrumTarget.gid(), DrumTarget.part(), DrumRange.rin(), out); if(c){ DrumClipboard.set(c); DrumCursor.set(out); DrumRange.clear(); render(); } });
       // 貼り付けたら、続けて貼れるようにカーソルを貼ったぶんだけ進める
-      const paste = () => { if(ui.clip && !Transport.running()){ const next = DrumService.paste(DrumTarget.gid(), DrumTarget.part(), ui.cursor, ui.clip); ui.cursor = DrumDomain.snap(grid(), next).p; render(); } };
+      const paste = () => { const clip = DrumClipboard.get(); if(clip && !Transport.running()){ const next = DrumService.paste(DrumTarget.gid(), DrumTarget.part(), DrumCursor.get(), clip); DrumCursor.set(DrumDomain.snap(grid(), next).p); render(); } };
       on("drRpaste", paste);
       on("drPaste", paste);
-      on("drRange", () => { if(Transport.running()) return; ui.rangeMode = true; ui.sel = null; ui.rin = ui.cursor; ui.rout = stepAfter(ui.cursor); render(); });
-      on("drRdel", () => { DrumService.deleteRange(DrumTarget.gid(), DrumTarget.part(), ui.rin, ui.rout); });
-      on("drRclr", () => { RangePlay.stop(); ui.rangeMode = false; ui.rin = ui.rout = null; render(); });
+      on("drRange", () => { if(Transport.running()) return; const p = DrumCursor.get(); DrumRange.open(p, stepAfter(p)); DrumSelection.clear(); render(); });
+      on("drRdel", () => { DrumService.deleteRange(DrumTarget.gid(), DrumTarget.part(), DrumRange.rin(), DrumRange.rout()); });
+      on("drRclr", () => { RangePlay.stop(); DrumRange.clear(); render(); });
       $("drSelbar").addEventListener("pointerdown", e => e.stopPropagation());
       $("drRangebar").addEventListener("pointerdown", e => e.stopPropagation());
       // 設定
