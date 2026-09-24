@@ -5157,7 +5157,7 @@
       const yOf = pos => TOP + pos * L / 2;
       /* グループの長さぶんの小節を、鳴る順に左→右に並べる（DrumDomain.occurrences）。
          パートを音符で書く出現（notes）と、直前と同じパターンのくり返し（simile＝シミレ記号）がある。
-         どちらも拍の幅は同じなので、再生位置の線は戻らずに一定の速さで右へ進む。
+         シミレは拍の幅を詰めて描く（再生位置の線はその間だけゆっくり進むが、戻らずに右へ進む）。
          xs[b] は拍 b の音符の x（xs[nb] は出現の末）。拍子が変わる小節の前には拍子記号ぶんの幅を足す */
       function layout(BW){
         let x = X0, prevR = null;
@@ -5171,14 +5171,16 @@
             x += gap;
             const sp = {g, gid:g.id, pi:o.pi, idx, src:o.src, mode:o.mode, passStart:o.passStart, passes:o.passes,
                         head: idx === 0, nparts: parts.length, rs, nb, starts, gap, x0:x, xs:[], meters:[],
-                        grid: o.mode === "notes" ? DrumService.grid(g.id, o.pi) : null};
+                        grid: o.mode === "notes" ? DrumService.grid(g.id, o.pi) : null,
+                        // 拍の幅。シミレは音符が無いので詰める（通常の約3割。記号が収まる最小幅は残す）
+                        bw: o.mode === "simile" ? Math.max(L * 1.3, BW * 0.3, L * 4.5 / Math.min(...rs.map(r => r.num))) : BW};
             let bx = x;
             rs.forEach((r, i) => {
               const pr = i === 0 ? prevR : rs[i-1];
               const show = !pr || pr.num !== r.num || pr.den !== r.den;
               if(i > 0 && show) bx += TS * 1.4 + 8;
               sp.meters.push({x: bx, show, r});
-              for(let k = 0; k < r.num; k++){ sp.xs.push(bx); bx += BW; }
+              for(let k = 0; k < r.num; k++){ sp.xs.push(bx); bx += sp.bw; }
             });
             sp.xs.push(bx);
             x = bx;
@@ -5212,7 +5214,7 @@
         if(k > 1) out += `<text x="${cx}" y="${TOP - 5}" fill="${col}" font-size="${Math.max(10, L * 1.2)}" font-weight="700" text-anchor="middle">${k}</text>`;
         return out;
       }
-      const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * cache.BW; };
+      const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * sp.bw; };
       function render(){
         const BW = metrics(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
         cache = {spans: lay.spans, BW, W};
@@ -5311,8 +5313,8 @@
         if(!sp) return null;
         // 拍 b の音符の少し手前（半拍ぶん）からを拍 b とみなし、位置は音符の x からの距離で測る（格子への吸着は snap）
         let b = 0;
-        for(let i = 0; i < sp.nb; i++) if(x >= sp.xs[i] - cache.BW / 2) b = i;
-        const p = Math.max(0, Math.min(sp.nb, b + (x - sp.xs[b]) / cache.BW));
+        for(let i = 0; i < sp.nb; i++) if(x >= sp.xs[i] - sp.bw / 2) b = i;
+        const p = Math.max(0, Math.min(sp.nb, b + (x - sp.xs[b]) / sp.bw));
         return {sp, p};
       }
       // 出現の中の拍位置 → ステージ基準の x。follow なら再生位置が見えるようにスクロールする
