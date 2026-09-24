@@ -55,7 +55,17 @@ test.describe("ステップ入力", () => {
     await app.loadYaml("version: 1\nkind: metronome.sequence\nname: odd\ntempo: 120\ngroups:\n  - name: A\n    repeat: 2\n    pattern: [3/5]\n");
     await app.openDrums();
     await expect(app.page.locator("#drStepSize button svg")).toHaveCount(0);
-    expect(await app.page.locator("#drStepSize button").allInnerTexts()).toEqual(["1", "2", "4", "8", "3", "5", "6", "7", "9"]);
+    expect(await app.page.locator("#drStepSize button").allInnerTexts()).toEqual(["1", "2", "4", "8", "3", "5", "6", "7", "9", "3/2", "3/4", "5/2", "5/4", "7/4"]);
+  });
+
+  test("全音符以上になる歩幅（分母が1の拍子など）は出さない", async ({app}) => {
+    await app.closeDrums();
+    await app.loadYaml("version: 1\nkind: metronome.sequence\nname: whole\ntempo: 60\ngroups:\n  - name: A\n    repeat: 2\n    pattern: [4/1]\n");
+    await app.openDrums();
+    const names = await app.stepSizeOptions();
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter(n => /^全|拍/.test(n))).toEqual([]);
+    expect(names).not.toContain("全");
   });
 
   test("4分の歩幅は1拍ずつ進む", async ({app}) => {
