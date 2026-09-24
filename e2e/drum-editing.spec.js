@@ -168,3 +168,58 @@ test.describe("取り消し", () => {
     expect(groupOf(await app.exportDoc(), "A").drums[0].hits).toEqual({snare: [0.5], kick: [0]});
   });
 });
+
+/* 範囲・音符を選んだまま歩幅のボタンを押すと、その部分の音をその歩幅（連符）の格子に置き直す */
+test.describe("選んだ部分を連符に置き直す", () => {
+  test.beforeEach(async ({app}) => { await app.loadFixture("02-basic-beat"); await app.openDrums(); });
+  async function selectRange(app, fromSteps, toSteps){
+    for(let i = 0; i < fromSteps; i++) await app.click("drStepFwd");
+    await app.click("drRange");
+    for(let i = fromSteps; i < toSteps; i++) await app.click("drStepFwd");
+    await app.click("drRout");
+  }
+  const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
+
+  test("範囲を選んで8分3連を押すと、拍の中の音が並び順のまま3連の格子に乗り、1手で戻せる", async ({app}) => {
+    await selectRange(app, 0, 2);                         // 1拍目（hh 0・0.5、kick 0）
+    await stepBtn(app, "8分3連");
+    let d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toEqual([[0, 1, 3]]);
+    expect(d.hits.hh_close.slice(0, 3)).toEqual([0, 0.667, 1]);
+    expect(d.hits.kick).toEqual([0, 2.5, 4, 6.5]);
+    if(await app.page.locator("#drRangebar").evaluate(e => e.classList.contains("show"))) await app.click("drRclr");   // 範囲中は ↶ が隠れる
+    await app.click("drUndo");
+    d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits.hh_close.slice(0, 3)).toEqual([0, 0.5, 1]);
+  });
+
+  test("複数拍の連符は範囲をその拍数の区切りにそろえ、区切りごとに1つの区間にする", async ({app}) => {
+    await selectRange(app, 0, 8);                         // 1〜4拍目：hh 8分8つ
+    await stepBtn(app, "8分7連");                         // 2拍7連 ×2：4つずつの音を7つの格子へ
+    const d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toEqual([[0, 2, 7], [2, 2, 7]]);
+    expect(d.hits.hh_close.slice(0, 8).every((p, i, a) => i === 0 || p > a[i - 1])).toBe(true);   // 並び順はそのまま
+    expect(d.hits.hh_close.length).toBe(16);
+  });
+
+  test("格子より音が多いときは何も変えず、理由を出す", async ({app, page}) => {
+    await selectRange(app, 0, 2);                         // 1拍目 → 4分3連なら2拍（hh 4つ＋snare）に広がる
+    await stepBtn(app, "4分3連");
+    await expect(page.locator("#drToast")).toHaveText(/入りません/);
+    const d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits.hh_close.slice(0, 4)).toEqual([0, 0.5, 1, 1.5]);
+  });
+
+  test("音符を1つ選んで押すと、その音の拍を置き直し、選択はその音のまま", async ({app, page}) => {
+    await note(app, "snare", 1, 0).click();
+    await stepBtn(app, "8分3連");
+    await expect(page.locator("#drSelbar")).toHaveClass(/\bshow\b/);
+    await app.click("drSelDel");                          // 選び直した音（スネア）が消える＝選択が付いてきている
+    const d = (await drumsOf(app, "Aメロ"))[0];
+    expect(d.tuplets).toEqual([[1, 1, 3]]);
+    expect(d.hits.hh_close.slice(2, 4)).toEqual([1, 1.667]);
+    expect(d.hits.snare).toEqual([3, 5, 7]);
+  });
+});

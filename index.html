@@ -609,6 +609,11 @@
   .dr-head{position:absolute;top:0;height:100%;width:2px;background:var(--dplay);opacity:.9;pointer-events:none;display:none;left:0}
   .dr-ruler{position:absolute;left:8px;right:8px;bottom:1px;height:18px;border-radius:0;background:var(--druler);touch-action:none;overflow:hidden}
   .dr-ruler svg{width:100%;height:100%;display:block}
+  /* 短い知らせ（歩幅の置き直しができなかった理由など）。譜面の上に数秒だけ出す */
+  .dr-toast{position:absolute;left:50%;top:8px;transform:translateX(-50%);max-width:calc(100% - 20px);padding:5px 10px;background:var(--dline);
+    border:1px solid var(--dwarn);color:var(--dtext);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;
+    opacity:0;transition:opacity .15s;z-index:2}
+  .dr-toast.show{opacity:1}
   .dr-hint{position:absolute;left:10px;right:10px;bottom:32px;color:var(--dfaint);font-size:11px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   .dr-selbar,.dr-rangebar{display:none;align-items:center;gap:6px;min-width:0;flex:1 1 auto}
@@ -941,6 +946,7 @@
       <div class="dr-score" id="drScore"></div>
       <div class="dr-head" id="drHead"></div>
       <div class="dr-ruler" id="drRuler"></div>
+      <div class="dr-toast" id="drToast" role="status" aria-live="polite"></div>
       <div class="dr-hint" id="drHint">パッドを叩くとカーソルの位置に置けます。● で再生しながら重ね録り</div>
     </div>
     <div class="dr-bar3" id="drBar3">
@@ -1532,6 +1538,46 @@
       if(cur && tupletSub(cur) % d === 0) return null;
       return {tuplet: {at: b, beats: 1, n: d}};
     }
+    /* 選んだ範囲の音を歩幅 size の格子へ置き直す（音符・範囲を選んだまま歩幅のボタンを押したとき）。
+       範囲 a..b は拍の頭にそろえ、歩幅が複数拍の連符（"m:n"）なら m 拍ずつの区切りにする（足りなければ m 拍まで広げる）。
+       区切りの中の音は、同じ位置の音（和音）を1つの打点として、並び順を保ったまま近い格子点へ割り当てる
+       （総ずれ最小。数がぴったりなら前から順に1つずつ）。連符の区間は歩幅の置き方（stepTuplet と同じ規則）に張り替える。
+       次のときは何も変えず {error} を返す：パートからはみ出す／既存の連符の区間を途中で切る／格子点より音が多い区切りがある。
+       返り値 {hits, tuplets, lo, hi, moved}（moved: 元の位置 → 新しい位置） */
+    function retuplet(rhythms, tuplets, hits, a, b, size){
+      const nb = cycleBeats(rhythms), m = multiStep(size), span = m ? m[0] : 1;
+      const lo = Math.max(0, Math.floor(a + 1e-6));
+      let hi = Math.max(lo + 1, Math.ceil(b - 1e-6));
+      hi = lo + Math.ceil((hi - lo) / span) * span;
+      if(hi > nb) return {error: "パートの終わりを越えます"};
+      if((tuplets || []).some(t => t.at < hi && t.at + t.beats > lo && (t.at < lo || t.at + t.beats > hi))) return {error: "連符の区間の途中で切れます"};
+      const moved = new Map(), tups = [];
+      for(let c = lo; c < hi; c += span){
+        let len, tup = null;
+        if(m){ len = m[0] / m[1]; tup = {at: c, beats: m[0], n: m[1]}; }
+        else {
+          const d = size === 0 ? baseAt(rhythms, c) : size;
+          len = 1 / d;
+          if(baseAt(rhythms, c) % d !== 0) tup = {at: c, beats: 1, n: d};
+        }
+        if(tup) tups.push(tup);
+        const cnt = Math.round(span / len);
+        const on = [...new Set((hits || []).filter(h => h.p >= c - 1e-6 && h.p < c + span - 1e-6).map(h => round3(h.p)))].sort((x, y) => x - y);
+        if(on.length > cnt) return {error: "音が " + on.length + " 個あって、" + (m ? m[0] + "拍" : "1拍") + "の格子（" + cnt + " 個）に入りません"};
+        // 並び順を保つ割り当て（i 番目の音 → j 番目の格子点）の総ずれ最小を DP で求める
+        const K = on.length, slot = j => c + j * len, cost = [], from = [];
+        for(let i = 0; i <= K; i++){ cost.push(new Array(cnt + 1).fill(Infinity)); from.push(new Array(cnt + 1).fill(false)); }
+        for(let j = 0; j <= cnt; j++) cost[0][j] = 0;
+        for(let i = 1; i <= K; i++) for(let j = i; j <= cnt; j++){
+          const take = cost[i - 1][j - 1] + Math.abs(on[i - 1] - slot(j - 1)), skip = cost[i][j - 1];
+          if(take <= skip){ cost[i][j] = take; from[i][j] = true; } else cost[i][j] = skip;
+        }
+        for(let i = K, j = cnt; i > 0; j--) if(from[i][j]){ moved.set(on[i - 1], round3(slot(j - 1))); i--; }
+      }
+      const out = (hits || []).map(h => { const to = moved.get(round3(h.p)); return h.p >= lo - 1e-6 && h.p < hi - 1e-6 && to != null ? {p: to, inst: h.inst} : h; });
+      const keep = (tuplets || []).filter(t => !(t.at >= lo && t.at + t.beats <= hi));
+      return {hits: out, tuplets: normTuplets(keep.concat(tups), nb), lo, hi, moved};
+    }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
     /* 拍子の並びが変わったときの、パートの並び全体の引っ越し。パートは拍子の並びの何回ぶん（span）かで
        長さを持つので、各パートの各回の中で「何小節目の何拍目」に付いたまま移す。
@@ -1554,7 +1600,7 @@
             SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
             baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, pow2Floor, tupletNote, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
             respanTuplets, remapTuplets, remapParts,
-            MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet};
+            MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet, retuplet};
   })();
 
   const Domain = (() => {
@@ -2889,6 +2935,16 @@
       // ---- 連符の区間 ----
       tuplets(gid, pi){ const pt = partOf(find(gid), pi); return pt ? pt.tuplets || [] : []; },
       tupletAt(gid, pi, b){ return DrumDomain.tupletAt(api.tuplets(gid, pi), b); },
+      /* 範囲 a..b の音を歩幅 size の格子へ置き直す（DrumDomain.retuplet）。できなければ何も変えずに {error} を返す。
+         履歴は1手 */
+      retuplet(gid, pi, a, b, size){
+        const g = find(gid), pt = partOf(g, pi);
+        if(!pt) return {error: "パートがありません"};
+        const r = DrumDomain.retuplet(DrumDomain.partRhythms(g, pt), pt.tuplets, pt.hits, a, b, size);
+        if(r.error) return r;
+        change(gid, g2 => { const q = g2.drums[pi]; if(!q) return; q.hits = r.hits.slice().sort(byPos); q.tuplets = r.tuplets; }, {render:true});
+        return r;
+      },
       // 拍 b を含む区間を外す（打点はそのまま。格子の推定に戻る）
       removeTuplet(gid, pi, b){
         if(!api.tupletAt(gid, pi, b)) return;
@@ -5726,6 +5782,11 @@
     const group = () => DrumTarget.group();
     const part = () => DrumTarget.currentPart();
     const grid = () => DrumTarget.gid() ? DrumService.grid(DrumTarget.gid(), DrumTarget.part()) : {beats:[]};
+    let toastTimer = null;
+    function toast(text){
+      const t = $("drToast"); t.textContent = text; t.classList.add("show");
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+    }
     const nbOf = () => { const g = group(), pt = part(); return g && pt ? DrumDomain.partBeats(g, pt) : 0; };
     const partRs = () => { const g = group(), pt = part(); return g && pt ? DrumDomain.partRhythms(g, pt) : []; };
     const letter = i => String.fromCharCode(65 + (i % 26));     // パートの呼び名 A, B, C…
@@ -6534,7 +6595,8 @@
       $("drHint").style.display = (pt && !pt.hits.length && !DrumSelection.get() && !DrumRange.mode()) ? "block" : "none";
       // 歩幅：単音と連符を音符の記号のボタンで並べる（拍が4分音符なら 1拍3等分＝8分3連、2拍3等分＝4分3連…）。
       // 並びは 単音（4分・8分・16分・32分）→ 8分の連符 → 4分の連符 → 16分の連符 → その他の連符（2分・32分）
-      $("drStepBar").classList.toggle("off", !(DrumStepInput.mode() && !playing()));
+      // 歩幅のボタンが効くのは、ステップ入力中か、範囲・音符を選んでいるとき（その部分を置き直す）
+      $("drStepBar").classList.toggle("off", playing() || !(DrumStepInput.mode() || DrumRange.valid() || !!DrumSelection.get()));
       if(g){
         const b = Math.min(nbOf() - 1, Math.floor(DrumCursor.get() + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
         const key = den + ":" + base;
@@ -6730,7 +6792,35 @@
         controls();
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); DrumStepInput.toggleMode(); controls(); });
-      $("drStepSize").addEventListener("click", e => { const t = e.target.closest("button[data-i]"), o = t && stepSizes.list[Number(t.dataset.i)]; if(o){ DrumStepInput.setSize(o.v); controls(); } });
+      /* 歩幅のボタン：歩幅を変える。範囲や音符を選んでいるときは、その部分の音をその歩幅（連符）に置き直す。
+         音符1つを選んでいるときは、その音の拍（連符の区間の中ならその区間）から歩幅1つぶんが対象。
+         置き直せないとき（音が多すぎる・区間の途中で切れる…）は何も変えず、理由を短く出す */
+      $("drStepSize").addEventListener("click", e => {
+        const t = e.target.closest("button[data-i]"), o = t && stepSizes.list[Number(t.dataset.i)];
+        if(!o) return;
+        DrumStepInput.setSize(o.v);
+        const gid = DrumTarget.gid(), pi = DrumTarget.part(), sel = DrumSelection.get();
+        if(gid && !Transport.running() && (DrumRange.valid() || sel)){
+          // 選んでいる音の実際の位置（置き直す前の格子で探す）
+          const g0 = grid(), selHit = sel && DrumService.hits(gid, pi).find(h => { if(h.inst !== sel.inst) return false; const sl = DrumDomain.slotOf(g0, h.p); return sl.b === sel.b && sl.k === sel.k; });
+          let a, b;
+          if(DrumRange.valid()){ a = DrumRange.rin(); b = DrumRange.rout(); }
+          else {
+            const cur = DrumService.tupletAt(gid, pi, sel.b);
+            a = cur ? cur.at : sel.b; b = cur ? cur.at + cur.beats : sel.b + 1;
+          }
+          const r = DrumService.retuplet(gid, pi, a, b, o.v);
+          if(r.error) toast(r.error);
+          else if(DrumRange.valid()) DrumEditSession.spanRange(r.lo, r.hi);
+          else {
+            // 選んでいた音を、置き直した先の位置で選び直す
+            const p1 = selHit ? r.moved.get(Math.round(selHit.p * 1000) / 1000) : null;
+            if(p1 != null){ const sl = DrumDomain.slotOf(grid(), p1); DrumEditSession.setSelection({b: sl.b, k: sl.k, inst: sel.inst}); }
+            else DrumEditSession.clearSelection();
+          }
+        }
+        render();
+      });
       // パート
       $("drSpan").addEventListener("change", () => { if(DrumTarget.gid()){ DrumEditSession.clearEdit(); DrumService.setSpan(DrumTarget.gid(), DrumTarget.part(), Number($("drSpan").value)); } });
       $("drRepeat").addEventListener("change", () => { if(DrumTarget.gid()) DrumService.setRepeat(DrumTarget.gid(), DrumTarget.part(), Number($("drRepeat").value)); });
