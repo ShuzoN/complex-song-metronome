@@ -6,6 +6,8 @@ const html = fs.readFileSync(require('node:path').join(__dirname, '../index.html
 
 function load(names = ['Domain', 'Yaml', 'SequenceMapper', 'PatternService', 'SoundGateway']) {
   const context = vm.createContext({});
+  // Domain.makeGroup がドラムの打点を正規化するため、DrumDomain は常に先に読む
+  if (!names.includes('DrumDomain')) names = ['DrumDomain', ...names];
   for (const name of names) {
     const start = html.indexOf(`  const ${name} = (() => {`);
     assert.ok(start >= 0, `${name} exists`);
@@ -527,4 +529,131 @@ test('shifted audio nodes are rescheduled and ones pushed into the past are drop
   assert.equal(run('nodes.length'), 4);
   assert.equal(run('nodes[0].stopTime > 0.1'), true);
   assert.ok(Math.abs(run('nodes[3].startTime') - 0.4) < 1e-9);
+});
+
+/* ---------- ドラム入力 ---------- */
+
+test('drum hits round-trip through YAML as per-instrument beat positions', () => {
+  const run = load(['Domain', 'Yaml', 'SequenceMapper']);
+  run(`const g = Domain.makeGroup({reps:4, rhythms:[{num:7,den:8},{num:3,den:4}],
+      drums:[{p:0,inst:'kick'},{p:3.5,inst:'snare'},{p:7,inst:'kick'},{p:9.333,inst:'hh_close'},{p:10,inst:'kick'},{p:2,inst:'cowbell'}]});
+    var text = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups:[g, Domain.makeGroup({})]})));
+    var back = SequenceMapper.toEntity(Yaml.parse(text)).sequence.groups;`);
+  // 周は 7 + 3 = 10 拍。p=10 は周の外、cowbell は未知の楽器なので落とす
+  assert.match(run('text'), /    drums:\n      hh_close: \[9\.333\]\n      snare: \[3\.5\]\n      kick: \[0, 7\]\n/);
+  assert.equal(run('JSON.stringify(back[0].drums)'), '[{"p":0,"inst":"kick"},{"p":3.5,"inst":"snare"},{"p":7,"inst":"kick"},{"p":9.333,"inst":"hh_close"}]');
+  // 打点の無いグループは drums キーごと出さない（後方互換）
+  assert.equal(run('text.split("drums:").length'), 2);
+  assert.equal(run('back[1].drums.length'), 0);
+  // drums を知らない古いファイル・下書きもそのまま読める
+  assert.equal(run('SequenceMapper.toEntity({groups:[{pattern:["4/4"]}]}).sequence.groups[0].drums.length'), 0);
+});
+
+test('quantize picks a grid per beat from the bar denominator and detects triplets', () => {
+  const run = load(['DrumDomain']);
+  run(`var rs=[{num:2,den:4},{num:2,den:8}];
+    var q = DrumDomain.quantize(rs, [
+      {p:0,inst:'kick'},{p:0.25,inst:'hh_close'},{p:0.5,inst:'hh_close'},        // 16分
+      {p:1,inst:'snare'},{p:1.34,inst:'snare'},{p:1.66,inst:'snare'},            // 3連
+      {p:2.5,inst:'hh_close'},                                                   // 8分の拍の裏＝16分
+      {p:3.96,inst:'kick'}]);                                                    // 周末ぎりぎり → 周頭へ`);
+  assert.equal(run('JSON.stringify(q.beats.map(b=>b.base))'), '[4,4,2,2]');
+  assert.equal(run('JSON.stringify(q.beats.map(b=>b.sub))'), '[4,3,2,2]');
+  assert.equal(run('q.beats[0].slots[0].get("kick").n'), 2);
+  assert.equal(run('JSON.stringify(DrumDomain.playSlots(q)[1])'), '[{"f":0,"inst":"snare"},{"f":0.3333333333333333,"inst":"snare"},{"f":0.6666666666666666,"inst":"snare"}]');
+});
+
+test('meter edits keep drum hits attached to their bar and beat', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService']);
+  run(`const Transport={running:()=>false};
+    const group=Domain.makeGroup({rhythms:[{num:4,den:4},{num:3,den:4}],
+      drums:[{p:0,inst:'kick'},{p:3.5,inst:'snare'},{p:4,inst:'kick'},{p:6.5,inst:'hh_close'}]});
+    Store.apply({groups:[group]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    const hits = () => JSON.stringify(Store.findGroup(group.id).drums.map(h=>h.inst+'@'+h.p));`);
+  run('PatternService.moveRhythm(group.id, 0, 1);');           // [3/4, 4/4]：小節ごと入れ替わる
+  assert.equal(run('hits()'), '["kick@0","hh_close@2.5","kick@3","snare@6.5"]');
+  run('PatternService.setMeter(group.id, 1, 3, 4);');           // 4/4 → 3/4：4拍目の打点は消える
+  assert.equal(run('hits()'), '["kick@0","hh_close@2.5","kick@3"]');
+  run('PatternService.removeRhythm(group.id, 0);');             // 先頭の小節ごと消える
+  assert.equal(run('hits()'), '["kick@0"]');
+  run('HistoryService.undo(); HistoryService.undo(); HistoryService.undo();');
+  assert.equal(run('hits()'), '["kick@0","snare@3.5","kick@4","hh_close@6.5"]');
+});
+
+test('drum hits are scheduled on the metronome clock and taps map back to pattern positions', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'SpeedService', 'PlaybackService', 'PlaybackScheduler', 'DrumService', 'DrumPlayback']);
+  run(`const clicks=[], drums=[];
+    const SoundGateway={click:(level,time)=>clicks.push(time), drum:(inst,time)=>drums.push(inst+'@'+Math.round(time*1e6)/1e6)};
+    const VideoGateway={armed:()=>false};
+    const Transport={running:()=>true, isSolo:()=>false};
+    // 2/4 ×4、3連クリック。拍子が1つなので既定のパターンは 2/4 ×2（2小節＝4拍）で、それを2回くり返す
+    const group=Domain.makeGroup({reps:4, rhythms:[{num:2,den:4,tuplet:3}], drums:[{p:0,inst:'kick'},{p:1.5,inst:'snare'},{p:2,inst:'kick'},{p:3.5,inst:'hh_close'}]});
+    Store.apply({groups:[group], bpm:120});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    PlaybackScheduler.setBeatHook(DrumPlayback.hook);
+    PlaybackService.update('all', null); PlaybackScheduler.prime(0); PlaybackScheduler.pump(10);`);
+  assert.equal(run('DrumDomain.spanOf(group)'), 2);
+  // 120BPM の4分＝0.5秒。連符のクリックとは別に、打点は拍の頭から拍長の割合で置かれる
+  assert.equal(run('clicks.length'), 24);
+  assert.equal(run('JSON.stringify(drums)'), JSON.stringify(['kick@0','snare@0.75','kick@1','hh_close@1.75','kick@2','snare@2.75','kick@3','hh_close@3.75']));
+  // 叩いた時刻 → パターンの拍位置。3回目のくり返し（rep 2）はパターンの1小節目、4回目は2小節目
+  assert.equal(run('JSON.stringify(DrumPlayback.locate(2.125))'), JSON.stringify({gid: run('group.id'), p: 0.25}));
+  assert.ok(Math.abs(run('DrumPlayback.locate(3.125).p') - 2.25) < 1e-9);
+  // 最初の拍の少し手前はパターン末（→クオンタイズで頭へ回る）
+  assert.equal(run('DrumPlayback.locate(-0.05).p'), 3.9);
+  assert.equal(run('DrumPlayback.locate(50)'), null);
+  // 追記は1手の履歴にまとめられる（commit:false の2打目以降は積まない）
+  run(`DrumService.add(group.id, 0.5, 'hh_close'); DrumService.add(group.id, 1, 'hh_close', {commit:false});`);
+  assert.equal(run('Store.findGroup(group.id).drums.length'), 6);
+  run('HistoryService.undo();');
+  assert.equal(run('Store.findGroup(group.id).drums.length'), 4);
+});
+
+test('pattern length defaults to two bars for single-meter groups and can be changed', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'DrumService', 'Yaml', 'SequenceMapper']);
+  run(`const Transport={running:()=>false};
+    const g44=Domain.makeGroup({reps:8, rhythms:[{num:4,den:4}]});
+    const g2=Domain.makeGroup({reps:4, rhythms:[{num:7,den:8},{num:8,den:8}]});
+    Store.apply({groups:[g44, g2]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    const hits = id => JSON.stringify(Store.findGroup(id).drums.map(h=>h.inst+'@'+h.p));`);
+  assert.equal(run('DrumDomain.cycleRhythms(g44).length'), 2);    // 4/4 ×2
+  assert.equal(run('DrumDomain.cycleRhythms(g2).length'), 2);     // 7/8・8/8 はそのまま
+  run(`DrumService.add(g44.id, 0, 'kick'); DrumService.add(g44.id, 6, 'snare');`);
+  assert.equal(run('Store.findGroup(g44.id).drumSpan'), 2);       // 打点を置いたら長さを固定
+  // 拍子を足しても、パターンは「並び2回ぶん」のまま各回の中で位置を保つ
+  run(`PatternService.addRhythm(g44.id, 3, 4);`);
+  assert.equal(run('hits(g44.id)'), '["kick@0","snare@9"]');
+  run('HistoryService.undo();');
+  // 4小節に伸ばすと今の2小節を複製して敷き詰め、1小節に縮めるとはみ出した打点を落とす
+  run(`DrumService.setSpan(g44.id, 4);`);
+  assert.equal(run('hits(g44.id)'), '["kick@0","snare@6","kick@8","snare@14"]');
+  run(`DrumService.setSpan(g44.id, 1);`);
+  assert.equal(run('hits(g44.id)'), '["kick@0"]');
+  run('HistoryService.undo();');
+  // 保存と読み込み
+  run(`var text = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups:Store.getState().groups})));
+    var back = SequenceMapper.toEntity(Yaml.parse(text)).sequence.groups;`);
+  assert.match(run('text'), /    drumSpan: 4\n    drums:\n/);
+  assert.equal(run('back[0].drumSpan'), 4);
+  assert.equal(run('back[0].drums.length'), 4);
+  assert.equal(run('back[1].drumSpan'), null);                     // 打点の無いグループは自動のまま
+});
+
+test('drum audio is cancelled and retimed together with clicks', () => {
+  const run = load(['SoundGateway']);
+  run(`const disconnected=[];
+    const window={AudioContext:class {
+      currentTime=0.25; sampleRate=100;
+      createOscillator(){ return {frequency:{setValueAtTime(){},exponentialRampToValueAtTime(){}}, connect(){return {connect(){}};}, start(){}, stop(){}, disconnect(){}}; }
+      createGain(){ const g={gain:{value:1,setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){},disconnect(){disconnected.push(g);}}; return g; }
+      createBuffer(){ return {getChannelData:()=>new Float32Array(200)}; }
+      createBufferSource(){ return {connect(){}, start(){}, stop(){}}; }
+      createBiquadFilter(){ return {frequency:{}, Q:{}, connect(){}}; }
+      get destination(){ return {}; }
+    }};
+    SoundGateway.ensure(); SoundGateway.drum('kick', 0.5); SoundGateway.drum('snare', 0.1);
+    SoundGateway.cancelPending();`);
+  assert.equal(run('disconnected.length'), 1);   // 未来の kick だけ取り消す（過ぎた snare はそのまま）
 });
