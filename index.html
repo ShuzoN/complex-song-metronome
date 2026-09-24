@@ -618,7 +618,7 @@
 
   .dr-selbar,.dr-rangebar{display:none;align-items:center;gap:6px;min-width:0;flex:1 1 auto}
   .dr-selbar.show,.dr-rangebar.show{display:flex}
-  .dr-bar3.sub > button,.dr-bar3.sub > .dr-status{display:none}
+  .dr-bar3.sub > button:not(.keep),.dr-bar3.sub > .dr-status{display:none}
   .dr-selbar .arrow{min-width:40px;font-size:14px}
   .dr-selbar .del,.dr-rangebar .del{border-color:var(--drec);color:var(--drec)}
   .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
@@ -650,10 +650,11 @@
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
   .dr-mid .dr-playrow button{width:34px;height:34px;font-size:14px}
+  .dr-mid .dr-playrow #drSong{width:auto;min-width:40px;padding:0 6px;font-size:11px;letter-spacing:0;white-space:nowrap}
   .dr-mid .prim{background:var(--patina);border-color:var(--patina);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
-  .dr-mid.stepping .dr-steprow{display:flex}
+  .dr-mid.stepping .dr-steprow,.dr-mid.ranging .dr-steprow{display:flex}
   /* 歩幅のボタン列：パッドの上の1段。粗い→細かいの順に横に並べ、いまの歩幅だけ点灯させる。
      幅が足りなければ横にスクロールする（縦持ちでは「2拍／3連」を2行にして詰める） */
   .dr-stepbar{grid-column:1 / -1;grid-row:1;display:flex;align-items:center;gap:8px;height:36px;min-width:0;transition:opacity .15s}
@@ -674,9 +675,9 @@
   @keyframes dr-blink{50%{opacity:.25}}
   @media (prefers-reduced-motion:reduce){#drRec.on .dr-dot{animation:none}}
 
-  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（▶■ / STEP・● / ←→） */
+  /* 横持ち：パッドが低いので、中央の操作は 2 列に並べて縦に収める（通し▶■ / STEP・● / ←→） */
   @media (orientation:landscape){
-    .dr-pads{grid-template-columns:minmax(0,1fr) 110px minmax(0,1fr)}
+    .dr-pads{grid-template-columns:minmax(0,1fr) 124px minmax(0,1fr)}
     .dr-mid{display:grid;grid-template-columns:52px 52px;align-content:center;justify-content:center;gap:4px 6px}
     .dr-mid .dr-playrow{grid-column:1 / 3;grid-row:1;justify-content:center}
     #drStep{grid-column:1;grid-row:2}
@@ -950,6 +951,9 @@
       <div class="dr-hint" id="drHint">パッドを叩くとカーソルの位置に置けます。● で再生しながら重ね録り</div>
     </div>
     <div class="dr-bar3" id="drBar3">
+      <!-- 元に戻す・やり直すは、音符や範囲を選んでいる間も同じ位置に出したままにする -->
+      <button class="keep" id="drUndo" type="button" aria-label="元に戻す">↶</button>
+      <button class="keep" id="drRedo" type="button" aria-label="やり直す">↷</button>
       <div class="dr-selbar" id="drSelbar">
         <button class="arrow" id="drSelLeft" type="button" aria-label="ひとつ前へ">←</button>
         <button class="arrow" id="drSelRight" type="button" aria-label="ひとつ後へ">→</button>
@@ -958,15 +962,12 @@
       </div>
       <div class="dr-rangebar" id="drRangebar">
         <button class="rplay" id="drRplay" type="button" title="選んだ範囲だけをくり返し再生">▶ 選択</button>
-        <button id="drRin" type="button">In</button><button id="drRout" type="button">Out</button>
         <span class="dr-rangetext" id="drRangeText"></span>
+        <button id="drRcut" type="button" title="範囲の音を切り取る（コピーして消す）">切り取り</button>
         <button id="drRcopy" type="button">コピー</button><button id="drRpaste" type="button">貼り付け</button>
         <button class="del" id="drRdel" type="button">削除</button>
         <button id="drRclr" type="button" aria-label="範囲を閉じる">✕</button>
       </div>
-      <button id="drSong" type="button" title="曲の頭から全体を再生">通し</button>
-      <button id="drUndo" type="button" aria-label="元に戻す">↶</button>
-      <button id="drRedo" type="button" aria-label="やり直す">↷</button>
       <button id="drAutofix" type="button" title="ずれた打点を拍の格子に載せる">自動補正</button>
       <button id="drTupOff" type="button" title="カーソルの位置の連符の区間を外す（打点はそのまま）" hidden>連符を外す</button>
       <button id="drClear" type="button" title="このパートの打点をすべて消す">消す</button>
@@ -986,6 +987,7 @@
     <div class="dr-side" id="drLeft"></div>
     <div class="dr-mid" id="drMid">
       <div class="dr-playrow">
+        <button id="drSong" type="button" title="曲の頭から全体を再生">通し</button>
         <button class="prim" id="drPlay" type="button" aria-label="このグループをくり返し再生">▶</button>
         <button id="drStop" type="button" aria-label="停止">■</button>
       </div>
@@ -3330,8 +3332,7 @@
       open(rin, rout){ st.put({mode: true, rin, rout}); },
       // なぞった2点の前後を In・Out にする
       span(a, b){ patch({rin: Math.min(a, b), rout: Math.max(a, b)}); },
-      /* In と Out は片方ずつ置ける。前後が逆なら入れ替え、同じ位置なら Out を after(In)（1格子先）へ */
-      setIn(p, after){ patch({rin: p}); normalize(after); },
+      /* Out を置く（範囲中のカーソル移動）。前後が逆なら入れ替え、同じ位置なら Out を after(In)（1格子先）へ */
       setOut(p, after){ patch({rout: p}); normalize(after); },
       normalize: after => normalize(after),
       // 範囲を閉じる（In・Out も消す）
@@ -3440,11 +3441,8 @@
       DrumRange.clear();
       return true;
     }
-    // 既存の音符をタップ：範囲を選んでいる最中なら選ばず、そうでなければ選ぶ／もう一度で外す
-    function toggleHit(sel){
-      if(DrumRange.mode()) DrumSelection.clear();
-      else DrumSelection.toggle(sel);
-    }
+    // 既存の音符をタップ：選ぶ／もう一度で外す。範囲を選んでいる最中でも選べる（範囲はそのまま）
+    function toggleHit(sel){ DrumSelection.toggle(sel); }
     function setSelection(sel){ DrumSelection.set(sel); }
     function clearSelection(){ DrumSelection.clear(); }
     // 空白をタップ：選択を外し、位置が拾えればそこへシーク
@@ -3461,7 +3459,6 @@
     function spanRange(a, b){ DrumRange.span(a, b); }
     function normalizeRange(after){ DrumRange.normalize(after); }
     function openRangeAt(p, out){ DrumRange.open(p, out); DrumSelection.clear(); }
-    function setRangeIn(p, after){ DrumRange.setIn(p, after); }
     function setRangeOut(p, after){ DrumRange.setOut(p, after); }
     function closeRange(){ DrumRange.clear(); }
     // コピーした範囲を確定：クリップボードに残し、カーソルを範囲の終わりへ進め、範囲は閉じる
@@ -3476,7 +3473,7 @@
     return Object.freeze({
       selectTarget, selectOccurrence, followPlayhead, guardRangeTap, toggleHit,
       setSelection, clearSelection, seekTo,
-      beginRangeDrag, dragRangeTo, spanRange, normalizeRange, openRangeAt, setRangeIn, setRangeOut, closeRange,
+      beginRangeDrag, dragRangeTo, spanRange, normalizeRange, openRangeAt, setRangeOut, closeRange,
       commitCopy, clearEdit, retreatPart
     });
   })();
@@ -6140,6 +6137,7 @@
       if(simile) Score.reveal(DrumTarget.gid(), DrumTarget.part());
       return DrumDomain.snap(grid(), h.p).p;
     }
+    let lastBlankTap = 0;
     scoreEl.addEventListener("pointerup", e => {
       if(Range.dragging || Pinch.active) return;   // なぞって範囲を取った・ピンチした直後はタップ扱いしない
       e.preventDefault();
@@ -6153,6 +6151,12 @@
         DrumEditSession.toggleHit(sel);
         render();
         return;
+      }
+      // 五線の外（上下の空白）をダブルタップ：選んでいる音符・範囲をまとめて外す
+      if(!Score.onStaff(e.clientY)){
+        const now = performance.now(), dbl = now - lastBlankTap < 350;
+        lastBlankTap = dbl ? 0 : now;
+        if(dbl && (DrumSelection.get() || DrumRange.mode())){ RangePlay.stop(); DrumEditSession.clearEdit(); render(); return; }
       }
       const p = posAt(e.clientX, true);
       DrumEditSession.seekTo(p);
@@ -6374,6 +6378,8 @@
         }
         DrumCursor.set(stepBefore(Math.min(x, nb)));
       }
+      // 範囲を選んでいる間は、範囲の終わりがカーソルに付いてくる（← → で範囲を伸び縮みさせる）
+      if(DrumRange.mode()) DrumEditSession.setRangeOut(DrumCursor.get(), stepAfter);
       render();
     }
     /* ステップ入力：カーソルの位置にそのまま置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音）。
@@ -6706,14 +6712,15 @@
       $("drPaste").hidden = !DrumClipboard.get();
       $("drPaste").disabled = running;
       if(DrumClipboard.get()) $("drPaste").textContent = "貼り付け " + DrumClipboard.get().items.length + "音";
-      $("drSelbar").classList.toggle("show", !!DrumSelection.get() && !DrumRange.mode());
-      $("drRangebar").classList.toggle("show", DrumRange.mode());
+      // 範囲の中で音符を選んだら、選んでいる間は音符の操作（← → 削除）に切り替える（✕ で範囲の操作へ戻る）
+      $("drSelbar").classList.toggle("show", !!DrumSelection.get());
+      $("drRangebar").classList.toggle("show", DrumRange.mode() && !DrumSelection.get());
+      $("drMid").classList.toggle("ranging", DrumRange.mode() && !playing());
       $("drBar3").classList.toggle("sub", DrumRange.mode() || !!DrumSelection.get());
       if(DrumRange.mode()){
         const has = DrumRange.rin() != null && DrumRange.rout() != null;
         $("drRangeText").textContent = DrumClipboard.get() ? "複製 " + DrumClipboard.get().items.length + "音" : "";
-        $("drRin").classList.toggle("set", DrumRange.rin() != null); $("drRout").classList.toggle("set", DrumRange.rout() != null);
-        $("drRpaste").disabled = !DrumClipboard.get(); $("drRcopy").disabled = !has; $("drRdel").disabled = !has;
+        $("drRpaste").disabled = !DrumClipboard.get(); $("drRcopy").disabled = !has; $("drRcut").disabled = !has; $("drRdel").disabled = !has;
       }
       $("drOffset").textContent = Fmt2.ms(DrumTapLatency.seconds());
     }
@@ -6924,8 +6931,14 @@
       on("drSelRight", () => nudge(+1));
       on("drSelClr", () => { DrumEditSession.clearSelection(); render(); });
       // 範囲
-      on("drRin", () => { DrumEditSession.setRangeIn(DrumCursor.get(), stepAfter); render(); });
-      on("drRout", () => { DrumEditSession.setRangeOut(DrumCursor.get(), stepAfter); render(); });
+      // 切り取り：コピーして範囲の音を消す（履歴は1手）。範囲は閉じて、貼り付けは下の「貼り付け」から
+      on("drRcut", () => {
+        const a = DrumRange.rin(), out = DrumRange.rout(), c = DrumService.copy(DrumTarget.gid(), DrumTarget.part(), a, out);
+        if(!c) return;
+        DrumService.deleteRange(DrumTarget.gid(), DrumTarget.part(), a, out);
+        DrumEditSession.commitCopy(c, a);
+        render();
+      });
       // コピーしたら範囲を閉じる（貼り付けは下の「貼り付け」から。別のパートをタップしてそこへ貼れる）
       on("drRcopy", () => { const out = DrumRange.rout(), c = DrumService.copy(DrumTarget.gid(), DrumTarget.part(), DrumRange.rin(), out); if(c){ DrumEditSession.commitCopy(c, out); render(); } });
       // 貼り付けたら、続けて貼れるようにカーソルを貼ったぶんだけ進める
