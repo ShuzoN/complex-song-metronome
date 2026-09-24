@@ -5393,9 +5393,15 @@
         const a = sp.x0 - PW, b = sp.xs[sp.nb];
         if(a < scoreEl.scrollLeft || b > scoreEl.scrollLeft + scoreEl.clientWidth) scoreEl.scrollLeft = Math.max(0, a - 20);
       }
+      // 画面座標の y が五線（音符の置ける高さ）の上か。上下の空白ならスワイプで横スクロールに使う
+      function onStaff(clientY){
+        const svg = scoreEl.firstElementChild; if(!svg) return false;
+        const y = clientY - svg.getBoundingClientRect().top;
+        return y >= TOP - L * 1.5 && y <= TOP + L * 4.5;
+      }
       scoreEl.addEventListener("wheel", () => browse(), {passive:true});
       function browse(){ browseUntil = performance.now() + BROWSE_MS; }
-      return {render, hitTest, headAt, headAtOcc, occAt, reveal, browse, get spans(){ return cache.spans; }};
+      return {render, hitTest, headAt, headAtOcc, occAt, reveal, browse, onStaff, get spans(){ return cache.spans; }};
     })();
 
     /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
@@ -5433,16 +5439,46 @@
       render();
     });
 
-    /* 五線譜をなぞると範囲選択。タップ（動かさずに離す）は音符選択・シーク位置のまま */
+    /* 五線譜の上をなぞると範囲選択、五線の上下の空白をなぞると横スクロール。
+       タップ（動かさずに離す）はどちらでも音符選択・シーク位置のまま */
     const Range = (() => {
       const SLOP = 10;
-      let down = null, dragging = false;
+      let down = null, dragging = false, glide = 0;
       scoreEl.addEventListener("pointerdown", e => {
         if(e.target.closest("button")) return;
-        down = {id:e.pointerId, x:e.clientX, p0:null}; dragging = false;
+        cancelAnimationFrame(glide);
+        down = {id:e.pointerId, x:e.clientX, p0:null, pan:!Score.onStaff(e.clientY), s0:scoreEl.scrollLeft, v:0, t:performance.now()}; dragging = false;
       });
+      // 空白のスワイプ：指に合わせて譜面を動かし、離したら少し惰性で流す
+      function pan(e){
+        if(!dragging){
+          if(Math.abs(e.clientX - down.x) <= SLOP) return;
+          dragging = true;
+          try{ stageEl.setPointerCapture(down.id); }catch(_){}
+        }
+        const now = performance.now(), prev = scoreEl.scrollLeft;
+        scoreEl.scrollLeft = down.s0 - (e.clientX - down.x);
+        const dt = now - down.t;
+        if(dt > 0) down.v = 0.8 * ((scoreEl.scrollLeft - prev) / dt) + 0.2 * down.v;
+        down.t = now;
+        Score.browse();
+      }
+      function coast(v){
+        let last = performance.now();
+        const step = now => {
+          const dt = now - last; last = now;
+          v *= Math.pow(0.95, dt / 16);
+          if(Math.abs(v) < 0.02) return;
+          const prev = scoreEl.scrollLeft;
+          scoreEl.scrollLeft = prev + v * dt;
+          Score.browse();
+          if(scoreEl.scrollLeft !== prev) glide = requestAnimationFrame(step);
+        };
+        glide = requestAnimationFrame(step);
+      }
       stageEl.addEventListener("pointermove", e => {
         if(!down || e.pointerId !== down.id) return;
+        if(down.pan){ pan(e); return; }
         if(!dragging){
           if(Math.abs(e.clientX - down.x) <= SLOP) return;
           down.p0 = posAt(down.x); if(down.p0 == null){ down = null; return; }
@@ -5456,6 +5492,14 @@
       });
       const end = e => {
         if(!down || e.pointerId !== down.id) return;
+        if(down.pan){
+          if(dragging){
+            if(e.type === "pointerup" && performance.now() - down.t < 80) coast(down.v);
+            setTimeout(() => { dragging = false; }, 0);
+          }
+          down = null;
+          return;
+        }
         if(dragging){
           const p = posAt(e.clientX);
           if(p != null){ ui.rin = Math.min(down.p0, p); ui.rout = Math.max(down.p0, p); }
