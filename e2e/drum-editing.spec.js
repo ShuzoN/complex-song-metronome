@@ -285,7 +285,7 @@ test.describe("連符の置き直しの解除", () => {
 
 test.describe("選んだ音をまるごと1つの連符にする", () => {
   const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
-  test("6つ選んで6連を押すと選んだ拍全体が1つの6連になって均等に並び、もう一度押すと入り切るストレートに置き直す", async ({app, page}) => {
+  test("6つ選んで6連を押すと選んだ拍全体が1つの6連になって均等に並び、もう一度押すとその音符（4分）のストレートに並べ直す", async ({app, page}) => {
     await app.loadFixture("01-plain");
     await app.openDrums();
     // 8分で 0 kick・1 snare・1.5 snare・2 kick・3 snare・3.5 snare（4拍に6つ）
@@ -297,10 +297,40 @@ test.describe("選んだ音をまるごと1つの連符にする", () => {
     expect(d.tuplets).toEqual([[0, 4, 6]]);
     expect(d.hits).toEqual({snare: [0.667, 1.333, 2.667, 3.333], kick: [0, 2]});
     await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "4分6連");
-    await stepBtn(app, "4分6連");                         // 解除：4分には6つ入らないので8分へ
+    await stepBtn(app, "4分6連");                         // 解除：4分に戻す（4拍に6つは入らないので、後ろへはみ出して6拍ぶん並べる）
     d = (await drumsOf(app, "A"))[0];
     expect(d.tuplets).toBeUndefined();
-    expect(d.hits).toEqual({snare: [0.5, 1.5, 2.5, 3.5], kick: [0, 2]});
-    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "8分");
+    expect(d.hits).toEqual({snare: [1, 2, 4, 5], kick: [0, 3]});
+    await expect(page.locator("#drStepSize button.on")).toHaveAttribute("data-name", "4分");
+  });
+});
+
+test.describe("連符からストレートへ戻すとき入り切らない", () => {
+  const stepBtn = (app, name) => app.page.click(`#drStepSize button[data-name="${name}"]`);
+  test("8分6連（2拍に6つ）を選んで8分を押すと、後ろへはみ出して3拍ぶんの8分に並べ直す", async ({app}) => {
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    await app.setStepSize("8分6連");
+    for(let i = 0; i < 6; i++) await app.pad(i % 2 ? "snare" : "kick");
+    for(let i = 0; i < 6; i++) await app.click("drStepBack");
+    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd"); await app.click("drRout");   // 2拍
+    await stepBtn(app, "8分");
+    const d = (await drumsOf(app, "A"))[0];
+    expect(d.tuplets).toBeUndefined();
+    expect(d.hits).toEqual({snare: [0.5, 1.5, 2.5], kick: [0, 1, 2]});
+  });
+
+  test("はみ出す先に音があるときは何も変えず、理由を出す", async ({app, page}) => {
+    await app.loadFixture("01-plain");
+    await app.openDrums();
+    await app.setStepSize("8分6連");
+    for(let i = 0; i < 6; i++) await app.pad("kick");
+    await app.setStepSize("4分"); await app.pad("snare");  // 2拍目の頭（6連のすぐ後ろ）
+    await app.setStepSize("8分6連");
+    for(let i = 0; i < 12; i++) await app.click("drStepBack");   // 先頭まで戻す
+    await app.click("drRange"); for(let i = 0; i < 6; i++) await app.click("drStepFwd"); await app.click("drRout");
+    await stepBtn(app, "8分");
+    await expect(page.locator("#drToast")).toHaveText(/音があります/);
+    expect((await drumsOf(app, "A"))[0].tuplets).toEqual([[0, 2, 6]]);
   });
 });
