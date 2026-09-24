@@ -1,0 +1,15 @@
+# 叩いたまま保存された、格子からずれた打点（自動補正・「自信なし」の表示の対象）
+version: 1
+kind: metronome.sequence
+name: offgrid
+tempo: 120
+groups:
+  - name: ずれ
+    repeat: 2
+    pattern: [4/4]
+    drums:
+      - span: 1
+        hits:
+          kick: [0.02, 1.97, 2.53]
+          snare: [1.04, 3.12]
+          hh_close: [0, 0.49, 1.52, 2.26, 3.5]

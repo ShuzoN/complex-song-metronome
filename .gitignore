@@ -4,3 +4,8 @@ versions/
 # OS 生成物
 .DS_Store
 Thumbs.db
+
+# テスト（pnpm / Playwright）
+node_modules/
+test-results/
+playwright-report/

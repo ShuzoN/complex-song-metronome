@@ -1,0 +1,35 @@
+version: 1
+kind: metronome.sequence
+
+name: legacy
+tempo: 120
+
+groups:
+  - name: 旧形式
+    repeat: 4
+    pattern: [4/4]
+    swing:
+      unit: 8
+      amount: 67
+    drums:
+      - span: 1
+        hits:
+          hh_close: [0, 1, 2, 3]
+          snare: [1, 3]
+          kick: [0, 2]
+  - name: 旧形式2小節
+    repeat: 2
+    pattern: [3/4]
+    drums:
+      - span: 2
+        hits:
+          snare: [1.5, 4.5]
+          kick: [0, 3]
+  - name: 範囲外
+    repeat: 2
+    pattern: [4/4]
+    drums:
+      - span: 2
+        tuplets: [[1, 1, 3], [3, 2, 3]]
+        hits:
+          kick: [0, 7.9]

@@ -1,0 +1,31 @@
+{
+ "notes": [
+  "旧形式 part0 occ0 0.0 kick",
+  "旧形式 part0 occ0 0.0 hh_close",
+  "旧形式 part0 occ0 1.0 snare",
+  "旧形式 part0 occ0 1.0 hh_close",
+  "旧形式 part0 occ0 2.0 kick",
+  "旧形式 part0 occ0 2.0 hh_close",
+  "旧形式 part0 occ0 3.0 snare",
+  "旧形式 part0 occ0 3.0 hh_close",
+  "旧形式2小節 part0 occ0 0.0 kick",
+  "旧形式2小節 part0 occ0 1.2 snare",
+  "旧形式2小節 part0 occ0 3.0 kick",
+  "旧形式2小節 part0 occ0 4.2 snare",
+  "範囲外 part0 occ0 0.0 kick",
+  "範囲外 part0 occ0 7.0 kick"
+ ],
+ "texts": [
+  "旧形式",
+  "4",
+  "4",
+  "旧形式2小節",
+  "3",
+  "4",
+  "範囲外",
+  "4",
+  "4",
+  "3",
+  "3:2"
+ ]
+}

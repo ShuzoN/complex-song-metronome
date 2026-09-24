@@ -1,0 +1,19 @@
+# 短いパートが速く入れ替わる（再生位置への追従を短時間で確かめる）
+version: 1
+kind: metronome.sequence
+name: quick parts
+tempo: 240
+groups:
+  - name: 前
+    repeat: 1
+    pattern: [4/4]
+  - name: 速い
+    repeat: 4
+    pattern: [4/4]
+    drums:
+      - span: 1
+        hits:
+          kick: [0, 2]
+      - span: 1
+        hits:
+          snare: [1, 3]

@@ -1,0 +1,10 @@
+version: 1
+kind: metronome.sequence
+
+name: plain
+tempo: 120
+
+groups:
+  - name: A
+    repeat: 4
+    pattern: [4/4]

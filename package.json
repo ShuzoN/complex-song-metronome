@@ -1,0 +1,16 @@
+{
+  "name": "complex-song-metronome-tests",
+  "private": true,
+  "description": "テスト専用。アプリ本体（index.html）はビルドも依存も持たない",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "test": "pnpm run test:unit && pnpm run test:e2e",
+    "test:unit": "node --test \"tests/*.test.cjs\"",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "UPDATE_GOLDEN=1 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "yaml": "^2.9.1"
+  }
+}
