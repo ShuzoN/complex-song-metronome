@@ -685,12 +685,15 @@ test('snapping near the end of a beat moves to the next beat head instead of the
 
 test('score occurrences write repeated patterns as simile and restart notes after another part', () => {
   const run = load(['DrumDomain']);
-  const occ = spec => run(`JSON.stringify(DrumDomain.occurrences(${spec}).map(o => (o.mode === 'simile' ? '%' : '') + String.fromCharCode(65 + o.pi) + o.passes + (o.mode === 'simile' ? '<' + o.src : '')))`);
+  const occ = spec => run(`JSON.stringify(DrumDomain.occurrences(${spec}).map(o => o.mode === 'rest' ? '-' + o.passes : (o.mode === 'simile' ? '%' : '') + String.fromCharCode(65 + o.pi) + o.passes + (o.mode === 'simile' ? '<' + o.src : '')))`);
   const g = (reps, parts) => `{reps:${reps}, pattern:{rhythms:[{num:4,den:4}]}, drums:${JSON.stringify(parts)}}`;
   // 4/4 ×8、既定（パートなし）＝2小節パターン：音符 → 2小節シミレ ×3
   assert.equal(occ(g(8, [])), '["A2","%A2<0","%A2<0","%A2<0"]');
-  // A 2小節 ×2 → B 1小節（計5）を ×10 で回す：B の後の A はまた音符で書く、最後は途中で終わる
-  assert.equal(occ(g(10, [{span:2, repeat:2, hits:[]}, {span:1, repeat:1, hits:[]}])), '["A2","%A2<0","B1","A2","%A2<3","B1"]');
+  // A 2小節 ×2 → B 1小節（計5）を ×10 に：パートが2つ以上なら頭から回さず、残り5小節は空き
+  assert.equal(occ(g(10, [{span:2, repeat:2, hits:[]}, {span:1, repeat:1, hits:[]}])), '["A2","%A2<0","B1","-5"]');
+  // 空きの小節はどのパートでもない（鳴らさない・編集対象にしない）
+  const loc = rep => run(`JSON.stringify(DrumDomain.locatePass(${g(10, [{span:2, repeat:2, hits:[]}, {span:1, repeat:1, hits:[]}])}, ${rep}, 0).pi)`);
+  assert.deepEqual([0, 3, 4, 5, 9].map(loc), ['0', '0', '1', '-1', '-1']);
   // 割り切れない最後は音符（パターンの頭ぶんだけ）
   assert.equal(occ(g(5, [{span:2, repeat:1, hits:[]}])), '["A2","%A2<0","A1"]');
   // 1小節パート ×3 → 1小節シミレを小節ぶん

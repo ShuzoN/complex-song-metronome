@@ -8,7 +8,7 @@ const clicksIn = evs => live(evs).filter(e => e.kind === "click");
 function beatsFrom(evs, t0, beatSec){ return evs.map(e => Math.round((e.time - t0) / beatSec * 1000) / 1000); }
 
 test.describe("区間ループ", () => {
-  test("▶ はそのグループをくり返し、打点は拍の位置で鳴る（パートを使い切ったら頭から）", async ({app}) => {
+  test("▶ はそのグループをくり返し、打点は拍の位置で鳴る（パートが足りない小節は空きで、頭から回さない）", async ({app}) => {
     await app.loadFixture("09-quick-parts");
     await app.openDrums();
     await app.selectGroup("速い");
@@ -18,7 +18,7 @@ test.describe("区間ループ", () => {
     const evs = await app.audio(), t0 = clicksIn(evs)[0].time;
     const drums = drumsIn(evs).filter(e => e.time - t0 < 4.2);
     expect(drums.map(e => e.inst + "@" + beatsFrom([e], t0, 0.25)[0])).toEqual([
-      "kick@0", "kick@2", "snare@5", "snare@7", "kick@8", "kick@10", "snare@13", "snare@15", "kick@16"
+      "kick@0", "kick@2", "snare@5", "snare@7", "kick@16"   // 3〜4小節目は空き、5小節目でグループの頭に戻る
     ]);
   });
 
@@ -175,8 +175,8 @@ test.describe("再生位置への追従", () => {
     await app.selectGroup("前");
     await app.click("drSong");
     await expect(app.groupChip("速い")).toHaveClass(/\bcur\b/, {timeout: 5000});
-    await expect(app.partChip(1)).toHaveClass(/\bcur\b/, {timeout: 5000});
     await expect(app.partChip(0)).toHaveClass(/\bcur\b/, {timeout: 5000});
+    await expect(app.partChip(1)).toHaveClass(/\bcur\b/, {timeout: 5000});
     await app.click("drStop");
   });
 
