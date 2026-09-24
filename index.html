@@ -904,6 +904,7 @@
       <button id="drUndo" type="button" aria-label="元に戻す">↶</button>
       <button id="drRedo" type="button" aria-label="やり直す">↷</button>
       <button id="drAutofix" type="button" title="ずれた打点を拍の格子に載せる">自動補正</button>
+      <button id="drTupOff" type="button" title="カーソルの位置の連符の区間を外す（打点はそのまま）" hidden>連符を外す</button>
       <button id="drClear" type="button" title="このパートの打点をすべて消す">消す</button>
       <button id="drRange" type="button" title="カーソルの位置から範囲を選ぶ（五線をなぞっても選べます）">範囲</button>
       <button id="drPaste" type="button" title="コピーした範囲をカーソルの位置に貼り付け（別のパートにも貼れます）" hidden>貼り付け</button>
@@ -1048,8 +1049,9 @@
   /* ========================================================================
      DrumDomain … ドラムパターン（打点）の純粋計算。Domain と同じく DOM・状態・音を持たない。
      打点は RhythmGroup に付く1レイヤー（group.drums）で、パート（DrumPart）の並びとして持つ。
-       DrumPart {span, repeat, hits} … span＝パターンの長さ（拍子の並びの何回ぶんか。4/4 なら小節数）、
-                                        repeat＝そのパターンを続けて何回鳴らすか、hits＝打点
+       DrumPart {span, repeat, hits, tuplets} … span＝パターンの長さ（拍子の並びの何回ぶんか。4/4 なら小節数）、
+                                        repeat＝そのパターンを続けて何回鳴らすか、hits＝打点、
+                                        tuplets＝連符の区間 [{at, beats, n}]（at 拍目から beats 拍を n 等分。2拍3連など）
      グループのくり返し（reps）の間、パートを先頭から順に鳴らし、使い切ったらまたパートの頭から回す。
      例：4/4 ×5 に [{span:2, repeat:2}, {span:1}] なら「2小節パターン ×2 → 1小節の別パターン」＝5小節。
      パートが無いグループは、既定のパート1つ（拍子が1つなら2回ぶん＝4/4 なら2小節、2つ以上なら1回ぶん）とみなす。
@@ -1088,6 +1090,13 @@
     /* 1拍の基本分割数：拍が4分音符なら 16分＝4分割、8分音符なら 2分割、16分以下なら分割なし。
        慣用の音価でない分母（5, 7, 11…）は 4分割を既定にする */
     const baseSub = den => { const b = 16/den; return Number.isInteger(b) ? Math.max(1, b) : (b < 1 ? 1 : 4); };
+    /* その拍の基本分割数。メトロノームで連符（tuplet）を付けた拍子はその分割数（4/4 ＋ tuplet 3 なら 8分3連）を
+       基本にする＝3連のノリの曲は、何もしなくても3連の格子で置け、譜面にも連符の括弧が並ばない */
+    const rhythmAt = (rhythms, b) => { const l = locate(rhythms, Math.floor(b)); return rhythms[l.bar] || rhythms[rhythms.length-1] || {num:4, den:4}; };
+    function baseAt(rhythms, b){
+      const r = rhythmAt(rhythms || [], b), tp = Math.round(Number(r.tuplet));
+      return tp > 1 ? tp : baseSub(r.den);
+    }
     // 拍子の並びの拍数（渡した並びの合計。パートぶんなら partRhythms を渡す）
     const cycleBeats = rhythms => (rhythms || []).reduce((n, r) => n + r.num, 0);
     /* パートの長さ（拍子の並びの何回ぶんか）は 1〜8。既定（autoSpan）は「拍子が1つだけなら2回、2つ以上なら1回」
@@ -1104,7 +1113,7 @@
     const passBeats = g => cycleBeats(g.pattern.rhythms);
     const partRhythms = (g, part) => repeatRhythms(g.pattern.rhythms, part.span);
     const partBeats = (g, part) => part.span * passBeats(g);
-    const makePart = (span, repeat, hits) => ({span, repeat: normRepeat(repeat), hits: hits || []});
+    const makePart = (span, repeat, hits, tuplets) => ({span, repeat: normRepeat(repeat), hits: hits || [], tuplets: tuplets || []});
     const defaultPart = rhythms => makePart(autoSpan(rhythms), 1, []);
     // 編集・表示に使うパートの並び。未作成のグループは既定のパート1つ（保存はしない）
     const partsOf = g => (g && Array.isArray(g.drums) && g.drums.length) ? g.drums : [defaultPart(g ? g.pattern.rhythms : null)];
@@ -1156,6 +1165,12 @@
       (hits || []).forEach(h => { for(let q = h.p; q < end - 1e-9; q += len) out.push({p: round3(q), inst: h.inst}); });
       return out.sort((a, b) => a.p - b.p);
     }
+    // 連符の区間も同じく敷き詰め／はみ出したら落とす
+    function respanTuplets(tuplets, pb, from, to){
+      const end = to * pb, len = from * pb, out = [];
+      (tuplets || []).forEach(t => { for(let q = t.at; q + t.beats <= end + 1e-9; q += len) out.push({at:q, beats:t.beats, n:t.n}); });
+      return normTuplets(out, end);
+    }
     // 各小節の先頭の拍位置
     function barStarts(rhythms){
       const out = []; let p = 0;
@@ -1174,6 +1189,33 @@
     const denAt = (rhythms, b) => { const l = locate(rhythms, Math.floor(b)); return (rhythms[l.bar] || rhythms[rhythms.length-1] || {den:4}).den; };
 
     const round3 = v => Math.round(v * 1000) / 1000;
+    /* 連符の区間 Tuplet {at, beats, n} … パートの at 拍目（整数）から beats 拍を n 等分する。
+         1拍の5連＝{beats:1, n:5}、2拍3連＝{beats:2, n:3}、4拍5連＝{beats:4, n:5}
+       区間の中の拍は打点から格子を推定せず、n 等分の格子に固定する（打点が少なくても16分に吸われない）。
+       格子は拍ごとに持つので、区間の拍の分割数は n / gcd(n, beats)（2拍3連なら各拍3分割＝8分3連の格子に乗る）。
+       区間は重ならない。保存形式は [at, beats, n] の並び */
+    const TUP_N_MIN = 2, TUP_N_MAX = 9, TUP_BEATS_MAX = 8;
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    const tupletSub = t => t.n / gcd(t.n, t.beats);
+    const overlaps = (a, b) => a.at < b.at + b.beats && b.at < a.at + a.beats;
+    // 受け付ける形：{at, beats, n} / [at, beats, n]。不正・パートの外・先の区間と重なるものは落とす。開始順に並べる
+    function normTuplets(v, nb){
+      const out = [];
+      (Array.isArray(v) ? v : []).forEach(o => {
+        const a = Array.isArray(o) ? o : (o && typeof o === "object" ? [o.at, o.beats, o.n] : null);
+        if(!a) return;
+        const t = {at: Number(a[0]), beats: Number(a[1]), n: Number(a[2])};
+        if(![t.at, t.beats, t.n].every(Number.isInteger)) return;
+        if(t.at < 0 || t.beats < 1 || t.beats > TUP_BEATS_MAX || t.n < TUP_N_MIN || t.n > TUP_N_MAX || t.at + t.beats > nb) return;
+        if(out.some(u => overlaps(u, t))) return;
+        out.push(t);
+      });
+      return out.sort((a, b) => a.at - b.at);
+    }
+    const tupletAt = (tuplets, b) => (tuplets || []).find(t => b >= t.at && b < t.at + t.beats) || null;
+    // 区間 t を置く（重なる区間は外す）／拍 b を含む区間を外す。どちらも新しい配列を返す
+    const withTuplet = (tuplets, t, nb) => normTuplets((tuplets || []).filter(u => !overlaps(u, t)).concat([t]), nb);
+    const withoutTuplet = (tuplets, b) => (tuplets || []).filter(t => !(b >= t.at && b < t.at + t.beats));
     /* 打点の正規化。受け付ける形：
          [{p, inst}]              … 実行時の形（下書き・履歴）
          {kick:[0, 1.5], ...}      … 保存形式（楽器ごとの拍位置の並び）
@@ -1200,22 +1242,27 @@
        打点の無い以前の形は「パートなし」。パートの hits は normHits と同じ規則（周の外・不明な楽器は落とす） */
     function normDrums(v, legacySpan, rhythms){
       const pb = cycleBeats(rhythms);
-      const part = (span, repeat, hits) => { const sp = normSpan(span) || autoSpan(rhythms); return makePart(sp, repeat, normHits(hits, sp * pb)); };
-      const isPart = o => o && typeof o === "object" && !Array.isArray(o) && ("hits" in o || "span" in o || "repeat" in o);
+      const part = (span, repeat, hits, tuplets) => {
+        const sp = normSpan(span) || autoSpan(rhythms);
+        return makePart(sp, repeat, normHits(hits, sp * pb), normTuplets(tuplets, sp * pb));
+      };
+      const isPart = o => o && typeof o === "object" && !Array.isArray(o) && ("hits" in o || "span" in o || "repeat" in o || "tuplets" in o);
       if(Array.isArray(v)){
-        if(v.some(isPart)) return v.filter(isPart).map(o => part(o.span, o.repeat, o.hits));
+        if(v.some(isPart)) return v.filter(isPart).map(o => part(o.span, o.repeat, o.hits, o.tuplets));
         const legacy = part(legacySpan, 1, v);
         return legacy.hits.length ? [legacy] : [];
       }
-      if(isPart(v)) return [part(v.span, v.repeat, v.hits)];
+      if(isPart(v)) return [part(v.span, v.repeat, v.hits, v.tuplets)];
       if(v && typeof v === "object"){ const legacy = part(legacySpan, 1, v); return legacy.hits.length ? [legacy] : []; }
       return [];
     }
-    const cloneParts = parts => (parts || []).map(pt => makePart(pt.span, pt.repeat, pt.hits.map(h => ({p:h.p, inst:h.inst}))));
+    const cloneParts = parts => (parts || []).map(pt => makePart(pt.span, pt.repeat, pt.hits.map(h => ({p:h.p, inst:h.inst})),
+      (pt.tuplets || []).map(t => ({at:t.at, beats:t.beats, n:t.n}))));
     // 保存用：パートの並び。パートが無ければ null（キーごと省略＝後方互換）
     function toDto(parts){
       if(!parts || !parts.length) return null;
-      return parts.map(pt => ({span: pt.span, repeat: pt.repeat, hits: hitsDto(pt.hits)}));
+      return parts.map(pt => ({span: pt.span, repeat: pt.repeat, hits: hitsDto(pt.hits),
+        tuplets: (pt.tuplets || []).length ? pt.tuplets.map(t => [t.at, t.beats, t.n]) : null}));
     }
     // 保存用：楽器ごとの拍位置（昇順）。打点が無ければ null
     function hitsDto(hits){
@@ -1229,7 +1276,8 @@
     }
 
     /* 打点 → 格子（クオンタイズ）
-       格子は「拍ごと」に選ぶ。候補は基本分割に加えて 2〜9 分割の連符。
+       格子は「拍ごと」に選ぶ。候補は基本分割（baseAt）に加えて 2〜9 分割の連符と、分母どおりの分割（16分など。
+       メトロノームの連符で基本分割が3連などになっているとき）。連符の区間（tuplets）の中の拍は推定せず、区間の格子に固定する。
        その拍に落ちた打点との残差（拍長比）の合計が最小の格子を採用する。
        連符系には小さな罰則（拍あたり一定）を付け、16分を少し遅れて叩いた程度では3連と判定しないようにする。
        - 基本分割で割り切れる分割（base=4 に対する 2 など）は基本と同じ位置しか作らないので除く
@@ -1240,13 +1288,14 @@
       {sub:2, pen:0.03}, {sub:3, pen:0.04}, {sub:5, pen:0.06, min:3}, {sub:6, pen:0.07, min:3},
       {sub:7, pen:0.08, min:4}, {sub:8, pen:0.05, min:3}, {sub:9, pen:0.09, min:5}
     ];
-    const gridsFor = (base, count) => [{sub:base, pen:0}]
+    const gridsFor = (base, count, plain) => [{sub:base, pen:0}]
+      .concat(plain && plain !== base ? [{sub:plain, pen:0.04*(4/base)}] : [])
       .concat(TUPLETS.filter(t => base % t.sub !== 0).map(t => ({sub:t.sub, pen:t.pen*(4/base), min:t.min})))
       .filter((g, i, a) => a.findIndex(x => x.sub === g.sub) === i && count >= (g.min || 0));
-    function chooseGrid(fracs, fallback){
+    function chooseGrid(fracs, fallback, plain){
       if(!fracs.length) return fallback;
       let best = null;
-      gridsFor(fallback, fracs.length).forEach(g => {
+      gridsFor(fallback, fracs.length, plain).forEach(g => {
         let cost = g.pen;
         fracs.forEach(f => { const k = f * g.sub; cost += Math.abs(k - Math.round(k)) / g.sub; });
         if(!best || cost < best.cost - 1e-9) best = {sub:g.sub, cost};
@@ -1260,14 +1309,14 @@
       b = ((b % nb) + nb) % nb;
       return {b, f};
     }
-    function quantize(rhythms, hits){
-      const nb = cycleBeats(rhythms);
+    function quantize(rhythms, hits, tuplets){
+      const nb = cycleBeats(rhythms), tups = normTuplets(tuplets, nb);
       const perBeat = Array.from({length:nb}, () => []);
       (hits || []).forEach(h => { if(nb){ const s = split(h.p, nb); perBeat[s.b].push({h, f:s.f}); } });
       const beats = perBeat.map((list, b) => {
-        const base = baseSub(denAt(rhythms, b));
+        const base = baseAt(rhythms, b), t = tupletAt(tups, b);
         // 格子の判定にはゴーストを使わない（間を埋める音なので格子を歪めやすい）。配置は選ばれた格子に従う
-        const sub = chooseGrid(list.filter(x => !INST[x.h.inst].ghost).map(x => x.f), base);
+        const sub = t ? tupletSub(t) : chooseGrid(list.filter(x => !INST[x.h.inst].ghost).map(x => x.f), base, baseSub(denAt(rhythms, b)));
         const slots = Array.from({length:sub}, () => new Map());
         list.forEach(({h, f}) => {
           const k = f * sub; let idx = Math.round(k); const dev = k - idx;
@@ -1275,9 +1324,9 @@
           const prev = slots[idx].get(h.inst);
           slots[idx].set(h.inst, {n:(prev?prev.n:0)+1, dev: prev && Math.abs(prev.dev) > Math.abs(dev) ? prev.dev : dev});
         });
-        return {sub, base, slots};
+        return {sub, base, slots, tup: t ? tups.indexOf(t) : -1};
       });
-      return {beats};
+      return {beats, tuplets: tups};
     }
     // 打点がいまの格子でどのスロットに落ちるか
     function slotOf(grid, p){
@@ -1361,13 +1410,28 @@
       });
       return out.sort((a, b) => a.p - b.p);
     }
+    // 連符の区間の引っ越し。区間の最初と最後の拍がどちらも移れて、間の拍数が変わらないときだけ残す
+    function remapTuplets(oldRhythms, newRhythms, tuplets, barMap){
+      const newStart = barStarts(newRhythms), out = [];
+      const move = b => {
+        const loc = locate(oldRhythms, b), to = barMap[loc.bar];
+        return (to == null || to < 0 || !newRhythms[to] || loc.beat >= newRhythms[to].num) ? null : newStart[to] + loc.beat;
+      };
+      (tuplets || []).forEach(t => {
+        const a = move(t.at), z = move(t.at + t.beats - 1);
+        if(a != null && z != null && z - a === t.beats - 1) out.push({at:a, beats:t.beats, n:t.n});
+      });
+      return normTuplets(out, cycleBeats(newRhythms));
+    }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
 
     return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
             quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
             SPAN_MAX, REPEAT_MAX, normSpan, normRepeat, autoSpan, repeatRhythms, passBeats, partRhythms, partBeats,
             makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto,
-            SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos};
+            SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
+            baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
+            respanTuplets, remapTuplets};
   })();
 
   const Domain = (() => {
@@ -1845,6 +1909,8 @@
           g.drums.forEach(pt => {
             L.push("      - span: " + pt.span);
             if(pt.repeat > 1) L.push("        repeat: " + pt.repeat);
+            // 連符の区間 [開始拍, 拍数, 分割数]。区間の無いパートは書かない
+            if(pt.tuplets) L.push("        tuplets: [" + pt.tuplets.map(t => "[" + t.join(", ") + "]").join(", ") + "]");
             if(pt.hits){
               L.push("        hits:");
               Object.keys(pt.hits).forEach(inst => L.push("          " + inst + ": [" + pt.hits[inst].join(", ") + "]"));
@@ -2480,9 +2546,10 @@
       const before = g.pattern.rhythms.map(r => ({num:r.num, den:r.den}));
       mutate();
       (g.drums || []).forEach(pt => {
-        if(!pt.hits.length) return;
-        pt.hits = DrumDomain.remap(DrumDomain.repeatRhythms(before, pt.span), DrumDomain.partRhythms(g, pt), pt.hits,
-          DrumDomain.expandMap(barMap(before.length), before.length, g.pattern.rhythms.length, pt.span));
+        const from = DrumDomain.repeatRhythms(before, pt.span), to = DrumDomain.partRhythms(g, pt);
+        const map = DrumDomain.expandMap(barMap(before.length), before.length, g.pattern.rhythms.length, pt.span);
+        if(pt.hits.length) pt.hits = DrumDomain.remap(from, to, pt.hits, map);
+        if((pt.tuplets || []).length) pt.tuplets = DrumDomain.remapTuplets(from, to, pt.tuplets, map);
       });
     }
     return {
@@ -2604,15 +2671,16 @@
     const cache = new Map();   // "gid:pi" → {hits, sig, grid, play}
     const find = gid => Store.findGroup(gid);
     const partOf = (g, pi) => g ? DrumDomain.partsOf(g)[pi] || null : null;
-    const sigOf = (g, pt) => pt.span + ":" + g.pattern.rhythms.map(r => r.num + "/" + r.den).join(",") + "~" + DrumDomain.swingKey(g.swing);
+    // 格子はメトロノームの連符（tuplet）にも依る（基本分割）
+    const sigOf = (g, pt) => pt.span + ":" + g.pattern.rhythms.map(r => r.num + "/" + r.den + "x" + (r.tuplet || 1)).join(",") + "~" + DrumDomain.swingKey(g.swing);
     function entry(g, pi){
       const pt = partOf(g, pi);
       if(!pt) return {grid:{beats:[]}, play:[]};
       const key = g.id + ":" + pi, sig = sigOf(g, pt);
       let c = cache.get(key);
-      if(!c || c.hits !== pt.hits || c.sig !== sig){
-        const rs = DrumDomain.partRhythms(g, pt), grid = DrumDomain.quantize(rs, pt.hits);
-        c = {hits: pt.hits, sig, grid, play: DrumDomain.playSlots(grid, rs, g.swing)};
+      if(!c || c.hits !== pt.hits || c.tuplets !== pt.tuplets || c.sig !== sig){
+        const rs = DrumDomain.partRhythms(g, pt), grid = DrumDomain.quantize(rs, pt.hits, pt.tuplets);
+        c = {hits: pt.hits, tuplets: pt.tuplets, sig, grid, play: DrumDomain.playSlots(grid, rs, g.swing)};
         cache.set(key, c);
       }
       return c;
@@ -2666,13 +2734,25 @@
         const loc = DrumDomain.locatePass(g, rep, cb);
         return entry(g, loc.pi).play[loc.p] || [];
       },
+      /* opts.tuplet … 同時に連符の区間 {at, beats, n} を置く（重なる区間は外す）。
+         opts.untuplet … 同時に拍 b を含む区間を外す（ステップ入力で歩幅を連符／ストレートにして置いたとき） */
       add(gid, pi, p, inst, opts){
         edit(gid, pi, (hs, g, pt) => {
           const nb = DrumDomain.partBeats(g, pt); if(!nb) return null;
           const q = Math.round((((p % nb) + nb) % nb) * 1000) / 1000;
           if(q >= nb) return null;
+          if(opts && opts.tuplet) pt.tuplets = DrumDomain.withTuplet(pt.tuplets, opts.tuplet, nb);
+          else if(opts && opts.untuplet != null) pt.tuplets = DrumDomain.withoutTuplet(pt.tuplets, opts.untuplet);
           hs.push({p:q, inst}); return hs;
         }, opts);
+      },
+      // ---- 連符の区間 ----
+      tuplets(gid, pi){ const pt = partOf(find(gid), pi); return pt ? pt.tuplets || [] : []; },
+      tupletAt(gid, pi, b){ return DrumDomain.tupletAt(api.tuplets(gid, pi), b); },
+      // 拍 b を含む区間を外す（打点はそのまま。格子の推定に戻る）
+      removeTuplet(gid, pi, b){
+        if(!api.tupletAt(gid, pi, b)) return;
+        change(gid, g => { const pt = g.drums[pi]; if(pt) pt.tuplets = DrumDomain.withoutTuplet(pt.tuplets, b); }, {render:true});
       },
       // 選択した音を1発だけ消す。同じ場所に重なっていれば1発ずつ減る。消し切ったら false
       deleteAt(gid, pi, sel){
@@ -2707,11 +2787,13 @@
         let n = 0; api.grid(gid, pi).beats.forEach(bt => bt.slots.forEach(c => c.forEach(h => { if(DrumDomain.isUncertain(h)) n++; })));
         return n;
       },
-      clear(gid, pi){ edit(gid, pi, () => []); },
+      clear(gid, pi){ edit(gid, pi, (hs, g, pt) => { pt.tuplets = []; return []; }); },
       // ---- 範囲（拍位置 a..b）：コピー / 貼り付け / 削除 ----
       copy(gid, pi, a, b){
         if(a == null || b == null || b <= a) return null;
-        return {items: api.hits(gid, pi).filter(h => inRange(h, a, b)).map(h => ({dp: h.p - a, inst: h.inst})), len: b - a};
+        // 範囲に丸ごと入る連符の区間も持っていく（貼り付けは拍の頭に揃うときだけ）
+        const tups = api.tuplets(gid, pi).filter(t => t.at >= a - 1e-6 && t.at + t.beats <= b + 1e-6).map(t => ({dat: t.at - a, beats: t.beats, n: t.n}));
+        return {items: api.hits(gid, pi).filter(h => inRange(h, a, b)).map(h => ({dp: h.p - a, inst: h.inst})), tups, len: b - a};
       },
       // 貼り付けて、続けて貼れるよう次の位置（パート末で止まる）を返す
       paste(gid, pi, p, clip){
@@ -2719,13 +2801,20 @@
         edit(gid, pi, (hs, g, pt) => {
           const nb = DrumDomain.partBeats(g, pt);
           clip.items.forEach(it => { const q = p + it.dp; if(q < nb - 1e-6) hs.push({p: Math.round(q * 1000) / 1000, inst: it.inst}); });
+          (clip.tups || []).forEach(t => {
+            const at = p + t.dat, r = Math.round(at);
+            if(Math.abs(at - r) < 1e-3 && r + t.beats <= nb) pt.tuplets = DrumDomain.withTuplet(pt.tuplets, {at:r, beats:t.beats, n:t.n}, nb);
+          });
           return hs;
         });
         return Math.min(api.beats(gid, pi), p + clip.len);
       },
       deleteRange(gid, pi, a, b){
         if(a == null || b == null || b <= a) return;
-        edit(gid, pi, hs => hs.filter(h => !inRange(h, a, b)));
+        edit(gid, pi, (hs, g, pt) => {
+          pt.tuplets = (pt.tuplets || []).filter(t => !(t.at >= a - 1e-6 && t.at + t.beats <= b + 1e-6));
+          return hs.filter(h => !inRange(h, a, b));
+        });
       },
       // ---- パート ----
       // パートの長さ（拍子の並びの何回ぶんか）を変える。長くすると今のパターンを複製して敷き詰める
@@ -2735,6 +2824,7 @@
         change(gid, g => {
           const q = g.drums[pi];
           q.hits = DrumDomain.respan(q.hits, DrumDomain.passBeats(g), q.span, to);
+          q.tuplets = DrumDomain.respanTuplets(q.tuplets, DrumDomain.passBeats(g), q.span, to);
           q.span = to;
         }, {render:true});
       },
@@ -5173,7 +5263,7 @@
       open:false, gid:null, part:0,             // 編集中のグループ／パート（何番目か）
       occ:null,                                 // 譜面の上で編集中の出現（同じパートが何度か音符で書かれるとき）
       cursor:0, sel:null,                       // シーク位置（拍）／選択中の音 {b, k, inst}
-      stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）
+      stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）、"2:3"＝2拍3連（拍数:分割数）
       rangeMode:false, rin:null, rout:null, clip:null,
       rec:false, recCommitted:false,            // 重ね録り中／このレックぶんの履歴を積んだか
       click:true,
@@ -5370,13 +5460,22 @@
               if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="${C.dsub}" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
               g += rects;
             });
-            // 基本の格子と違う割り方（3連など）を選んだ拍には連符の括弧と数字
-            if(bt.sub !== bt.base && first != null){
+            // 基本の格子と違う割り方（3連など）を選んだ拍には連符の括弧と数字（連符の区間の拍は区間ごとに描く）
+            if(bt.sub !== bt.base && first != null && !(bt.tup >= 0)){
               const yy = stemTop - 6, x1 = first + 1, x2 = Math.max(last + 8, first + sw*0.8);
               g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="${C.dsub}" stroke-width="1"/>`;
               g += `<rect x="${(x1+x2)/2-6}" y="${yy-6}" width="12" height="11" fill="${C.dpanel}"/>`;
               g += `<text x="${(x1+x2)/2}" y="${yy+3}" fill="${C.dsub}" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${bt.sub}</text>`;
             }
+          });
+          // 連符の区間：区間の頭から終わりまでの括弧と分割数（打点が無くても描いて、指定があることを見せる）
+          (sp.grid.tuplets || []).forEach(t => {
+            if(t.at >= sp.nb) return;
+            const yy = stemTop - 6, x1 = xAt(sp, t.at) + 1, x2 = xAt(sp, Math.min(sp.nb - 1e-6, t.at + t.beats * (t.n - 1) / t.n)) + 8, cx = (x1 + x2) / 2;
+            const label = t.beats > 1 ? t.n + ":" + t.beats : String(t.n);
+            g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="${C.dtext}" stroke-width="1"/>`;
+            g += `<rect x="${cx-label.length*3.5-2}" y="${yy-6}" width="${label.length*7+4}" height="11" fill="${C.dpanel}"/>`;
+            g += `<text x="${cx}" y="${yy+3}" fill="${C.dtext}" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${label}</text>`;
           });
         });
         g += `<line x1="${W-10}" y1="${TOP}" x2="${W-10}" y2="${TOP+4*L}" stroke="${C.dbar}" stroke-width="2"/></svg>`;
@@ -5606,9 +5705,23 @@
     })();
 
     /* ---------- 入力：パッド・ステップ・重ね録り ---------- */
-    function stepDiv(b){
-      const den = DrumDomain.denAt(partRs(), b);
-      return ui.stepSize === 0 ? DrumDomain.baseSub(den) : ui.stepSize;
+    // 複数拍の連符の歩幅（"拍数:分割数"）。1拍に収まる連符は 2〜9 の数値の歩幅で置く
+    const MULTI_STEPS = [[2, 3], [4, 3], [2, 5], [4, 5], [4, 7]];
+    const multiStep = s => typeof s === "string" ? s.split(":").map(Number) : null;
+    /* 位置 x の歩幅の格子 {origin, len}：origin から len 拍ごとの点を歩く。
+       カーソルが連符の区間の中にあれば、区間の頭を起点に数える（2拍3連なら 0, 2/3, 4/3 拍目…） */
+    function stepGrid(x){
+      const nb = nbOf(), b = Math.max(0, Math.min(nb - 1, Math.floor(x + 1e-6)));
+      const tup = ui.gid ? DrumService.tupletAt(ui.gid, ui.part, b) : null, m = multiStep(ui.stepSize);
+      if(m) return tup && tup.beats === m[0] && tup.n === m[1] ? {origin: tup.at, len: m[0] / m[1]} : {origin: b, len: m[0] / m[1]};
+      if(ui.stepSize === 0 && tup) return {origin: tup.at, len: tup.beats / tup.n};
+      return {origin: b, len: 1 / (ui.stepSize === 0 ? DrumDomain.baseAt(partRs(), b) : ui.stepSize)};
+    }
+    // 打点の位置は小数3桁に丸めるので、格子の何番目かは少し余裕を持って数える
+    const STEP_TOL = 0.01;
+    function stepBefore(x){
+      const gd = stepGrid(Math.max(0, x - 1e-3)), k = Math.ceil((x - gd.origin) / gd.len - STEP_TOL) - 1;
+      return Math.max(0, gd.origin + Math.max(0, k) * gd.len);
     }
     /* ステップ入力のカーソルを 1 歩進める／戻す。歩幅の格子で「いまの位置より先（手前）の最初の点」へ動くので、
        譜面をタップして16分の位置に置いたカーソルからでも 8分刻みで進める。拍をまたぐと隣の拍の歩幅で数える。
@@ -5617,28 +5730,39 @@
       const g = group(); if(!g) return;
       const nb = nbOf(), x = ui.cursor, eps = 1e-6;
       if(dir > 0){
-        const b = Math.floor(x + eps);
         let next = nb;
-        if(b < nb){ const d = stepDiv(b), k = Math.floor((x - b) * d + eps) + 1; next = k >= d ? b + 1 : b + k / d; }
+        if(x < nb - eps){ const gd = stepGrid(x); next = gd.origin + (Math.floor((x - gd.origin) / gd.len + STEP_TOL) + 1) * gd.len; }
         if(next >= nb - eps && ui.part + 1 < DrumDomain.partsOf(g).length){ select(g.id, ui.part + 1); Score.reveal(g.id, ui.part); return; }
         ui.cursor = Math.min(nb, next);
       }else{
         if(x <= eps){
           if(ui.part > 0){
             select(g.id, ui.part - 1);
-            const last = nbOf() - 1;
-            ui.cursor = last + (stepDiv(last) - 1) / stepDiv(last);
+            ui.cursor = stepBefore(nbOf());
             Score.reveal(g.id, ui.part);
             render();
           }
           return;
         }
-        let b = Math.floor(x + eps); if(x - b < eps) b -= 1;
-        b = Math.min(b, nb - 1);
-        const d = stepDiv(b), k = Math.ceil((x - b) * d - eps) - 1;
-        ui.cursor = b + Math.max(0, k) / d;
+        ui.cursor = stepBefore(Math.min(x, nb));
       }
       render();
+    }
+    /* ステップ入力で置くときの連符の区間の扱い（DrumService.add の opts）。
+       - 複数拍の歩幅（2拍3連など）：拍の頭で置いたら、そこから区間を作る（同じ区間の中なら何もしない）
+       - 1拍に収まる連符の歩幅（基本分割で割れない 3・5 など）：その拍を n 等分の区間にする
+       - 基本分割で割れる歩幅（8分・16分など）：その拍を含む、格子の合わない区間を外す */
+    function stepTuplet(p){
+      const b = Math.floor(p + 1e-6), nb = nbOf(), cur = DrumService.tupletAt(ui.gid, ui.part, b), m = multiStep(ui.stepSize);
+      if(m){
+        if(cur && cur.beats === m[0] && cur.n === m[1]) return null;
+        return Math.abs(p - b) < 1e-3 && b + m[0] <= nb ? {tuplet: {at: b, beats: m[0], n: m[1]}} : null;
+      }
+      const d = ui.stepSize === 0 ? 0 : ui.stepSize;
+      if(d < 2) return null;
+      if(DrumDomain.baseAt(partRs(), b) % d === 0) return cur && DrumDomain.tupletSub(cur) % d !== 0 ? {untuplet: b} : null;
+      if(cur && DrumDomain.tupletSub(cur) % d === 0) return null;
+      return {tuplet: {at: b, beats: 1, n: d}};
     }
     /* ステップ入力：カーソルの位置にそのまま置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音）。
        パートの末尾にいるときは、次のパートがあればその頭へ移ってから置く */
@@ -5652,7 +5776,7 @@
       const p = ui.cursor;
       SoundGateway.drum(inst);
       stepPlaced = true;
-      DrumService.add(ui.gid, ui.part, p, inst);
+      DrumService.add(ui.gid, ui.part, p, inst, stepTuplet(p) || undefined);
     }
     function stepRelease(){ if(stepPlaced){ stepPlaced = false; stepMove(+1); } }
     let lastTap = null;
@@ -5903,19 +6027,24 @@
       $("drHint").style.display = (pt && !pt.hits.length && !ui.sel && !ui.rangeMode) ? "block" : "none";
       // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
       if(g){
-        const b = Math.min(nbOf() - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseSub(den);
+        const b = Math.min(nbOf() - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
         const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
         const sel = $("drStepSize"), key = den + ":" + base;
         if(sel.dataset.key !== key){
           sel.dataset.key = key;
           sel.innerHTML = '<option value="0">' + divName(base) + '</option><option value="1">拍</option>' +
-            [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("");
+            [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("") +
+            MULTI_STEPS.map(([m, n]) => '<option value="' + m + ":" + n + '">' + m + "拍" + n + "連</option>").join("");
         }
         if(ui.stepSize === base) ui.stepSize = 0;
         sel.value = String(ui.stepSize);
         if(!sel.selectedOptions.length){ ui.stepSize = 0; sel.value = "0"; }
       }
       $("drRange").disabled = running;
+      // カーソルが連符の区間の中にあるときだけ「◯拍◯連を外す」
+      const tup = !running && ui.gid && ui.cursor < nbOf() ? DrumService.tupletAt(ui.gid, ui.part, Math.floor(ui.cursor + 1e-6)) : null;
+      $("drTupOff").hidden = !tup;
+      if(tup) $("drTupOff").textContent = (tup.beats > 1 ? tup.beats + "拍" : "") + tup.n + "連を外す";
       $("drPaste").hidden = !ui.clip;
       $("drPaste").disabled = running;
       if(ui.clip) $("drPaste").textContent = "貼り付け " + ui.clip.items.length + "音";
@@ -6063,7 +6192,7 @@
         controls();
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); ui.stepMode = !ui.stepMode; controls(); });
-      $("drStepSize").addEventListener("change", () => { ui.stepSize = Number($("drStepSize").value); controls(); });
+      $("drStepSize").addEventListener("change", () => { const v = $("drStepSize").value; ui.stepSize = v.indexOf(":") >= 0 ? v : Number(v); controls(); });
       // パート
       const resetEdit = () => { ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; };
       $("drSpan").addEventListener("change", () => { if(ui.gid){ resetEdit(); DrumService.setSpan(ui.gid, ui.part, Number($("drSpan").value)); } });
@@ -6085,6 +6214,7 @@
       on("drUndo", () => HistoryService.undo());
       on("drRedo", () => HistoryService.redo());
       on("drAutofix", () => { if(ui.gid) DrumService.autoFix(ui.gid, ui.part); });
+      on("drTupOff", () => { if(ui.gid) DrumService.removeTuplet(ui.gid, ui.part, Math.floor(ui.cursor + 1e-6)); });
       on("drClear", () => { if(ui.gid && DrumService.hits(ui.gid, ui.part).length){ ui.sel = null; DrumService.clear(ui.gid, ui.part); } });
       on("drClick", () => { ui.click = !ui.click; SoundGateway.setClickOn(ui.click); controls(); });
       // 選択した音の操作

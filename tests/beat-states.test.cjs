@@ -757,3 +757,87 @@ test('swung playback delays the off-beats and taps are stored back on the straig
   run('HistoryService.undo();');
   assert.equal(run('Store.findGroup(group.id).swing'), null);
 });
+
+/* ---------- ドラムの連符 ---------- */
+
+test('a meter tuplet becomes the drum base grid and straight 16ths are still detected', () => {
+  const run = load(['DrumDomain']);
+  run(`var rs=[{num:4,den:4,tuplet:3}];
+    var q = DrumDomain.quantize(rs, [
+      {p:0,inst:'hh_close'},{p:0.333,inst:'hh_close'},{p:0.667,inst:'hh_close'},   // 3連（基本）
+      {p:1.667,inst:'snare'},                                                      // 3連の3つ目だけ
+      {p:2,inst:'kick'},{p:2.25,inst:'kick'},{p:2.5,inst:'kick'},{p:2.75,inst:'kick'}]);   // 16分`);
+  assert.equal(run('JSON.stringify(q.beats.map(b=>b.base))'), '[3,3,3,3]');
+  assert.equal(run('JSON.stringify(q.beats.map(b=>b.sub))'), '[3,3,4,3]');
+  assert.equal(run('DrumDomain.baseAt([{num:7,den:8}], 3)'), 2);
+});
+
+test('tuplet ranges fix the grid of their beats, including tuplets across several beats', () => {
+  const run = load(['DrumDomain']);
+  const r = v => Math.round(v * 1000) / 1000;
+  run(`var rs=[{num:4,den:4}];
+    var hits=[{p:0,inst:'snare'},{p:0.8,inst:'snare'},{p:1.6,inst:'snare'},{p:2.4,inst:'snare'},{p:3.2,inst:'snare'}];`);
+  // 区間なし：拍に1発ずつでは5連と判定できず16分に吸われる
+  assert.equal(run('JSON.stringify(DrumDomain.quantize(rs, hits).beats.map(b=>b.sub))'), '[4,4,4,4]');
+  // 4拍5連の区間：各拍5分割に固定され、書いた位置で鳴る
+  run('var q = DrumDomain.quantize(rs, hits, [[0, 4, 5]]), ps = DrumDomain.playSlots(q);');
+  assert.equal(run('JSON.stringify(q.beats.map(b=>[b.sub, b.tup]))'), '[[5,0],[5,0],[5,0],[5,0]]');
+  assert.deepEqual(run('JSON.stringify(ps.map((x, b)=>x.map(h=>Math.round((b+h.f)*1000)/1000)))'), '[[0,0.8],[1.6],[2.4],[3.2]]');
+  // 2拍3連は各拍3分割。区間の外は推定のまま
+  run('var q2 = DrumDomain.quantize(rs, [{p:0,inst:"kick"},{p:0.667,inst:"kick"},{p:1.333,inst:"kick"}], [{at:0, beats:2, n:3}]);');
+  assert.equal(run('JSON.stringify(q2.beats.map(b=>b.sub))'), '[3,3,4,4]');
+  // 区間の正規化：重なり・パートの外・範囲外の分割数は落とす
+  assert.equal(run('JSON.stringify(DrumDomain.normTuplets([[0,2,3],[1,1,5],[3,2,3],[2,1,12],[2,1,5]], 4))'), '[{"at":0,"beats":2,"n":3},{"at":2,"beats":1,"n":5}]');
+  // 連符の拍にはスウィングをかけない
+  run('var sw = DrumDomain.playSlots(DrumDomain.quantize(rs, [{p:0.5,inst:"hh_close"},{p:1.333,inst:"hh_close"}], [[1,1,3]]), rs, {unit:8, amount:67});');
+  assert.deepEqual([r(run('sw[0][0].f')), r(run('sw[1][0].f'))], [0.67, 0.333]);
+});
+
+test('tuplet ranges round-trip through YAML and follow part length and meter edits', () => {
+  const run = load(['Domain', 'Yaml', 'SequenceMapper', 'Store', 'HistoryService', 'PatternService']);
+  run(`var g = Domain.makeGroup({rhythms:[{num:4,den:4},{num:3,den:4}], drums:[{span:1, hits:{snare:[0.8]}, tuplets:[[0,4,5],[5,2,3]]}]});
+    var text = Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups:[g]})));
+    var back = SequenceMapper.toEntity(Yaml.parse(text)).sequence.groups[0];`);
+  assert.ok(run('text').includes('      - span: 1\n        tuplets: [[0, 4, 5], [5, 2, 3]]\n        hits:\n'));
+  assert.equal(run('JSON.stringify(back.drums[0].tuplets)'), '[{"at":0,"beats":4,"n":5},{"at":5,"beats":2,"n":3}]');
+  assert.equal(run('JSON.stringify(Domain.cloneGroup(g).drums[0].tuplets.length)'), '2');
+  // 区間の無いパートは tuplets を書かない
+  assert.equal(run(`Yaml.stringify(SequenceMapper.toDto(Domain.makeSequence({groups:[Domain.makeGroup({drums:[{span:1, hits:{kick:[0]}}]})]}))).includes('tuplets')`), false);
+  // 拍子の入れ替え：区間も小節ごと移る。3/4 → 2/4 で 2拍3連（5・6拍目＝3/4 の2・3拍目）ははみ出して消える
+  run(`const Transport={running:()=>false};
+    Store.apply({groups:[g]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    const tups = () => JSON.stringify(Store.findGroup(g.id).drums[0].tuplets.map(t=>[t.at,t.beats,t.n]));`);
+  run('PatternService.moveRhythm(g.id, 0, 1);');
+  assert.equal(run('tups()'), '[[1,2,3],[3,4,5]]');
+  run('PatternService.setMeter(g.id, 0, 2, 4);');
+  assert.equal(run('tups()'), '[[2,4,5]]');
+  run('HistoryService.undo(); HistoryService.undo();');
+  assert.equal(run('tups()'), '[[0,4,5],[5,2,3]]');
+  // パートを伸ばすと区間も敷き詰める
+  assert.equal(run('JSON.stringify(DrumDomain.respanTuplets([{at:0,beats:4,n:5},{at:5,beats:2,n:3}], 7, 1, 2).map(t=>t.at))'), '[0,5,7,12]');
+});
+
+test('step input with tuplet steps creates, keeps and removes tuplet ranges in one undo step', () => {
+  const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'DrumService']);
+  run(`const g=Domain.makeGroup({rhythms:[{num:4,den:4}], drums:[{span:1}]});
+    Store.apply({groups:[g]});
+    HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
+    const tups = () => JSON.stringify(DrumService.tuplets(g.id, 0).map(t=>[t.at,t.beats,t.n]));`);
+  run(`DrumService.add(g.id, 0, 0, 'snare', {tuplet:{at:0, beats:2, n:3}});`);
+  assert.equal(run('tups()'), '[[0,2,3]]');
+  assert.equal(run('JSON.stringify(DrumService.grid(g.id, 0).beats.map(b=>b.sub))'), '[3,3,4,4]');
+  // 重なる区間を置くと古い区間は外れる。Undo は打点と区間をまとめて戻す
+  run(`DrumService.add(g.id, 0, 1, 'kick', {tuplet:{at:1, beats:1, n:5}});`);
+  assert.equal(run('tups()'), '[[1,1,5]]');
+  run('HistoryService.undo();');
+  assert.equal(run('tups()'), '[[0,2,3]]');
+  assert.equal(run('DrumService.hits(g.id, 0).length'), 1);
+  // 範囲のコピーは丸ごと入る区間も運ぶ
+  run('var clip = DrumService.copy(g.id, 0, 0, 2); DrumService.paste(g.id, 0, 2, clip);');
+  assert.equal(run('tups()'), '[[0,2,3],[2,2,3]]');
+  run('DrumService.removeTuplet(g.id, 0, 3);');
+  assert.equal(run('tups()'), '[[0,2,3]]');
+  run('DrumService.clear(g.id, 0);');
+  assert.equal(run('tups()'), '[]');
+});
