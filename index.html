@@ -566,7 +566,17 @@
   .dr-bar1,.dr-bar2,.dr-bar3{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
   .dr-bar2 button,.dr-bar2 select{height:24px;font-size:11px;flex:none}
   .dr-bar2 select{min-width:4.6em}
-  #drSwing.on{border-color:var(--signal);color:var(--dtext)}
+  #drSwingUnit.on{border-color:var(--signal);color:var(--dtext)}
+  /* スウィングの割合：パート行に収まる細いシークバー。値は右の数字で見せる */
+  .dr-swing{display:flex;align-items:center;gap:6px;flex:none}
+  .dr-swing input[type=range]{width:110px;height:24px;touch-action:none}
+  .dr-swing input[type=range]:disabled{opacity:.35;cursor:default}
+  .dr-swing input[type=range]::-webkit-slider-runnable-track{background:linear-gradient(to right,var(--signal) var(--p,68%),var(--dline2) var(--p,68%))}
+  .dr-swing input[type=range]::-moz-range-track{background:var(--dline2)}
+  .dr-swing input[type=range]::-webkit-slider-thumb{width:12px;height:16px;margin-top:-6.5px;border-color:var(--dpanel)}
+  .dr-swing input[type=range]::-moz-range-thumb{width:12px;height:16px;border-color:var(--dpanel)}
+  .dr-swing output{font-family:var(--mono);font-size:11px;color:var(--dtext);min-width:3.2em;white-space:nowrap}
+  .dr-swing output.off{color:var(--dmuted)}
   .dr-bar2 button{width:28px;padding:0}
   .dr-parts .dr-chip{padding:3px 9px;font-size:11px}
   /* パートの行は、チップを縮めずに行ごと横スクロールする（縦持ちでも B 以降が隠れないように） */
@@ -877,7 +887,12 @@
       <button id="drPartDup" type="button" title="このパートを複製（フィルの叩き台）" aria-label="パートを複製">⧉</button>
       <button id="drPartDel" type="button" title="このパートを削除" aria-label="パートを削除">✕</button>
       <span class="dr-partsum" id="drPartSum"></span>
-      <select id="drSwing" aria-label="スウィング" title="このグループのドラムをハネさせる（打点はストレートのまま、鳴らすときだけ裏を遅らせる）"></select>
+      <span class="dr-swing" title="このグループのドラムをハネさせる（打点はストレートのまま、鳴らすときだけ裏を遅らせる）">
+        <select id="drSwingUnit" aria-label="スウィングの音価"><option value="0">ストレート</option><option value="8">8分</option><option value="16">16分</option></select>
+        <input type="range" id="drSwingAmt" min="51" max="75" step="1" value="67" list="drSwingMarks" aria-label="スウィングの割合（%）">
+        <datalist id="drSwingMarks"><option value="67"></option></datalist>
+        <output id="drSwingVal" for="drSwingAmt">67%</output>
+      </span>
     </div>
     <div class="dr-stage" id="drStage">
       <div class="dr-score" id="drScore"></div>
@@ -2721,10 +2736,11 @@
         return g && pt && g.swing ? DrumDomain.swingPos(DrumDomain.partRhythms(g, pt), p, g.swing, true) : p;
       },
       // グループのスウィングを変える（null＝ストレート）。パートは実体化しない
-      setSwing(gid, v){
+      // opts.commit:false … シークバーを動かしている途中（1回のドラッグを1手の履歴にまとめる）
+      setSwing(gid, v, opts){
         const g = find(gid), to = DrumDomain.normSwing(v);
         if(!g || DrumDomain.swingKey(g.swing) === DrumDomain.swingKey(to)) return;
-        HistoryService.commit();
+        if(!opts || opts.commit !== false) HistoryService.commit();
         Store.apply(() => { g.swing = to; }, {drums:true, render:true});
       },
       // 再生用：くり返し rep 回目・その回の cb 拍目で鳴らす [{f, inst}]
@@ -5263,6 +5279,7 @@
       open:false, gid:null, part:0,             // 編集中のグループ／パート（何番目か）
       occ:null,                                 // 譜面の上で編集中の出現（同じパートが何度か音符で書かれるとき）
       cursor:0, sel:null,                       // シーク位置（拍）／選択中の音 {b, k, inst}
+      swingAmt: DrumDomain.SWING_DEFAULT,       // スウィングの割合（ストレートにしても覚えておく）
       stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）、"2:3"＝2拍3連（拍数:分割数）
       rangeMode:false, rin:null, rout:null, clip:null,
       rec:false, recCommitted:false,            // 重ね録り中／このレックぶんの履歴を積んだか
@@ -5928,21 +5945,31 @@
       if(!raf) raf = requestAnimationFrame(frame);
     }
 
-    /* スウィング：グループ単位。値は "unit:amount"（"" ＝ストレート）。読み込んだファイルの半端な割合も選択肢に足す */
-    const SWING_PRESETS = [55, 58, 62, 67, 71, 75];
+    /* スウィング：グループ単位。音価（ストレート／8分／16分）はプルダウン、割合（51〜75%）はシークバー。
+       ストレートの間も割合は覚えておき（ui.swingAmt）、音価を選び直したときにその割合で戻す */
     const swingLabel = sw => (sw.unit === 8 ? "8分" : "16分") + " " + sw.amount + "%" + (sw.unit === 8 && sw.amount === DrumDomain.SWING_DEFAULT ? " シャッフル" : "");
+    const amtText = a => a + "%" + (a === DrumDomain.SWING_DEFAULT ? " 3連" : a === DrumDomain.SWING_MAX ? " 付点" : "");
+    let swingDrag = false;   // シークバーを動かしている途中
+    function showSwingAmt(a, on){
+      const amt = $("drSwingAmt"), out = $("drSwingVal");
+      amt.value = String(a);
+      amt.style.setProperty("--p", ((a - Number(amt.min)) / (Number(amt.max) - Number(amt.min)) * 100) + "%");
+      out.textContent = amtText(a);
+      out.classList.toggle("off", !on);
+    }
     function swingControl(g){
-      const sel = $("drSwing"), cur = g.swing ? DrumDomain.swingKey(g.swing) : "";
-      const opts = [{v:"", t:"ストレート"}];
-      DrumDomain.SWING_UNITS.forEach(unit => {
-        const list = SWING_PRESETS.slice();
-        if(g.swing && g.swing.unit === unit && list.indexOf(g.swing.amount) < 0) list.push(g.swing.amount);
-        list.sort((a, b) => a - b).forEach(amount => opts.push({v: unit + ":" + amount, t: swingLabel({unit, amount})}));
-      });
-      const key = opts.map(o => o.v).join(",");
-      if(sel.dataset.key !== key){ sel.dataset.key = key; sel.innerHTML = opts.map(o => '<option value="' + o.v + '">' + o.t + "</option>").join(""); }
-      sel.value = cur;
-      sel.classList.toggle("on", !!g.swing);
+      if(g.swing) ui.swingAmt = g.swing.amount;
+      const unit = $("drSwingUnit"), amt = $("drSwingAmt");
+      unit.value = String(g.swing ? g.swing.unit : 0);
+      unit.classList.toggle("on", !!g.swing);
+      amt.disabled = !g.swing;
+      if(!swingDrag) showSwingAmt(ui.swingAmt, !!g.swing);
+    }
+    // シークバーは動かしている間も鳴りに反映する。履歴は1回のドラッグで1手
+    function applySwing(commit){
+      const u = Number($("drSwingUnit").value);
+      if(!ui.gid) return;
+      DrumService.setSwing(ui.gid, u ? {unit: u, amount: ui.swingAmt} : null, {commit});
     }
 
     /* ---------- 操作列・状態表示 ---------- */
@@ -6197,11 +6224,14 @@
       const resetEdit = () => { ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; };
       $("drSpan").addEventListener("change", () => { if(ui.gid){ resetEdit(); DrumService.setSpan(ui.gid, ui.part, Number($("drSpan").value)); } });
       $("drRepeat").addEventListener("change", () => { if(ui.gid) DrumService.setRepeat(ui.gid, ui.part, Number($("drRepeat").value)); });
-      $("drSwing").addEventListener("change", () => {
-        if(!ui.gid) return;
-        const m = $("drSwing").value.split(":");
-        DrumService.setSwing(ui.gid, m.length === 2 ? {unit: Number(m[0]), amount: Number(m[1])} : null);
+      $("drSwingUnit").addEventListener("change", () => applySwing(true));
+      $("drSwingAmt").addEventListener("input", () => {
+        ui.swingAmt = Number($("drSwingAmt").value);
+        showSwingAmt(ui.swingAmt, true);
+        applySwing(!swingDrag);
+        swingDrag = true;
       });
+      $("drSwingAmt").addEventListener("change", () => { swingDrag = false; if(ui.gid) swingControl(group()); });
       $("drParts").addEventListener("click", e => {
         const c = e.target.closest(".dr-chip"); if(!c || !ui.gid) return;
         if(c.id === "drPartAdd"){ if(Transport.running()) Transport.stop(false); const pi = DrumService.addPart(ui.gid); ui.part = -1; select(ui.gid, pi); Score.reveal(ui.gid, pi); return; }
