@@ -4232,7 +4232,7 @@
       document.addEventListener("click", e=>{
         if(!state().activeId || Transport.running() || Transport.armKind()) return;
         const protectedArea = e.composedPath().some(el => el instanceof Element &&
-          el.matches(".group, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));
+          el.matches(".group, .dr, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));   // .dr＝ドラム入力の画面
         if(!protectedArea) SequenceService.setActive(null);
       }, true);
       let typing = false;
