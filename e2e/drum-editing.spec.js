@@ -125,7 +125,7 @@ test.describe("連符の区間", () => {
     await app.loadFixture("05-swing-tuplets");
     await app.openDrums();
     await app.selectGroup("連符の区間");
-    await expect(page.locator("#drTupOff")).toHaveText("4拍5連を外す");
+    await expect(page.locator("#drTupOff")).toHaveText("4分5連を外す");
     await app.click("drTupOff");
     await expect(page.locator("#drTupOff")).toBeHidden();
     const drums = await drumsOf(app, "連符の区間");

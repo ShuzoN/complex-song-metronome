@@ -17,7 +17,7 @@ test.describe("ステップ入力", () => {
   });
 
   test("歩幅の候補は拍子の分母で決まり、よく使う順に横に並ぶ。16分の歩幅で細かく置ける", async ({app}) => {
-    expect(await app.stepSizeOptions()).toEqual(["4分", "8分", "16分", "32分", "8分3連", "8分5連", "4分3連", "4分5連", "4分7連", "16分5連", "16分6連", "16分7連", "2分3連", "32分9連"]);
+    expect(await app.stepSizeOptions()).toEqual(["4分", "8分", "16分", "32分", "8分3連", "8分5連", "8分6連", "8分7連", "8分9連", "4分3連", "4分5連", "4分6連", "4分7連", "4分9連", "16分5連", "16分6連", "16分7連", "16分9連", "2分3連", "2分5連", "32分9連"]);
     expect(await app.stepSize()).toBe("8分");
     await app.setStepSize("16分");
     for(const i of ["kick", "hh_close", "hh_close", "snare"]) await app.pad(i);
@@ -33,7 +33,7 @@ test.describe("ステップ入力", () => {
     expect(drums[0].hits.snare).toEqual([0, 0.333, 0.667]);
     await expect(app.page.locator("#drTupOff")).toBeHidden();       // カーソルは次の拍（区間の外）
     await app.click("drStepBack");
-    await expect(app.page.locator("#drTupOff")).toHaveText("3連を外す");
+    await expect(app.page.locator("#drTupOff")).toHaveText("8分3連を外す");
     await app.click("drStepBack"); await app.click("drStepBack");   // 拍の頭へ
     await app.setStepSize("8分");
     await app.pad("kick");
@@ -66,6 +66,20 @@ test.describe("ステップ入力", () => {
     expect(names.length).toBeGreaterThan(0);
     expect(names.filter(n => /^全|拍/.test(n))).toEqual([]);
     expect(names).not.toContain("全");
+  });
+
+  test("8分7連・4分5連のような連符は1つの区間（まとまり）として置かれ、括弧には数だけが出る", async ({app}) => {
+    await app.setStepSize("8分7連");
+    for(let i = 0; i < 7; i++) await app.pad("snare");
+    await app.setStepSize("4分5連");
+    for(let i = 0; i < 5; i++) await app.pad("kick");
+    const drums = await drumsOf(app, "A");
+    expect(drums[0].tuplets).toEqual([[0, 2, 7], [2, 4, 5]]);
+    expect(drums[0].hits.snare).toEqual([0, 0.286, 0.571, 0.857, 1.143, 1.429, 1.714]);
+    expect(drums[0].hits.kick).toEqual([2, 2.8, 3.6, 4.4, 5.2]);
+    await app.click("drStepBack");
+    await expect(app.page.locator("#drTupOff")).toHaveText("4分5連を外す");
+    expect(await app.page.locator("#drScore svg text").allTextContents()).toEqual(expect.arrayContaining(["7", "5"]));
   });
 
   test("4分の歩幅は1拍ずつ進む", async ({app}) => {
