@@ -542,10 +542,11 @@
     --ddrm:var(--sage); --ddrm-bg:rgba(169,176,162,.09); --ddrm-bd:rgba(169,176,162,.45); --ddrm-ink:#DDE2D6;
     --dkick-bg:rgba(245,244,239,.06); --dkick-bd:rgba(245,244,239,.42);
     --drec:var(--signal-lt); --dwarn:var(--brass-lt); --dplay:var(--signal-lt);
+    --dgo:var(--patina); --dgo-bg:rgba(63,141,130,.14); --drec-bg:rgba(224,87,74,.14);   /* 再生（緑青）／レック（赤） */
     --don:var(--on-night); --don-bg:rgba(245,244,239,.08);   /* 入のトグル・選択中（赤は再生・録音・位置だけに使う） */
     /* 譜面（SVG）用 */
     --dstaff:rgba(245,244,239,.3); --dsub:rgba(245,244,239,.78); --dbar:rgba(245,244,239,.55);
-    --dplay-bg:rgba(224,87,74,.10); --dcell-cur:rgba(245,244,239,.2); --dcur-bg:rgba(245,244,239,.05); --dsame-bg:rgba(245,244,239,.02); --dwarn-bg:rgba(201,165,92,.16);
+    --dcell-cur:rgba(245,244,239,.2); --dcur-bg:rgba(245,244,239,.05); --dsame-bg:rgba(245,244,239,.02); --dwarn-bg:rgba(201,165,92,.16);
     --dcell:rgba(245,244,239,.07); --druler:#121411;
     position:fixed;inset:0;z-index:9985;background:var(--dbg);color:var(--dtext);
     font-family:var(--body);font-size:13px;overflow:hidden;touch-action:none;overscroll-behavior:none;
@@ -620,6 +621,7 @@
   .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:0;border:1px solid var(--dline2);
     background:var(--dpanel);font-size:12px;color:var(--dmuted);position:relative;overflow:hidden;min-width:0;cursor:pointer}
   .dr-pad span{pointer-events:none;white-space:nowrap}
+  .dr-pad .short{display:none;line-height:1.25;text-align:center}
   .dr-pad.cym{background:var(--dcym-bg);border-color:var(--dcym-bd);color:var(--dcym-ink)}
   .dr-pad.drm{background:var(--ddrm-bg);border-color:var(--ddrm-bd);color:var(--ddrm-ink)}
   .dr-pad.kick{background:var(--dkick-bg);border-color:var(--dkick-bd);color:var(--dtext)}
@@ -634,7 +636,7 @@
   .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
   .dr-playrow{display:flex;gap:5px}
   .dr-mid .dr-playrow button{width:34px;height:34px;font-size:14px}
-  .dr-mid .prim{background:var(--patina);border-color:var(--patina);color:#FFF;font-weight:600}
+  .dr-mid .prim{background:var(--dgo);border-color:var(--dgo);color:#FFF;font-weight:600}
   .dr-steprow{display:none;gap:4px}
   .dr-mid .dr-steprow button{width:24px;font-size:13px}
   #drStepSize{display:none}
@@ -655,6 +657,8 @@
     .dr-steprow{gap:6px}
     .dr-side{grid-row:2}
     .dr-pad{font-size:11px}
+    .dr-pad.abbr .full{display:none}
+    .dr-pad .short{display:block}
     .dr-pad.big{font-size:12px}
     .dr-meter{display:none}
   }
@@ -1062,8 +1066,8 @@
       crash:    {name:"Crash",   kind:"cym", pos:-1, head:"x", label:null},
       effect:   {name:"Effect",  kind:"cym", pos:-1, head:"x", label:"Eff."},
       ride:     {name:"Ride",    kind:"cym", pos:0,  head:"x", label:"Ride"},
-      hh_close: {name:"HH close",kind:"cym", pos:0,  head:"x", label:null},
-      hh_open:  {name:"HH open", kind:"cym", pos:0,  head:"x", label:null, open:true},
+      hh_close: {name:"HH close",kind:"cym", pos:0,  head:"x", label:null, short:["HH","cl"]},   // short＝縦画面の狭いパッドでの2行表記
+      hh_open:  {name:"HH open", kind:"cym", pos:0,  head:"x", label:null, short:["HH","op"], open:true},
       tom_hi:   {name:"Hi",      kind:"drm", pos:1,  head:"o", label:null},
       tom_low:  {name:"Low",     kind:"drm", pos:2,  head:"o", label:null},
       snare:    {name:"Snare",   kind:"drm", pos:3,  head:"o", label:null},
@@ -5462,13 +5466,14 @@
         spans.forEach(sp => {
           const w = sp.nb / total * W;
           g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" fill="${sp.gid === ui.gid && sp.pi === ui.part ? C.dcell_cur : C.dcell}"/>`;
-          if(sp.head) g += `<text x="${x+3}" y="${H-7}" fill="${C.dmuted}" font-size="9">${String(sp.g.name).replace(/[&<>]/g, "")}</text>`;
           x += w;
         });
         const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
         const tw = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
         const tx = (scoreEl.scrollLeft / maxS) * (W - tw);
-        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${C.dplay_bg}" stroke="${C.dplay}" stroke-width="1.2"/></svg>`;
+        // 表示中の範囲の枠：ふだんは再生ボタンと同じ緑青、レック中は赤
+        const rec = ui.rec;
+        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${rec ? C.drec_bg : C.dgo_bg}" stroke="${rec ? C.drec : C.dgo}" stroke-width="1.2"/></svg>`;
         rulerEl.innerHTML = g;
       }
       const maxScroll = () => Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
@@ -5572,7 +5577,8 @@
             const d = DrumDomain.INST[inst], b = document.createElement("div");
             b.className = "dr-pad " + d.kind + (rowName === "bottom" ? " big" : "") + (d.ghost || inst === "rim" ? " soft" : "");
             b.dataset.inst = inst; b.setAttribute("role", "button"); b.setAttribute("aria-label", d.name);
-            b.innerHTML = "<span>" + d.name + "</span>";
+            if(d.short) b.classList.add("abbr");
+            b.innerHTML = "<span class=\"full\">" + d.name + "</span>" + (d.short ? "<span class=\"short\">" + d.short.join("<br>") + "</span>" : "");
             row.appendChild(b);
           });
           root.appendChild(row);
@@ -5929,9 +5935,9 @@
       on("drStop", stop);
       on("drSong", () => { if(Transport.running() || Transport.armKind()) stop(); else { RangePlay.stop(); DrumPlayback.clearLog(); Transport.start("all"); } });
       on("drRec", () => {
-        if(!Transport.running()){ ui.rec = true; ui.recCommitted = false; playGroup(); if(!Transport.running() && !Transport.armKind()) ui.rec = false; controls(); return; }
+        if(!Transport.running()){ ui.rec = true; ui.recCommitted = false; playGroup(); if(!Transport.running() && !Transport.armKind()) ui.rec = false; controls(); Ruler.render(); return; }
         ui.rec = !ui.rec; ui.recCommitted = false;
-        controls();
+        controls(); Ruler.render();
       });
       on("drStep", () => { if(Transport.running()) Transport.stop(false); ui.stepMode = !ui.stepMode; controls(); });
       $("drStepSize").addEventListener("change", () => { ui.stepSize = Number($("drStepSize").value); controls(); });
