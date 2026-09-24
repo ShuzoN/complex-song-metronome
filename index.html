@@ -1156,9 +1156,13 @@
     // 編集・表示に使うパートの並び。未作成のグループは既定のパート1つ（保存はしない）
     const partsOf = g => (g && Array.isArray(g.drums) && g.drums.length) ? g.drums : [defaultPart(g ? g.pattern.rhythms : null)];
     const totalPasses = parts => parts.reduce((n, pt) => n + pt.span * pt.repeat, 0);
-    // くり返し rep 回目・その回の cb 拍目 → {pi, p}（何番目のパートの、パート先頭からの拍位置）
+    /* パートが1つなら、グループの終わりまでそのパートをくり返す。
+       2つ以上なら並べたぶんだけ鳴らし、足りない小節は空き（どのパートでもない）にする */
+    const loops = parts => parts.length <= 1;
+    // くり返し rep 回目・その回の cb 拍目 → {pi, p}（何番目のパートの、パート先頭からの拍位置）。空きの小節は pi = -1
     function locatePass(g, rep, cb){
       const parts = partsOf(g), total = totalPasses(parts);
+      if(!loops(parts) && rep >= total) return {pi:-1, p:cb};
       let r = total ? rep % total : 0;
       for(let i = 0; i < parts.length; i++){
         const n = parts[i].span * parts[i].repeat;
@@ -1171,13 +1175,15 @@
          {pi, passStart, passes, mode, src}
          passStart … グループの何回目から、passes … 何回ぶん（最後が割り切れなければ span より短い）
          mode      … "notes"＝音符で書く／"simile"＝直前と同じパターンのくり返し（シミレ記号で書く）
-         src       … 音符で書いた元の出現の番号（simile のときの参照先。notes は自分）
-       直前と同じパートを丸ごとくり返すときだけ simile。B を挟んで A に戻ったときは A を音符で書き直す */
+                     ／"rest"＝パートが足りず何も鳴らない空きの小節（pi = -1）
+         src       … 音符で書いた元の出現の番号（simile のときの参照先。notes・rest は自分）
+       直前と同じパートを丸ごとくり返すときだけ simile。パートが1つならグループの終わりまでくり返し、
+       2つ以上なら並べたぶんを1回だけ置いて、足りない小節は rest にする */
     function occurrences(g){
       const parts = partsOf(g), out = [], reps = g.reps;
       if(!totalPasses(parts)) return out;
       let pass = 0;
-      while(pass < reps){
+      for(let round = 0; pass < reps && (round === 0 || loops(parts)); round++){
         for(let i = 0; i < parts.length && pass < reps; i++){
           const pt = parts[i];
           for(let r = 0; r < pt.repeat && pass < reps; r++){
@@ -1188,6 +1194,7 @@
           }
         }
       }
+      if(pass < reps) out.push({pi:-1, passStart:pass, passes:reps - pass, mode:"rest", src:out.length});
       return out;
     }
     // 並び1回ぶんの小節の移り先 map を、パート（span 回ぶん）の小節の移り先へ広げる
@@ -5812,6 +5819,7 @@
           sp.starts.forEach((b, i) => { if(i > 0){ const x = sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0); g += `<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+4*L}" stroke="${C.dbar}" stroke-width="1"/>`; } });
           for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="${C.dline2}"/>`;
           if(sp.mode === "simile"){ g += simile(sp); return; }
+          if(sp.mode === "rest"){ g += `<text x="${left}" y="11" fill="${C.dmuted}" font-size="11">空き</text>`; return; }
           // 範囲とシーク（編集中のグループにだけ）
           if(isCur){
             const tx = p => xAt(sp, p);          // 音符と同じ位置（カーソルの上に音が置かれる）
@@ -5976,7 +5984,7 @@
     /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
        範囲をなぞっている間は切り替えない。タップ（leave=true）なら範囲を閉じて移る＝コピーしたものを別のパートへ貼れる */
     function posAt(clientX, leave){
-      const h = Score.hitTest(clientX); if(!h) return null;
+      const h = Score.hitTest(clientX); if(!h || h.sp.mode === "rest") return null;   // 空きの小節には置けない
       // シミレの小節をタップしたら、音符で書いた元の出現へ移って編集する（同じパターンなので位置はそのまま）。
       // 範囲をなぞるのは音符の出現の上だけ
       const simile = h.sp.mode === "simile", occ = h.sp.src;
@@ -6359,7 +6367,8 @@
       ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:e.cb, rep:e.rep, gid:e.gid, pi:loc.pi};
       // 再生に合わせて編集対象のグループ・パート・出現も移る（シミレの間は音符で書いた元の出現）
       const oc = e.gid === DrumTarget.gid() ? Score.occAt(e.gid, e.rep) : null;
-      if(e.gid !== DrumTarget.gid() || loc.pi !== DrumTarget.part() || (oc && oc.src !== DrumTarget.occ())){
+      // 空きの小節（どのパートでもない）では編集対象を動かさない
+      if(loc.pi >= 0 && (e.gid !== DrumTarget.gid() || loc.pi !== DrumTarget.part() || (oc && oc.src !== DrumTarget.occ()))){
         DrumEditSession.followPlayhead(e.gid, loc.pi, oc ? oc.src : null); render();
       }
       else if(e.bar === 0 && e.beat === 0) controls();
@@ -6436,12 +6445,12 @@
         rp.value = String(pt.repeat);
         span.disabled = rp.disabled = $("drPartDup").disabled = running;
         $("drPartDel").disabled = running || parts.length <= 1;
-        // パートの合計とグループの長さ。足りなければパートを頭から回し、余れば後ろは鳴らない
-        const sum = DrumDomain.totalPasses(parts) * n, total = g.reps * n, sumEl = $("drPartSum");
+        // パートの合計とグループの長さ。パート1つなら終わりまでくり返し、2つ以上で足りなければ残りは空き。余れば後ろは鳴らない
+        const sum = DrumDomain.totalPasses(parts) * n, total = g.reps * n, sumEl = $("drPartSum"), one = parts.length <= 1;
         sumEl.textContent = "計 " + sum + " / " + total + "小節";
-        sumEl.classList.toggle("warn", total % sum !== 0 && sum < total || sum > total);
-        sumEl.title = sum === total ? "グループの長さぴったり" : sum < total ? "グループの終わりまで、パートを頭からくり返します"
-          : "グループの長さを超えたぶんは鳴りません";
+        sumEl.classList.toggle("warn", one ? total % sum !== 0 && sum < total || sum > total : sum !== total);
+        sumEl.title = sum === total ? "グループの長さぴったり" : sum > total ? "グループの長さを超えたぶんは鳴りません"
+          : one ? "グループの終わりまで、パートをくり返します" : "足りない小節は空き（何も鳴らない）になります";
         swingControl(g);
       }
       // 状態
