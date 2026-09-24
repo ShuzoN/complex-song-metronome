@@ -1467,6 +1467,42 @@
       });
       return normTuplets(out, cycleBeats(newRhythms));
     }
+    /* ステップ入力の歩幅の規則。「歩幅（size）で歩くと、どこに点があるか」「その歩幅で置くと連符の
+       区間がどう変わるか」という、パートの拍子・連符の区間・歩幅だけから決まる純粋な計算。
+       size … 0=基本格子、1=拍、2〜9=拍の分割数、"2:3" のような文字列＝2拍3連（拍数:分割数） */
+    const MULTI_STEPS = [[2, 3], [4, 3], [2, 5], [4, 5], [4, 7]];   // 複数拍の連符の歩幅（拍数・分割数）
+    const multiStep = s => typeof s === "string" ? s.split(":").map(Number) : null;
+    const STEP_TOL = 0.01;   // 打点の位置は小数3桁に丸めるので、格子の何番目かは少し余裕を持って数える
+    /* 位置 x の歩幅の格子 {origin, len}：origin から len 拍ごとの点を歩く。
+       カーソルが連符の区間の中にあれば、区間の頭を起点に数える（2拍3連なら 0, 2/3, 4/3 拍目…） */
+    function stepGrid(rhythms, tuplets, size, x){
+      const nb = cycleBeats(rhythms), b = Math.max(0, Math.min(nb - 1, Math.floor(x + 1e-6)));
+      const tup = tupletAt(tuplets, b), m = multiStep(size);
+      if(m) return tup && tup.beats === m[0] && tup.n === m[1] ? {origin: tup.at, len: m[0] / m[1]} : {origin: b, len: m[0] / m[1]};
+      if(size === 0 && tup) return {origin: tup.at, len: tup.beats / tup.n};
+      return {origin: b, len: 1 / (size === 0 ? baseAt(rhythms, b) : size)};
+    }
+    // 位置 x より手前（歩幅の格子で自分より前の最初の点）
+    function stepBefore(rhythms, tuplets, size, x){
+      const gd = stepGrid(rhythms, tuplets, size, Math.max(0, x - 1e-3)), k = Math.ceil((x - gd.origin) / gd.len - STEP_TOL) - 1;
+      return Math.max(0, gd.origin + Math.max(0, k) * gd.len);
+    }
+    /* ステップ入力で拍位置 p に置くときの、連符の区間の扱い（DrumService.add の opts）。
+       - 複数拍の歩幅（2拍3連など）：拍の頭で置いたら、そこから区間を作る（同じ区間の中なら何もしない）
+       - 1拍に収まる連符の歩幅（基本分割で割れない 3・5 など）：その拍を n 等分の区間にする
+       - 基本分割で割れる歩幅（8分・16分など）：その拍を含む、格子の合わない区間を外す */
+    function stepTuplet(rhythms, tuplets, size, p){
+      const b = Math.floor(p + 1e-6), nb = cycleBeats(rhythms), cur = tupletAt(tuplets, b), m = multiStep(size);
+      if(m){
+        if(cur && cur.beats === m[0] && cur.n === m[1]) return null;
+        return Math.abs(p - b) < 1e-3 && b + m[0] <= nb ? {tuplet: {at: b, beats: m[0], n: m[1]}} : null;
+      }
+      const d = size === 0 ? 0 : size;
+      if(d < 2) return null;
+      if(baseAt(rhythms, b) % d === 0) return cur && tupletSub(cur) % d !== 0 ? {untuplet: b} : null;
+      if(cur && tupletSub(cur) % d === 0) return null;
+      return {tuplet: {at: b, beats: 1, n: d}};
+    }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
 
     return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
@@ -1475,7 +1511,8 @@
             makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto,
             SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
             baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
-            respanTuplets, remapTuplets};
+            respanTuplets, remapTuplets,
+            MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet};
   })();
 
   const Domain = (() => {
@@ -2806,6 +2843,12 @@
           else if(opts && opts.untuplet != null) pt.tuplets = DrumDomain.withoutTuplet(pt.tuplets, opts.untuplet);
           hs.push({p:q, inst}); return hs;
         }, opts);
+      },
+      // ステップ入力で置く：画面は歩幅（意図）だけを渡し、連符の区間をどう扱うかは DrumDomain の規則で決める
+      stepAdd(gid, pi, p, inst, size){
+        const g = find(gid), pt = partOf(g, pi);
+        const opts = pt ? DrumDomain.stepTuplet(DrumDomain.partRhythms(g, pt), pt.tuplets, size, p) : null;
+        api.add(gid, pi, p, inst, opts || undefined);
       },
       // ---- 連符の区間 ----
       tuplets(gid, pi){ const pt = partOf(find(gid), pi); return pt ? pt.tuplets || [] : []; },
@@ -6096,25 +6139,9 @@
     })();
 
     /* ---------- 入力：パッド・ステップ・重ね録り ---------- */
-    // 複数拍の連符の歩幅（"拍数:分割数"）。1拍に収まる連符は 2〜9 の数値の歩幅で置く
-    const MULTI_STEPS = [[2, 3], [4, 3], [2, 5], [4, 5], [4, 7]];
-    const multiStep = s => typeof s === "string" ? s.split(":").map(Number) : null;
-    /* 位置 x の歩幅の格子 {origin, len}：origin から len 拍ごとの点を歩く。
-       カーソルが連符の区間の中にあれば、区間の頭を起点に数える（2拍3連なら 0, 2/3, 4/3 拍目…） */
-    function stepGrid(x){
-      const nb = nbOf(), b = Math.max(0, Math.min(nb - 1, Math.floor(x + 1e-6)));
-      const tup = DrumTarget.gid() ? DrumService.tupletAt(DrumTarget.gid(), DrumTarget.part(), b) : null, m = multiStep(DrumStepInput.size());
-      if(m) return tup && tup.beats === m[0] && tup.n === m[1] ? {origin: tup.at, len: m[0] / m[1]} : {origin: b, len: m[0] / m[1]};
-      const size = DrumStepInput.size();
-      if(size === 0 && tup) return {origin: tup.at, len: tup.beats / tup.n};
-      return {origin: b, len: 1 / (size === 0 ? DrumDomain.baseAt(partRs(), b) : size)};
-    }
-    // 打点の位置は小数3桁に丸めるので、格子の何番目かは少し余裕を持って数える
-    const STEP_TOL = 0.01;
-    function stepBefore(x){
-      const gd = stepGrid(Math.max(0, x - 1e-3)), k = Math.ceil((x - gd.origin) / gd.len - STEP_TOL) - 1;
-      return Math.max(0, gd.origin + Math.max(0, k) * gd.len);
-    }
+    // 歩幅の格子・連符の扱いの規則は DrumDomain（拍子・連符の区間・歩幅だけで決まる純粋な計算）
+    const stepGrid = x => DrumDomain.stepGrid(partRs(), DrumService.tuplets(DrumTarget.gid(), DrumTarget.part()), DrumStepInput.size(), x);
+    const stepBefore = x => DrumDomain.stepBefore(partRs(), DrumService.tuplets(DrumTarget.gid(), DrumTarget.part()), DrumStepInput.size(), x);
     /* ステップ入力のカーソルを 1 歩進める／戻す。歩幅の格子で「いまの位置より先（手前）の最初の点」へ動くので、
        譜面をタップして16分の位置に置いたカーソルからでも 8分刻みで進める。拍をまたぐと隣の拍の歩幅で数える。
        パートの端を越えたら、同じグループの隣のパートの頭（末尾の1歩手前）へ移る */
@@ -6123,7 +6150,7 @@
       const nb = nbOf(), x = DrumCursor.get(), eps = 1e-6;
       if(dir > 0){
         let next = nb;
-        if(x < nb - eps){ const gd = stepGrid(x); next = gd.origin + (Math.floor((x - gd.origin) / gd.len + STEP_TOL) + 1) * gd.len; }
+        if(x < nb - eps){ const gd = stepGrid(x); next = gd.origin + (Math.floor((x - gd.origin) / gd.len + DrumDomain.STEP_TOL) + 1) * gd.len; }
         if(next >= nb - eps && DrumTarget.part() + 1 < DrumDomain.partsOf(g).length){ select(g.id, DrumTarget.part() + 1); Score.reveal(g.id, DrumTarget.part()); return; }
         DrumCursor.set(Math.min(nb, next));
       }else{
@@ -6140,24 +6167,9 @@
       }
       render();
     }
-    /* ステップ入力で置くときの連符の区間の扱い（DrumService.add の opts）。
-       - 複数拍の歩幅（2拍3連など）：拍の頭で置いたら、そこから区間を作る（同じ区間の中なら何もしない）
-       - 1拍に収まる連符の歩幅（基本分割で割れない 3・5 など）：その拍を n 等分の区間にする
-       - 基本分割で割れる歩幅（8分・16分など）：その拍を含む、格子の合わない区間を外す */
-    function stepTuplet(p){
-      const b = Math.floor(p + 1e-6), nb = nbOf(), cur = DrumService.tupletAt(DrumTarget.gid(), DrumTarget.part(), b), m = multiStep(DrumStepInput.size());
-      if(m){
-        if(cur && cur.beats === m[0] && cur.n === m[1]) return null;
-        return Math.abs(p - b) < 1e-3 && b + m[0] <= nb ? {tuplet: {at: b, beats: m[0], n: m[1]}} : null;
-      }
-      const size = DrumStepInput.size(), d = size === 0 ? 0 : size;
-      if(d < 2) return null;
-      if(DrumDomain.baseAt(partRs(), b) % d === 0) return cur && DrumDomain.tupletSub(cur) % d !== 0 ? {untuplet: b} : null;
-      if(cur && DrumDomain.tupletSub(cur) % d === 0) return null;
-      return {tuplet: {at: b, beats: 1, n: d}};
-    }
     /* ステップ入力：カーソルの位置にそのまま置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音）。
-       パートの末尾にいるときは、次のパートがあればその頭へ移ってから置く */
+       パートの末尾にいるときは、次のパートがあればその頭へ移ってから置く。連符の区間の扱いは
+       DrumService.stepAdd（→ DrumDomain の規則）が決める */
     let stepPlaced = false;
     function stepTap(inst){
       const g = group(); if(!g) return;
@@ -6168,7 +6180,7 @@
       const p = DrumCursor.get();
       SoundGateway.drum(inst);
       stepPlaced = true;
-      DrumService.add(DrumTarget.gid(), DrumTarget.part(), p, inst, stepTuplet(p) || undefined);
+      DrumService.stepAdd(DrumTarget.gid(), DrumTarget.part(), p, inst, DrumStepInput.size());
     }
     function stepRelease(){ if(stepPlaced){ stepPlaced = false; stepMove(+1); } }
     // パッドが叩かれた。音はすぐ出し、重ね録り中なら「いま鳴っている周の何拍目か」に打点を積む
@@ -6433,7 +6445,7 @@
           sel.dataset.key = key;
           sel.innerHTML = '<option value="0">' + divName(base) + '</option><option value="1">拍</option>' +
             [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("") +
-            MULTI_STEPS.map(([m, n]) => '<option value="' + m + ":" + n + '">' + m + "拍" + n + "連</option>").join("");
+            DrumDomain.MULTI_STEPS.map(([m, n]) => '<option value="' + m + ":" + n + '">' + m + "拍" + n + "連</option>").join("");
         }
         if(DrumStepInput.size() === base) DrumStepInput.setSize(0);
         sel.value = String(DrumStepInput.size());
