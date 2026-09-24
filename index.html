@@ -5233,7 +5233,7 @@
       const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * sp.bw; };
       function render(){
         const BW = metrics(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
-        cache = {spans: lay.spans, BW, W};
+        cache = {spans: lay.spans, BW, W, bars: null};
         const running = playing(), stemTop = yOf(-4.6);
         let g = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="譜面">`;
         for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="${C.dstaff}" stroke-width="1"/>`;
@@ -5333,15 +5333,42 @@
         const p = Math.max(0, Math.min(sp.nb, b + (x - sp.xs[b]) / sp.bw));
         return {sp, p};
       }
-      // 出現の中の拍位置 → ステージ基準の x。follow なら再生位置が見えるようにスクロールする
+      // 小節の左端（小節線の x）を曲の頭から順に。末尾に譜面の終わり。再生中のページめくりに使う
+      function barLefts(){
+        if(cache.bars) return cache.bars;
+        const out = [];
+        cache.spans.forEach((sp, si) => sp.starts.forEach((b, i) => {
+          out.push(i > 0 ? sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0) : si > 0 ? sp.x0 - PW/2 - sp.gap + 4 : 0);
+        }));
+        out.push(cache.W - 8);
+        return cache.bars = out;
+      }
+      /* 再生中の譜面は流さずにページめくり。再生位置の小節の次の小節が画面に収まらなくなったら
+         （＝画面の最後の小節に入ったら）、その小節を左端にして一度に切り替える。常に1小節以上先が見える。
+         手でスクロールした直後（browse）はしばらくめくらない */
+      const BROWSE_MS = 3500, PAD = 8;
+      let browseUntil = 0, padL = null;
+      function flip(x){
+        if(performance.now() < browseUntil) return;
+        const bars = barLefts(); if(bars.length < 2) return;
+        if(padL == null) padL = parseFloat(getComputedStyle(scoreEl).paddingLeft) || 0;   // 譜面の x → スクロール位置のずれ
+        const off = padL, cw = scoreEl.clientWidth, sL = scoreEl.scrollLeft, v0 = sL - off, v1 = v0 + cw;
+        let i = 0; while(i < bars.length - 2 && bars[i+1] <= x) i++;
+        const a = bars[i], b = bars[i+1], c = bars[Math.min(i + 2, bars.length - 1)];
+        let want = null;
+        if(b - a > cw - 2 * PAD){                  // 1小節が画面より広い：その小節の中でめくる
+          if(x < v0 || x > v1 - cw * 0.1) want = x - cw * 0.1;
+        }else if(a < v0 || b > v1 || (c > v1 && a > v0 + PAD + 1)) want = a - PAD;
+        if(want == null) return;
+        want = Math.max(0, Math.min(scoreEl.scrollWidth - cw, Math.round(want + off)));
+        if(Math.abs(want - sL) > 1) scoreEl.scrollLeft = want;
+      }
+      // 出現の中の拍位置 → ステージ基準の x。follow なら再生位置が見えるようにページをめくる
       function place(sp, p, follow){
         const svg = scoreEl.firstElementChild;
         if(!sp || !svg) return null;
         const x = xAt(sp, p);
-        if(follow){
-          const want = Math.max(0, x - scoreEl.clientWidth * 0.35);
-          if(Math.abs(scoreEl.scrollLeft - want) > 2) scoreEl.scrollLeft = want;
-        }
+        if(follow) flip(x);
         const pr = stageEl.getBoundingClientRect(), r = svg.getBoundingClientRect();
         return {x: r.left - pr.left + x, top: r.top - pr.top + TOP - 12, height: 4*L + 24};
       }
@@ -5366,7 +5393,9 @@
         const a = sp.x0 - PW, b = sp.xs[sp.nb];
         if(a < scoreEl.scrollLeft || b > scoreEl.scrollLeft + scoreEl.clientWidth) scoreEl.scrollLeft = Math.max(0, a - 20);
       }
-      return {render, hitTest, headAt, headAtOcc, occAt, reveal, get spans(){ return cache.spans; }};
+      scoreEl.addEventListener("wheel", () => browse(), {passive:true});
+      function browse(){ browseUntil = performance.now() + BROWSE_MS; }
+      return {render, hitTest, headAt, headAtOcc, occAt, reveal, browse, get spans(){ return cache.spans; }};
     })();
 
     /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
@@ -5465,11 +5494,27 @@
           if(sp.head) g += `<text x="${x+3}" y="${H-7}" fill="${C.dmuted}" font-size="9">${String(sp.g.name).replace(/[&<>]/g, "")}</text>`;
           x += w;
         });
-        const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
-        const tw = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
-        const tx = (scoreEl.scrollLeft / maxS) * (W - tw);
-        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" fill="${C.dplay_bg}" stroke="${C.dplay}" stroke-width="1.2"/></svg>`;
+        const t = thumbBox(W);
+        g += `<rect x="${t.x}" y="1" width="${t.w}" height="${H-2}" fill="${C.dplay_bg}" stroke="${C.dplay}" stroke-width="1.2"/></svg>`;
         rulerEl.innerHTML = g;
+        thumbEl = rulerEl.querySelector("svg").lastElementChild; thumbW = W;
+      }
+      // 表示中の範囲（つまみ）の位置と幅。W はルーラーの幅
+      function thumbBox(W){
+        const w = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
+        return {x: (scoreEl.scrollLeft / maxScroll()) * (W - w), w};
+      }
+      /* スクロールではつまみだけ動かす（帯は描き直さない）。フレームに1回にまとめる */
+      let thumbEl = null, thumbW = 0, moving = false;
+      function moveThumb(){
+        if(moving) return;
+        moving = true;
+        requestAnimationFrame(() => {
+          moving = false;
+          if(!thumbEl || !thumbEl.isConnected) return;
+          const t = thumbBox(thumbW);
+          thumbEl.setAttribute("x", t.x); thumbEl.setAttribute("width", t.w);
+        });
       }
       const maxScroll = () => Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
       function thumb(){
@@ -5483,15 +5528,16 @@
       let drag = null;
       rulerEl.addEventListener("pointerdown", e => {
         e.preventDefault();
+        Score.browse();
         const t = thumb(), x = e.clientX - t.r.left;
         if(x < t.x || x > t.x + t.w) setByThumbX(x - t.w / 2);
         drag = {id:e.pointerId, x:e.clientX, at:thumb().x};
         try{ rulerEl.setPointerCapture(e.pointerId); }catch(_){}
       });
-      rulerEl.addEventListener("pointermove", e => { if(drag && e.pointerId === drag.id) setByThumbX(drag.at + (e.clientX - drag.x)); });
+      rulerEl.addEventListener("pointermove", e => { if(drag && e.pointerId === drag.id){ Score.browse(); setByThumbX(drag.at + (e.clientX - drag.x)); } });
       const up = () => { drag = null; };
       rulerEl.addEventListener("pointerup", up); rulerEl.addEventListener("pointercancel", up);
-      scoreEl.addEventListener("scroll", () => render(), {passive:true});
+      scoreEl.addEventListener("scroll", moveThumb, {passive:true});
       return {render};
     })();
 
