@@ -651,7 +651,7 @@
   .dr-mid.stepping .dr-steprow{display:flex}
   /* 歩幅のボタン列：パッドの上の1段。粗い→細かいの順に横に並べ、いまの歩幅だけ点灯させる。
      幅が足りなければ横にスクロールする（縦持ちでは「2拍／3連」を2行にして詰める） */
-  .dr-stepbar{grid-column:1 / -1;grid-row:1;display:flex;align-items:center;gap:8px;height:34px;min-width:0;transition:opacity .15s}
+  .dr-stepbar{grid-column:1 / -1;grid-row:1;display:flex;align-items:center;gap:8px;height:36px;min-width:0;transition:opacity .15s}
   .dr-stepbar.off{opacity:.4}
   .dr-steplbl{flex:none;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--dmuted);white-space:nowrap}
   .dr-steps{display:flex;gap:3px;flex:1 1 0;min-width:0;height:100%;overflow-x:auto;scrollbar-width:none;touch-action:pan-x}
@@ -659,12 +659,14 @@
   .dr .dr-steps button{flex:1 0 auto;min-width:40px;height:100%;padding:0 4px;gap:0;flex-direction:column;font-family:var(--body);
     font-size:11px;line-height:12px;letter-spacing:0;color:var(--dmuted)}
   .dr-steps button i{font-style:normal;font-size:9.5px;color:var(--dfaint)}
+  .dr-steps button svg{display:block;height:22px;width:auto;flex:none}
+  .dr-steps button small{font-family:var(--mono);font-size:8.5px;line-height:9px;color:var(--dfaint)}
+  .dr-steps button.on small{color:var(--dmuted)}
   .dr-steps button b{font-weight:inherit}
   .dr .dr-steps button.on{border-color:var(--don);color:var(--dtext);background:var(--don-bg);font-weight:600}
   .dr-steps button.on i{color:var(--dmuted)}
   @media (min-width:720px){
-    .dr-stepbar{height:30px}
-    .dr .dr-steps button{flex-direction:row}
+    .dr .dr-steps button:not(:has(svg)){flex-direction:row}
     .dr-steps button i{font-size:11px;color:inherit}
   }
   .dr-dot{width:9px;height:9px;border-radius:50%;background:var(--dfaint)}
@@ -697,7 +699,8 @@
     .dr-mid button,.dr-mid select{height:24px}
     .dr-mid .dr-playrow button{height:28px}
     .dr-pads{row-gap:4px}
-    .dr-stepbar{height:26px}
+    .dr-stepbar{height:32px}
+    .dr-steps button svg{height:19px}
   }
 
   /* 縦持ち：パッドを 2 列に積み、中央の操作列は横一列にする */
@@ -6428,6 +6431,26 @@
 
     /* ---------- 操作列・状態表示 ---------- */
     const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+    /* 歩幅のボタンの音符記号（SVG）。x＝音符の分母（2・4・8・16・32・64）、n＝連符の数（0なら単音）。
+       単音は旗付きの1音、連符は3つの音を連桁でつなぎ、上に括弧と n を置く（5連・7連なども代表の3音で描く） */
+    function noteSymbol(x, n){
+      const beams = Math.max(0, Math.log2(x) - 2), hollow = x <= 2;
+      const head = cx => '<ellipse cx="' + cx + '" cy="20" rx="3.1" ry="2.2" transform="rotate(-20 ' + cx + ' 20)"' +
+        (hollow ? ' fill="none" stroke="currentColor" stroke-width="1.1"' : ' fill="currentColor"') + "/>";
+      const stem = (cx, top) => '<line x1="' + (cx + 2.8) + '" y1="19.5" x2="' + (cx + 2.8) + '" y2="' + top + '" stroke="currentColor" stroke-width="1.1"/>';
+      if(!n){
+        const top = beams > 2 ? 2 : 4;
+        let g = head(5) + stem(5, top);
+        for(let k = 0; k < beams; k++) g += '<path d="M7.8 ' + (top + k * 2.9) + ' c0.3 2.2 4.4 2.6 3.3 6.2" fill="none" stroke="currentColor" stroke-width="1.2"/>';
+        return '<svg viewBox="0 0 14 24" width="14" height="24" aria-hidden="true">' + g + "</svg>";
+      }
+      let g = "";
+      [5, 13, 21].forEach(cx => { g += head(cx) + stem(cx, 8.5); });
+      for(let k = 0; k < beams; k++) g += '<rect x="7.3" y="' + (8 + k * 3.1) + '" width="17" height="1.9" fill="currentColor"/>';
+      g += '<path d="M3.5 6V3.6H10M18 3.6H24.5V6" fill="none" stroke="currentColor" stroke-width=".8"/>' +
+        '<text x="14" y="6.3" font-size="7.5" font-weight="700" text-anchor="middle" fill="currentColor" font-family="var(--mono)">' + n + "</text>";
+      return '<svg viewBox="0 0 28 24" width="28" height="24" aria-hidden="true">' + g + "</svg>";
+    }
     let stepSizes = {key: null, list: []};   // 歩幅のボタン列（controls が拍子の分母・基本分割ごとに作り直す）
     function controls(){
       const g = group(), running = Transport.running(), cur = Transport.cur();
@@ -6517,20 +6540,22 @@
         if(stepSizes.key !== key){
           const note = x => ({1:"全",2:"2分",4:"4分",8:"8分",16:"16分",32:"32分",64:"64分"})[x] || "";
           const pow2 = n => 2 ** Math.floor(Math.log2(n));   // n 連符の音符の長さを決める2の冪（3・5〜7連→2・4、9連→8）
-          const single = d => d === 1 ? {top: "", name: note(den) || "拍"}
-            : pow2(d) === d ? {top: "", name: note(den * d) || d + "分割"}
-            : {top: note(den * pow2(d)), name: d + "連"};
+          // x＝音符の分母（8分なら 8）、n＝連符の数（連符でなければ 0）。記号はこの2つから描く
+          const single = d => d === 1 ? {top: "", name: note(den) || "拍", x: den, n: 0}
+            : pow2(d) === d ? {top: "", name: note(den * d) || d + "分割", x: den * d, n: 0}
+            : {top: note(den * pow2(d)), name: d + "連", x: den * pow2(d), n: d};
           const order = [2, 4, 3, 5, 6, 7, 9, 1, 8];
           const list = (order.indexOf(base) < 0 ? [{v: 0, ...single(base)}] : [])
             .concat(order.map(d => ({v: d === base ? 0 : d, ...single(d)})))
             .filter((o, i, a) => a.findIndex(x => x.v === o.v) === i)
             .concat(DrumDomain.MULTI_STEPS.map(([m, n]) => {
               const nm = note(den * pow2(n) / m);
-              return {v: m + ":" + n, top: nm || m + "拍", name: n + "連"};
+              return {v: m + ":" + n, top: nm || m + "拍", name: n + "連", x: den * pow2(n) / m, n};
             }));
           stepSizes = {key, list};
           $("drStepSize").innerHTML = stepSizes.list.map((o, i) =>
-            '<button type="button" role="radio" data-i="' + i + '" data-name="' + o.top + o.name + '">' + (o.top ? "<i>" + o.top + "</i>" : "") + "<b>" + o.name + "</b></button>").join("");
+            '<button type="button" role="radio" data-i="' + i + '" data-name="' + o.top + o.name + '" title="' + o.top + o.name + '" aria-label="' + o.top + o.name + '">' +
+            (note(o.x) && o.x > 1 ? noteSymbol(o.x, o.n) + "<small>" + o.x + "</small>" : (o.top ? "<i>" + o.top + "</i>" : "") + "<b>" + o.name + "</b>") + "</button>").join("");
         }
         if(DrumStepInput.size() === base || (base === 1 && DrumStepInput.size() === 1)) DrumStepInput.setSize(0);
         let idx = stepSizes.list.findIndex(o => o.v === DrumStepInput.size());
