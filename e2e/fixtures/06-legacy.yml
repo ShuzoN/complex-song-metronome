@@ -1,0 +1,34 @@
+# 以前の保存形式：グループ直下の drumSpan ＋ 楽器ごとの拍位置、スウィングの音価だけの省略形、範囲外・不明な値
+version: 1
+kind: metronome.sequence
+name: legacy
+tempo: 120
+groups:
+  - name: 旧形式
+    repeat: 4
+    pattern: [4/4]
+    drumSpan: 1
+    drums:
+      kick: [0, 2]
+      snare: [1, 3]
+      cowbell: [0.5]
+      hh_close: [0, 1, 2, 3, 4, 9]
+    swing: 8
+  - name: 旧形式2小節
+    repeat: 2
+    pattern: [3/4]
+    drums:
+      kick: [0, 3]
+      snare: [1.5, 4.5]
+  - name: 範囲外
+    repeat: 2
+    pattern: [4/4]
+    swing:
+      unit: 12
+      amount: 90
+    drums:
+      - span: 9
+        repeat: 200
+        tuplets: [[3, 2, 3], [0, 1, 11], [1, 1, 3]]
+        hits:
+          kick: [-1, 0, 7.9, 8]

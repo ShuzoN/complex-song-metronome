@@ -1,0 +1,34 @@
+# 変拍子・グループ個別のテンポ・到達BPM（テンポ変化の途中でも拍に付いていること）
+version: 1
+kind: metronome.sequence
+name: tempo and meters
+tempo: 100
+groups:
+  - name: 7拍子
+    repeat: 3
+    bpm: 140
+    pattern: [7/8]
+    drums:
+      - span: 2
+        hits:
+          kick: [0, 4, 7, 11]
+          snare: [2, 5, 9, 12]
+          hh_open: [6, 13]
+  - name: 加速
+    repeat: 4
+    toBpm: 160
+    pattern: [5/4, 6/8]
+    drums:
+      - span: 1
+        hits:
+          kick: [0, 3, 5, 8]
+          rim: [1, 2, 4, 6, 7, 9, 10]
+          effect: [10.5]
+  - name: 16分の分母
+    repeat: 2
+    pattern: [7/16]
+    drums:
+      - span: 1
+        hits:
+          tom_low: [0, 2, 4]
+          ghost: [1, 3, 5, 6]

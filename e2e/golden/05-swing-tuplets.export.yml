@@ -1,0 +1,57 @@
+version: 1
+kind: metronome.sequence
+
+name: swing and tuplets
+tempo: 90
+
+groups:
+  - name: シャッフル
+    repeat: 2
+    pattern: [4/4]
+    swing:
+      unit: 8
+      amount: 67
+    drums:
+      - span: 1
+        hits:
+          hh_close: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]
+          snare: [1, 3]
+          ghost: [1, 2.5]
+          kick: [0, 2]
+  - name: "16分ハネ"
+    repeat: 2
+    pattern: [7/8]
+    swing:
+      unit: 16
+      amount: 60
+    drums:
+      - span: 1
+        hits:
+          hh_close: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5]
+          snare: [2, 5]
+          kick: [0, 3]
+  - name: 連符の区間
+    repeat: 2
+    pattern: [4/4, 4/4]
+    drums:
+      - span: 1
+        tuplets: [[0, 4, 5], [4, 2, 3], [7, 1, 6]]
+        hits:
+          hh_close: [7, 7.167, 7.333, 7.5, 7.667, 7.833]
+          tom_hi: [4, 4.667, 5.333]
+          snare: [0, 0.8, 1.6, 2.4, 3.2]
+          kick: [6]
+  - name: "3連のノリ"
+    repeat: 2
+    pattern:
+      - meter: 4/4
+        accents: [0, 2]
+        tuplet: 3
+        tupletAccent: [[0], [0, 2], [0], [0, 1, 2]]
+    drums:
+      - span: 1
+        hits:
+          ride: [0, 0.667, 1, 1.667, 2, 2.667, 3, 3.667]
+          hh_close: [1.25, 3.25]
+          snare: [1, 3]
+          kick: [0, 2.333]

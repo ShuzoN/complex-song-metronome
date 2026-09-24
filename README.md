@@ -315,6 +315,26 @@ groups:
   → `https://shuzon.github.io/complex-song-metronome/pr-preview/pr-<番号>/`
   PR をクローズ／マージすると、そのプレビューは自動で削除されます。
 
+### テスト
+
+アプリ本体はビルドも依存も持ちません。テストの道具（Playwright）だけを pnpm で入れます。
+
+```sh
+pnpm install
+pnpm exec playwright install chromium   # 初回のみ
+pnpm test                               # 単体テスト（tests/）＋ E2E／インテグレーション（e2e/）
+```
+
+- `e2e/` はブラウザで index.html を開き、画面の操作と、保存した YAML・譜面・鳴った音だけで確かめます。
+  アプリの内部には触らないので、内部を作り替えてもふるまいが同じなら通ります。
+- 外部（フォント・YouTube・ドラム音源）への通信は遮断し、ドラムは内蔵の合成音、タップ補正は 0ms に固定します。
+- 鳴った音は Web Audio の予約（何時刻に何を鳴らすか）を記録して比べます（`e2e/support/audio-spy.js`）。
+- `e2e/fixtures/*.yml` は単純なものから複合的なものまでのテスト用の曲です。フィクスチャごとに
+  「読み込んで書き出した YAML」「譜面に出る音符と文字」「通し再生の最初の数秒の音」を `e2e/golden/` と比べます。
+  フィクスチャを足したら `pnpm test:e2e:update` でゴールデンを作り、中身を確かめてからコミットします。
+  **ふるまいを変えないリファクタリングでは、ゴールデンもテストも書き換えません。**
+- PR と main への push で `.github/workflows/test.yml` が同じテストを走らせます。
+
 ### 一度だけ必要な設定
 
 1. リポジトリを **Public** にする（無料の GitHub Pages に必須）。
