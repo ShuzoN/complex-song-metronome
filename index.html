@@ -1103,6 +1103,29 @@
       }
       return {pi:0, p:cb};
     }
+    /* 譜面の並び：グループのくり返しの間に鳴る順に、パートの出現（occurrence）を並べる。
+         {pi, passStart, passes, mode, src}
+         passStart … グループの何回目から、passes … 何回ぶん（最後が割り切れなければ span より短い）
+         mode      … "notes"＝音符で書く／"simile"＝直前と同じパターンのくり返し（シミレ記号で書く）
+         src       … 音符で書いた元の出現の番号（simile のときの参照先。notes は自分）
+       直前と同じパートを丸ごとくり返すときだけ simile。B を挟んで A に戻ったときは A を音符で書き直す */
+    function occurrences(g){
+      const parts = partsOf(g), out = [], reps = g.reps;
+      if(!totalPasses(parts)) return out;
+      let pass = 0;
+      while(pass < reps){
+        for(let i = 0; i < parts.length && pass < reps; i++){
+          const pt = parts[i];
+          for(let r = 0; r < pt.repeat && pass < reps; r++){
+            const n = Math.min(pt.span, reps - pass), prev = out[out.length - 1];
+            const simile = !!prev && prev.pi === i && prev.passes === pt.span && n === pt.span;
+            out.push({pi:i, passStart:pass, passes:n, mode: simile ? "simile" : "notes", src: simile ? prev.src : out.length});
+            pass += n;
+          }
+        }
+      }
+      return out;
+    }
     // 並び1回ぶんの小節の移り先 map を、パート（span 回ぶん）の小節の移り先へ広げる
     function expandMap(map, oldLen, newLen, span){
       const out = [];
@@ -1289,7 +1312,7 @@
     return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
             quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
             SPAN_MAX, REPEAT_MAX, normSpan, normRepeat, autoSpan, repeatRhythms, passBeats, partRhythms, partBeats,
-            makePart, defaultPart, partsOf, totalPasses, locatePass, expandMap, respan, normDrums, cloneParts, hitsDto};
+            makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto};
   })();
 
   const Domain = (() => {
@@ -5070,6 +5093,7 @@
     const OFFSET_KEY = "csm:drums.offset", KIT_KEY = "csm:drums.kit", DEFAULT_KIT = "FluidR3_GM_sf2_file:1";
     const ui = {
       open:false, gid:null, part:0,             // 編集中のグループ／パート（何番目か）
+      occ:null,                                 // 譜面の上で編集中の出現（同じパートが何度か音符で書かれるとき）
       cursor:0, sel:null,                       // シーク位置（拍）／選択中の音 {b, k, inst}
       stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）
       rangeMode:false, rin:null, rout:null, clip:null,
@@ -5109,7 +5133,7 @@
       if(gid === ui.gid && pi === ui.part) return;
       RangePlay.stop();
       if(Transport.running()) Transport.stop(false);
-      ui.gid = gid; ui.part = pi; ui.sel = null; ui.rin = ui.rout = null; ui.rangeMode = false; ui.cursor = 0;
+      ui.gid = gid; ui.part = pi; ui.occ = null; ui.sel = null; ui.rin = ui.rout = null; ui.rangeMode = false; ui.cursor = 0;
       render();
     }
 
@@ -5118,12 +5142,12 @@
       let L = 11, TOP = 34, PW = 17, X0 = 44, TS = 14;
       const ZOOM = 0.7;
       let cache = {spans:[], BW:60};
-      function setL(v){ L = v; TOP = 18 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6; }
+      function setL(v){ L = v; TOP = 26 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6; }
       /* 縮尺：編集中のパートの3小節ぶんが1画面に収まる拍の幅にする（4/4 なら12拍）。
-         線間は枠の高さ（上のラベル帯と符幹ぶんを含めて H = 36 + 6.6L）と拍の幅の両方に収まる大きさ */
+         線間は枠の高さ（上のラベル帯と符幹ぶんを含めて H = 44 + 6.6L）と拍の幅の両方に収まる大きさ */
       function metrics(){
         const h = (scoreEl.clientHeight || 130) - 2, w = scoreEl.clientWidth || 760;
-        setL(Math.max(6, Math.min(17 * ZOOM, (h - 36) / 6.6)));
+        setL(Math.max(6, Math.min(17 * ZOOM, (h - 44) / 6.6)));
         const rs = partRs(), bars = rs.length ? [0, 1, 2].map(i => rs[i % rs.length]) : [{num:4}];
         const beats = bars.reduce((n, r) => n + r.num, 0);
         const BW = Math.max(12, Math.min(110, (w - X0 - 24) / (beats + 0.6)));
@@ -5131,31 +5155,62 @@
         return BW;
       }
       const yOf = pos => TOP + pos * L / 2;
-      /* グループのパートを左→右に並べる。1パート＝パターン1回ぶんを描き、続けて鳴らす回数はリピート記号と ×N で省略する。
-         xs[b] は拍 b の音符の x（xs[nb] はパート末）。拍子が変わる小節の前には拍子記号ぶんの幅を足す */
+      /* グループの長さぶんの小節を、鳴る順に左→右に並べる（DrumDomain.occurrences）。
+         パートを音符で書く出現（notes）と、直前と同じパターンのくり返し（simile＝シミレ記号）がある。
+         どちらも拍の幅は同じなので、再生位置の線は戻らずに一定の速さで右へ進む。
+         xs[b] は拍 b の音符の x（xs[nb] は出現の末）。拍子が変わる小節の前には拍子記号ぶんの幅を足す */
       function layout(BW){
         let x = X0, prevR = null;
         const spans = [];
-        playable().forEach(g => DrumDomain.partsOf(g).forEach((pt, pi) => {
-          const rs = DrumDomain.partRhythms(g, pt), nb = DrumDomain.partBeats(g, pt), starts = DrumDomain.barStarts(rs);
-          const first = rs[0], changed = !prevR || prevR.num !== first.num || prevR.den !== first.den;
-          const gap = !prevR ? 0 : (changed ? TS * 1.7 + 14 : 10) + (pt.repeat > 1 ? 12 : 0);
-          x += gap;
-          const sp = {g, gid:g.id, pi, head: pi === 0, nparts: DrumDomain.partsOf(g).length, rs, nb, starts, reps:pt.repeat, gap, x0:x, xs:[], meters:[], grid:DrumService.grid(g.id, pi)};
-          let bx = x;
-          rs.forEach((r, i) => {
-            const pr = i === 0 ? prevR : rs[i-1];
-            const show = !pr || pr.num !== r.num || pr.den !== r.den;
-            if(i > 0 && show) bx += TS * 1.4 + 8;
-            sp.meters.push({x: bx, show, r});
-            for(let k = 0; k < r.num; k++){ sp.xs.push(bx); bx += BW; }
+        playable().forEach(g => {
+          const parts = DrumDomain.partsOf(g), occs = DrumDomain.occurrences(g);
+          occs.forEach((o, idx) => {
+            const rs = DrumDomain.repeatRhythms(g.pattern.rhythms, o.passes), nb = DrumDomain.cycleBeats(rs), starts = DrumDomain.barStarts(rs);
+            const first = rs[0], changed = !prevR || prevR.num !== first.num || prevR.den !== first.den;
+            const gap = !prevR ? 0 : (changed ? TS * 1.7 + 14 : 10);
+            x += gap;
+            const sp = {g, gid:g.id, pi:o.pi, idx, src:o.src, mode:o.mode, passStart:o.passStart, passes:o.passes,
+                        head: idx === 0, nparts: parts.length, rs, nb, starts, gap, x0:x, xs:[], meters:[],
+                        grid: o.mode === "notes" ? DrumService.grid(g.id, o.pi) : null};
+            let bx = x;
+            rs.forEach((r, i) => {
+              const pr = i === 0 ? prevR : rs[i-1];
+              const show = !pr || pr.num !== r.num || pr.den !== r.den;
+              if(i > 0 && show) bx += TS * 1.4 + 8;
+              sp.meters.push({x: bx, show, r});
+              for(let k = 0; k < r.num; k++){ sp.xs.push(bx); bx += BW; }
+            });
+            sp.xs.push(bx);
+            x = bx;
+            prevR = rs[rs.length - 1];
+            spans.push(sp);
           });
-          sp.xs.push(bx);
-          x = bx;
-          prevR = rs[rs.length - 1];
-          spans.push(sp);
-        }));
+        });
         return {spans, W: x + 16};
+      }
+      // 編集中の出現（カーソル・範囲・選択を描く notes の出現）。無い・合わなければそのパートの最初の notes へ寄せる
+      function curOcc(spans){
+        const mine = spans.filter(z => z.gid === ui.gid && z.pi === ui.part && z.mode === "notes");
+        const hit = mine.find(z => z.idx === ui.occ) || mine[0] || null;
+        ui.occ = hit ? hit.idx : null;
+        return hit;
+      }
+      /* シミレ記号（小節のくり返し）。1小節は ／ と点2つ、2小節以上は ／／ と点2つに小節数を添え、
+         偶数小節なら真ん中の小節線の上、奇数小節なら真ん中の小節の中央に置く */
+      function simile(sp){
+        const k = sp.rs.length, bar = i => sp.xs[sp.starts[i]] - PW/2;
+        const cx = k === 1 ? (bar(0) + sp.xs[sp.nb] - PW/2) / 2
+          : k % 2 === 0 ? bar(k / 2) - (sp.meters[k / 2].show ? TS * 1.4 + 8 : 0)
+          : (bar((k - 1) / 2) + (k === 1 ? sp.xs[sp.nb] : sp.xs[sp.starts[(k + 1) / 2]]) - PW/2) / 2;
+        const cy = TOP + 2 * L, w = L * 1.1, lw = Math.max(2, L * 0.46), col = "#c8d0dc";
+        const slash = dx => `<line x1="${cx + dx - w}" y1="${cy + w}" x2="${cx + dx + w}" y2="${cy - w}" stroke="${col}" stroke-width="${lw}" stroke-linecap="butt"/>`;
+        const n = k === 1 ? 1 : 2, off = n === 1 ? [0] : [-L * 0.32, L * 0.32], edge = n === 1 ? w * 0.95 : w * 1.25;
+        let out = `<rect x="${cx - edge - L*0.5}" y="${cy - w - 1}" width="${2 * (edge + L*0.5)}" height="${2 * w + 2}" fill="#1b2331"/>`;
+        for(let i = 0; i < 5; i++){ const y = TOP + i * L; if(y > cy - w - 1 && y < cy + w + 1) out += `<line x1="${cx - edge - L*0.5}" y1="${y}" x2="${cx + edge + L*0.5}" y2="${y}" stroke="#7c879b" stroke-width="1"/>`; }
+        out += off.map(slash).join("");
+        out += `<circle cx="${cx - edge}" cy="${cy - L * 0.55}" r="${L * 0.24}" fill="${col}"/><circle cx="${cx + edge}" cy="${cy + L * 0.55}" r="${L * 0.24}" fill="${col}"/>`;
+        if(k > 1) out += `<text x="${cx}" y="${TOP - 5}" fill="${col}" font-size="${Math.max(10, L * 1.2)}" font-weight="700" text-anchor="middle">${k}</text>`;
+        return out;
       }
       const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * cache.BW; };
       function render(){
@@ -5166,29 +5221,28 @@
         for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="#7c879b" stroke-width="1"/>`;
         g += `<rect x="7" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/><rect x="13" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/>`;
         const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+        const cur = curOcc(lay.spans);
         lay.spans.forEach((sp, si) => {
-          const isCur = sp.gid === ui.gid && sp.pi === ui.part, left = sp.x0 - PW/2, xEnd = sp.xs[sp.nb] - PW/2;
+          const isCur = sp === cur, left = sp.x0 - PW/2, xEnd = sp.xs[sp.nb] - PW/2;
+          // 同じパートの出現（シミレ含む）は薄く示し、編集中の出現はもう少し濃く
+          const samePart = sp.gid === ui.gid && sp.pi === ui.part;
           if(si > 0){ const bx = left - sp.gap + 4; g += `<line x1="${bx}" y1="${TOP}" x2="${bx}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="${sp.head ? 2 : 1}"/>`; }
-          // グループ名はグループの先頭パートに、パート名（B 以降、または複数あるとき）は各パートに
-          const tag = sp.nparts > 1 ? letter(sp.pi) : "";
-          g += `<text x="${left + (sp.reps > 1 ? 8 : 0)}" y="14" fill="${isCur ? "#7fd9c0" : "#8792a6"}" font-size="11">${sp.head ? `<tspan fill="${isCur ? "#e6eaf1" : "#c8d0dc"}" font-weight="600">${esc(sp.g.name)}</tspan> ` : ""}${tag}${sp.reps > 1 ? " ×" + sp.reps : ""}</text>`;
-          // 拍子記号（グループ頭は前と変わったときだけ、小節の途中で変わるときはその小節の前に）
-          sp.meters.forEach((m, i) => {
+          // グループ名はグループの先頭に、パート名（パートが複数あるとき）は音符で書く出現に
+          const tag = sp.nparts > 1 && sp.mode === "notes" ? letter(sp.pi) : "";
+          if(sp.head || tag) g += `<text x="${left}" y="11" fill="${samePart ? "#7fd9c0" : "#8792a6"}" font-size="11">${sp.head ? `<tspan fill="${samePart ? "#e6eaf1" : "#c8d0dc"}" font-weight="600">${esc(sp.g.name)}</tspan> ` : ""}${tag}</text>`;
+          // 拍子記号（前と変わったときだけ。小節の途中で変わるときはその小節の前に）
+          sp.meters.forEach(m => {
             if(!m.show) return;
-            const tsx = m.x - PW/2 - 5 - (i === 0 && sp.reps > 1 ? 12 : 0);
+            const tsx = m.x - PW/2 - 5;
             g += `<text x="${tsx}" y="${TOP+2*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.num}</text>`;
             g += `<text x="${tsx}" y="${TOP+4*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.den}</text>`;
           });
-          if(sp.reps > 1){
-            const dots = x => `<circle cx="${x}" cy="${TOP+1.5*L}" r="${L*0.18}" fill="#c8d0dc"/><circle cx="${x}" cy="${TOP+2.5*L}" r="${L*0.18}" fill="#c8d0dc"/>`;
-            g += `<rect x="${left}" y="${TOP}" width="3" height="${4*L}" fill="#c8d0dc"/><line x1="${left+6}" y1="${TOP}" x2="${left+6}" y2="${TOP+4*L}" stroke="#c8d0dc"/>` + dots(left+11);
-            g += `<rect x="${xEnd-3}" y="${TOP}" width="3" height="${4*L}" fill="#c8d0dc"/><line x1="${xEnd-6}" y1="${TOP}" x2="${xEnd-6}" y2="${TOP+4*L}" stroke="#c8d0dc"/>` + dots(xEnd-11);
-          }
-          if(isCur) g += `<rect x="${left}" y="${TOP-10}" width="${xEnd-left}" height="${4*L+20}" fill="rgba(127,217,192,.06)"/>`;
+          if(samePart) g += `<rect x="${left}" y="${TOP-10}" width="${xEnd-left}" height="${4*L+20}" fill="rgba(127,217,192,${isCur ? .07 : .03})"/>`;
           // 小節線・拍の目盛り
           // 拍子が変わる小節は、前の小節の終わり（拍子記号の手前）に線を引く
           sp.starts.forEach((b, i) => { if(i > 0){ const x = sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0); g += `<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="1"/>`; } });
           for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="#3a465b"/>`;
+          if(sp.mode === "simile"){ g += simile(sp); return; }
           // 範囲とシーク（編集中のグループにだけ）
           if(isCur){
             const tx = p => xAt(sp, p);          // 音符と同じ位置（カーソルの上に音が置かれる）
@@ -5202,6 +5256,7 @@
           }
           // 音符
           sp.grid.beats.forEach((bt, b) => {
+            if(b >= sp.nb) return;                 // 途中で終わる出現は、鳴るぶんの拍だけ
             const bx = sp.xs[b], sw = BW / bt.sub;
             let first = null, last = null;
             bt.slots.forEach((cell, k) => {
@@ -5227,7 +5282,7 @@
                   g += `<ellipse cx="${x}" cy="${yy}" rx="${L*0.5}" ry="${L*0.36}" fill="${col}" transform="rotate(-18 ${x} ${yy})"/>`;
                 }
                 if(d.label) labels.push(d.label);
-                rects += `<rect class="hit" data-gid="${sp.gid}" data-pi="${sp.pi}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-hw/2}" y="${yy-L*0.9}" width="${hw}" height="${L*1.8}" fill="transparent"/>`;
+                rects += `<rect class="hit" data-gid="${sp.gid}" data-pi="${sp.pi}" data-occ="${sp.idx}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-hw/2}" y="${yy-L*0.9}" width="${hw}" height="${L*1.8}" fill="transparent"/>`;
               });
               g += `<line x1="${x+4.5}" y1="${topY-1}" x2="${x+4.5}" y2="${stemTop}" stroke="#eef2f8" stroke-width="1.2"/>`;
               if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="#c8d0dc" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
@@ -5247,7 +5302,7 @@
         scoreEl.innerHTML = g;
         scoreEl.scrollLeft = keep;
       }
-      // 画面座標 → {sp, p}（周の拍位置）
+      // 画面座標 → {sp, p}（出現の中の拍位置）
       function hitTest(clientX){
         const svg = scoreEl.firstElementChild; if(!svg) return null;
         const x = clientX - svg.getBoundingClientRect().left, spans = cache.spans;
@@ -5260,9 +5315,8 @@
         const p = Math.max(0, Math.min(sp.nb, b + (x - sp.xs[b]) / cache.BW));
         return {sp, p};
       }
-      // 再生位置（パートの拍）→ ステージ基準の x。follow なら再生位置が見えるようにスクロールする
-      function headAt(gid, pi, p, follow){
-        const sp = cache.spans.find(z => z.gid === gid && z.pi === pi);
+      // 出現の中の拍位置 → ステージ基準の x。follow なら再生位置が見えるようにスクロールする
+      function place(sp, p, follow){
         const svg = scoreEl.firstElementChild;
         if(!sp || !svg) return null;
         const x = xAt(sp, p);
@@ -5273,23 +5327,44 @@
         const pr = stageEl.getBoundingClientRect(), r = svg.getBoundingClientRect();
         return {x: r.left - pr.left + x, top: r.top - pr.top + TOP - 12, height: 4*L + 24};
       }
-      // 編集中のパートが見えるようにスクロール
+      // 再生位置：グループの rep 回目・その回の拍 p → その回を含む出現の上（くり返しても戻らない）
+      function headAt(gid, rep, p, follow){
+        const sp = cache.spans.find(z => z.gid === gid && rep >= z.passStart && rep < z.passStart + z.passes);
+        if(!sp) return null;
+        return place(sp, (rep - sp.passStart) * DrumDomain.passBeats(sp.g) + p, follow);
+      }
+      // 出現 idx の上の拍位置（範囲再生の再生位置）
+      function headAtOcc(gid, idx, p, follow){ return place(cache.spans.find(z => z.gid === gid && z.idx === idx), p, follow); }
+      // 出現 rep 回目を含むものの番号と、音符で書いた元（シミレなら参照先）
+      function occAt(gid, rep){
+        const sp = cache.spans.find(z => z.gid === gid && rep >= z.passStart && rep < z.passStart + z.passes);
+        return sp ? {idx: sp.idx, src: sp.src} : null;
+      }
+      // 編集中の出現が見えるようにスクロール
       function reveal(gid, pi){
-        const sp = cache.spans.find(z => z.gid === gid && z.pi === (pi || 0)); if(!sp) return;
+        const sp = cache.spans.find(z => z.gid === gid && z.pi === (pi || 0) && z.mode === "notes" && (ui.occ == null || z.idx === ui.occ))
+          || cache.spans.find(z => z.gid === gid && z.pi === (pi || 0) && z.mode === "notes");
+        if(!sp) return;
         const a = sp.x0 - PW, b = sp.xs[sp.nb];
         if(a < scoreEl.scrollLeft || b > scoreEl.scrollLeft + scoreEl.clientWidth) scoreEl.scrollLeft = Math.max(0, a - 20);
       }
-      return {render, hitTest, headAt, reveal, get spans(){ return cache.spans; }};
+      return {render, hitTest, headAt, headAtOcc, occAt, reveal, get spans(){ return cache.spans; }};
     })();
 
     /* タップ位置の拍位置（格子に吸着）。別のパートなら先にそちらへ切り替える。
        範囲をなぞっている間は切り替えない。タップ（leave=true）なら範囲を閉じて移る＝コピーしたものを別のパートへ貼れる */
     function posAt(clientX, leave){
       const h = Score.hitTest(clientX); if(!h) return null;
-      if(h.sp.gid !== ui.gid || h.sp.pi !== ui.part){
+      // シミレの小節をタップしたら、音符で書いた元の出現へ移って編集する（同じパターンなので位置はそのまま）。
+      // 範囲をなぞるのは音符の出現の上だけ
+      const simile = h.sp.mode === "simile", occ = h.sp.src;
+      if(simile && !leave) return null;
+      if(h.sp.gid !== ui.gid || h.sp.pi !== ui.part || occ !== ui.occ){
         if(ui.rangeMode){ if(!leave) return null; ui.rangeMode = false; ui.rin = ui.rout = null; }
         select(h.sp.gid, h.sp.pi);
+        if(ui.occ !== occ){ ui.occ = occ; ui.sel = null; }
       }
+      if(simile) Score.reveal(ui.gid, ui.part);
       return DrumDomain.snap(grid(), h.p).p;
     }
     scoreEl.addEventListener("pointerup", e => {
@@ -5297,8 +5372,9 @@
       e.preventDefault();
       const h = e.target.closest(".hit");
       if(h){
-        const hpi = Number(h.dataset.pi);
+        const hpi = Number(h.dataset.pi), hocc = Number(h.dataset.occ);
         if(h.dataset.gid !== ui.gid || hpi !== ui.part){ ui.rangeMode = false; ui.rin = ui.rout = null; select(h.dataset.gid, hpi); }
+        if(ui.occ !== hocc){ ui.occ = hocc; ui.rangeMode = false; ui.rin = ui.rout = null; ui.sel = null; }
         const sel = {b:Number(h.dataset.b), k:Number(h.dataset.k), inst:h.dataset.inst}, bt = grid().beats[sel.b];
         ui.cursor = DrumDomain.slotPos(sel.b, sel.k, bt ? bt.sub : 1);
         ui.sel = ui.rangeMode ? null : (ui.sel && ui.sel.b === sel.b && ui.sel.k === sel.k && ui.sel.inst === sel.inst) ? null : sel;
@@ -5523,7 +5599,7 @@
       const valid = () => ui.rin != null && ui.rout != null && ui.rout > ui.rin;
       function pump(){
         const g = target && findGroup(target.gid), pt = g && DrumDomain.partsOf(g)[target.pi];
-        if(!pt || !valid() || ui.gid !== target.gid || ui.part !== target.pi){ stop(); return; }
+        if(!pt || !valid() || ui.gid !== target.gid || ui.part !== target.pi || ui.occ !== target.occ){ stop(); return; }
         const rs = DrumDomain.partRhythms(g, pt), slots = DrumService.playSlots(g.id, target.pi);
         const bpm = Domain.effectiveBpm(g, state().bpm) * SpeedService.rate(), limit = SoundGateway.now() + AHEAD;
         for(let guard = 0; next < limit && guard < 256; guard++){
@@ -5543,7 +5619,7 @@
         if(!valid()) return;
         if(Transport.armKind()) Transport.armCancel(); else if(Transport.running()) Transport.stop(false);
         SoundGateway.ensure();
-        target = {gid: ui.gid, pi: ui.part}; pos = ui.rin; next = SoundGateway.now() + 0.08; marks.length = 0;
+        target = {gid: ui.gid, pi: ui.part, occ: ui.occ}; pos = ui.rin; next = SoundGateway.now() + 0.08; marks.length = 0;
         timer = setInterval(pump, 25); pump();
         ui.sel = null;
         render();
@@ -5572,7 +5648,7 @@
       raf = null;
       if(!ui.open) return;
       if(RangePlay.playing()){
-        const p = RangePlay.heardPos(), t = RangePlay.target, hp = p != null && t ? Score.headAt(t.gid, t.pi, p, true) : null;
+        const p = RangePlay.heardPos(), t = RangePlay.target, hp = p != null && t ? Score.headAtOcc(t.gid, t.occ, p, true) : null;
         headEl.classList.add("range");
         if(hp){ headEl.style.display = "block"; headEl.style.left = hp.x + "px"; headEl.style.top = hp.top + "px"; headEl.style.height = hp.height + "px"; }
         raf = requestAnimationFrame(frame);
@@ -5583,16 +5659,19 @@
       if(!Transport.running() || !b){ headEl.style.display = "none"; return; }
       const heard = SoundGateway.now() - LatencyService.seconds();
       const p = b.cb + Math.max(0, Math.min(0.999, (heard - b.time) / b.len));
-      const hp = Score.headAt(b.gid, b.pi, p, true);
+      const hp = Score.headAt(b.gid, b.rep, p, true);
       if(hp){ headEl.style.display = "block"; headEl.style.left = hp.x + "px"; headEl.style.top = hp.top + "px"; headEl.style.height = hp.height + "px"; }
       raf = requestAnimationFrame(frame);
     }
     function onBeat(e){
       if(!ui.open) return;
       const loc = DrumService.locatePass(e.gid, e.rep, e.cb);
-      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:loc.p, pi:loc.pi, gid:e.gid};
-      // 再生に合わせて編集対象のグループ・パートも移る（通し再生・パートの切り替わり）
-      if(e.gid !== ui.gid || loc.pi !== ui.part){ ui.gid = e.gid; ui.part = loc.pi; ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; render(); }
+      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:e.cb, rep:e.rep, gid:e.gid};
+      // 再生に合わせて編集対象のグループ・パート・出現も移る（シミレの間は音符で書いた元の出現）
+      const oc = e.gid === ui.gid ? Score.occAt(e.gid, e.rep) : null;
+      if(e.gid !== ui.gid || loc.pi !== ui.part || (oc && oc.src !== ui.occ)){
+        ui.gid = e.gid; ui.part = loc.pi; ui.occ = oc ? oc.src : null; ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; render();
+      }
       else if(e.bar === 0 && e.beat === 0) controls();
       if(!raf) raf = requestAnimationFrame(frame);
     }
