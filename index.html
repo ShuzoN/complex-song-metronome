@@ -458,8 +458,9 @@
   .fs-rep:empty + .fs-sep{display:none}
   .fs-meter{font-family:var(--mono);font-size:clamp(10px,2.8dvh,12px);letter-spacing:.1em;color:rgba(245,244,239,.5)}
   .fs-meter i{font-style:normal;color:var(--brass)}
-  .fs-lat-open{position:absolute;z-index:3;right:calc(env(safe-area-inset-right) + clamp(10px,2.4vw,18px));
-    bottom:calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px));height:clamp(26px,8dvh,32px);padding:0 clamp(8px,2vw,12px);
+  .fs-settings{position:absolute;z-index:3;display:flex;gap:8px;right:calc(env(safe-area-inset-right) + clamp(10px,2.4vw,18px));
+    bottom:calc(env(safe-area-inset-bottom) + clamp(8px,2.6dvh,14px))}
+  .fs-lat-open{height:clamp(26px,8dvh,32px);padding:0 clamp(8px,2vw,12px);
     display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:clamp(9px,2.6dvh,11px);letter-spacing:.06em;
     color:rgba(245,244,239,.8);background:rgba(245,244,239,.05);border:1px solid rgba(245,244,239,.3);border-radius:0;
     cursor:pointer;-webkit-tap-highlight-color:transparent}
@@ -659,7 +660,7 @@
   <div class="head">
     <div class="wordmark">Metronome</div>
     <button class="lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
-    <button class="lat-open" type="button" id="speedOpen" aria-haspopup="dialog">speed <span class="lat-open-val" id="speedOpenVal">100%</span></button>
+    <button class="lat-open" type="button" id="speedOpen" data-speed-open aria-haspopup="dialog">speed <span class="lat-open-val" id="speedOpenVal" data-speed-val>100%</span></button>
     <span id="statusText" hidden>停止中</span>
   </div>
 
@@ -817,7 +818,10 @@
     </button>
   </div>
 
+  <div class="fs-settings">
   <button class="fs-lat-open" type="button" data-lat-open aria-haspopup="dialog">earphone delay <span class="lat-open-val" data-lat-val>±0ms</span></button>
+    <button class="fs-lat-open" type="button" data-speed-open aria-haspopup="dialog">speed <span class="lat-open-val" data-speed-val>100%</span></button>
+  </div>
 
   <div class="fs-flash" id="fsFlash" aria-hidden="true"></div>
   <div class="fs-rotate">
@@ -927,7 +931,7 @@
   </form>
 </dialog>
 
-<!-- ============ speed（再生速度）ダイアログ。ヘッダーの「speed」ボタンから開く ============ -->
+<!-- ============ speed（再生速度）ダイアログ。ヘッダーと練習モードの「speed」ボタンから開く ============ -->
 <dialog class="lat-dialog" id="speedDialog" aria-labelledby="speedTitle">
   <form method="dialog">
     <div class="lat-dlg-top">
@@ -4080,7 +4084,7 @@
       card.addEventListener("click", e=>{
         if(Transport.running()) return;                       // 再生中は編集に入らない
         if(e.target.closest("input, select, button")) return;
-        SequenceService.toggleActive(g.id);
+        if(state().activeId !== g.id) SequenceService.setActive(g.id);
       });
       card.addEventListener("keydown", e=>{
         if(Transport.running()) return;
@@ -4224,6 +4228,13 @@
     }
 
     function bind(){
+      // カード外の余白だけで閉じる。capture でカード自身の再描画より先に判定する。
+      document.addEventListener("click", e=>{
+        if(!state().activeId || Transport.running() || Transport.armKind()) return;
+        const protectedArea = e.composedPath().some(el => el instanceof Element &&
+          el.matches(".group, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));
+        if(!protectedArea) SequenceService.setActive(null);
+      }, true);
       let typing = false;
       seqNameEl.addEventListener("focus", ()=>{ typing = false; });
       seqNameEl.addEventListener("blur", ()=>{
@@ -4275,7 +4286,8 @@
       const p = SpeedService.shown(), [lo, hi] = SpeedService.bounds();
       if(document.activeElement !== input) input.value = p;
       input.min = lo; input.max = hi;
-      $("speedVal").textContent = $("speedOpenVal").textContent = p + "%";
+      $("speedVal").textContent = p + "%";
+      document.querySelectorAll("[data-speed-val]").forEach(n => { n.textContent = p + "%"; });
       $("speedDown").disabled = p <= lo;
       $("speedUp").disabled = p >= hi;
     }
@@ -4301,13 +4313,14 @@
         if(VideoGateway.armed()){ SpeedService.setVideoRate(1); render(); } else change(100);
       });
       input.addEventListener("blur", render);
-      // ヘッダーの「speed」から開く。枠の外（背景）をタップしたら閉じる
+      // ヘッダーと練習モードの「speed」から開く。枠の外（背景）をタップしたら閉じる
       const dialog = $("speedDialog");
-      $("speedOpen").addEventListener("click", ()=>{
+      document.querySelectorAll("[data-speed-open]").forEach(b => b.addEventListener("click", e=>{
+        e.stopPropagation();
         render();
         if(dialog.open) return;
         if(typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
-      });
+      }));
       dialog.addEventListener("click", e=>{ if(e.target === dialog) dialog.close(); });
       render();
     }
