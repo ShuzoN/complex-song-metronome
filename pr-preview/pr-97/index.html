@@ -1593,7 +1593,11 @@
         if(tup) tups.push(tup);
         const cnt = Math.round(span / len);
         const on = [...new Set(inChunk(k).map(h => round3(h.p)))].sort((x, y) => x - y);
-        if(on.length > cnt) return {error: "音が " + on.length + " 個あって、" + (pl.whole ? span + "拍" : m ? m[0] + "拍" : "1拍") + "の格子（" + cnt + " 個）に入りません"};
+        if(on.length > cnt){
+          // ストレート（8分・16分…）なら、入り切らない音を選んだところの後ろへはみ出して前から順に並べる（6連→8分なら3拍ぶん）
+          if(!m && pl.chunks.every(z => !z.tup)) return spillStraight(rhythms, tuplets, hits, lo, hi, size);
+          return {error: "音が " + on.length + " 個あって、" + (pl.whole ? span + "拍" : m ? m[0] + "拍" : "1拍") + "の格子（" + cnt + " 個）に入りません"};
+        }
         // 並び順を保つ割り当て（i 番目の音 → j 番目の格子点）の総ずれ最小を DP で求める
         const K = on.length, slot = j => c + j * len, cost = [], from = [];
         for(let i = 0; i <= K; i++){ cost.push(new Array(cnt + 1).fill(Infinity)); from.push(new Array(cnt + 1).fill(false)); }
@@ -1607,6 +1611,20 @@
       const out = (hits || []).map(h => { const to = moved.get(round3(h.p)); return h.p >= lo - 1e-6 && h.p < hi - 1e-6 && to != null ? {p: to, inst: h.inst} : h; });
       const keep = (tuplets || []).filter(t => !touches(t));
       return {hits: out, tuplets: normTuplets(keep.concat(tups), nb), lo, hi, moved, whole: pl.whole ? tups[0] : null};
+    }
+    /* retuplet の続き：ストレートの歩幅に音が入り切らないとき、選んだ音 lo..hi を歩幅の間隔で前から順に並べ直す。
+       はみ出した先（hi より後ろ）に音がある・パートの終わりを越える・連符の区間を途中で切るときは {error} */
+    function spillStraight(rhythms, tuplets, hits, lo, hi, size){
+      const nb = cycleBeats(rhythms), d = size === 0 ? baseAt(rhythms, lo) : size;
+      const on = [...new Set((hits || []).filter(h => h.p >= lo - 1e-6 && h.p < hi - 1e-6).map(h => round3(h.p)))].sort((x, y) => x - y);
+      const end = lo + on.length / d, hi2 = Math.max(hi, Math.ceil(end - 1e-6));
+      if(end > nb + 1e-6) return {error: "並べるとパートの終わりを越えます"};
+      if((hits || []).some(h => h.p >= hi - 1e-6 && h.p < end - 1e-6)) return {error: "並べる先（選んだところの後ろ）に音があります"};
+      const touches = t => t.at < hi2 && t.at + t.beats > lo;
+      if((tuplets || []).some(t => touches(t) && (t.at < lo || t.at + t.beats > hi2))) return {error: "並べる先の連符が途中で切れます"};
+      const moved = new Map(on.map((p, i) => [p, round3(lo + i / d)]));
+      const out = (hits || []).map(h => { const to = moved.get(round3(h.p)); return h.p >= lo - 1e-6 && h.p < hi - 1e-6 && to != null ? {p: to, inst: h.inst} : h; });
+      return {hits: out, tuplets: normTuplets((tuplets || []).filter(t => !touches(t)), nb), lo, hi: hi2, moved, whole: null};
     }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
     /* 拍子の並びが変わったときの、パートの並び全体の引っ越し。パートは拍子の並びの何回ぶん（span）かで
@@ -6849,7 +6867,7 @@
           let size = o.v;
           const already = o.n ? DrumService.isRetupleted(gid, pi, a, b, o.v) : null;
           if(already){
-            // 解除先はその連符の音符のストレート。音が入り切らなければ、入り切るまで細かくする（4分→8分→16分…）
+            // 解除先はその連符の音符のストレート（入り切らなければ後ろへはみ出して並べる）。それもできなければ細かくする（4分→8分→16分…）
             const x = DrumDomain.tupletNote(stepSizes.den, already.beats, already.n) || o.x;
             const vs = [1, 2, 4, 8].filter(d => d >= x / stepSizes.den).map(d => d === stepSizes.base ? 0 : d).filter(v => stepSizes.list.some(z => z.v === v));
             const v = vs.find(v => !DrumService.retuplet(gid, pi, a, b, v, {dry: true}).error);
