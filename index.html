@@ -6507,19 +6507,28 @@
       $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
       $("drAutofix").classList.toggle("warn", unc > 0);
       $("drHint").style.display = (pt && !pt.hits.length && !DrumSelection.get() && !DrumRange.mode()) ? "block" : "none";
-      // 歩幅：基本格子・拍・2〜9 分割・複数拍の連符。音価が慣用なら音符名（8分・16分…）、それ以外は N連。
-      // ボタンは1拍あたりの打点の数（粗い→細かい）の順に並べる：4拍3連・拍・4拍5連・2拍3連…8分…3連・16分…9連
+      // 歩幅：基本格子・拍・2〜9 分割・複数拍の連符。名前は音符名（拍が4分音符なら 8分・16分、1拍3等分＝8分3連、
+      // 2拍3等分＝4分3連…）。慣用の音価にならない分母では「N連」「2拍3連」のままにする。
+      // 並びはよく使う順：8分・16分 → 1拍の連符（3・5・6・7・9連）→ その他（4分・32分・複数拍の連符）
       $("drStepBar").classList.toggle("off", !(DrumStepInput.mode() && !playing()));
       if(g){
         const b = Math.min(nbOf() - 1, Math.floor(DrumCursor.get() + 1e-9)), den = DrumDomain.denAt(partRs(), Math.max(0, b)), base = DrumDomain.baseAt(partRs(), Math.max(0, b));
         const key = den + ":" + base;
         if(stepSizes.key !== key){
-          const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
-          const list = [{v: 0, top: "", name: divName(base), per: base}]
-            .concat(base === 1 ? [] : [{v: 1, top: "", name: "拍", per: 1}])
-            .concat([2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => ({v: d, top: "", name: divName(d), per: d})))
-            .concat(DrumDomain.MULTI_STEPS.map(([m, n]) => ({v: m + ":" + n, top: m + "拍", name: n + "連", per: n / m})));
-          stepSizes = {key, list: list.map((o, i) => ({...o, i})).sort((x, y) => x.per - y.per || x.i - y.i)};
+          const note = x => ({1:"全",2:"2分",4:"4分",8:"8分",16:"16分",32:"32分",64:"64分"})[x] || "";
+          const pow2 = n => 2 ** Math.floor(Math.log2(n));   // n 連符の音符の長さを決める2の冪（3・5〜7連→2・4、9連→8）
+          const single = d => d === 1 ? {top: "", name: note(den) || "拍"}
+            : pow2(d) === d ? {top: "", name: note(den * d) || d + "分割"}
+            : {top: note(den * pow2(d)), name: d + "連"};
+          const order = [2, 4, 3, 5, 6, 7, 9, 1, 8];
+          const list = (order.indexOf(base) < 0 ? [{v: 0, ...single(base)}] : [])
+            .concat(order.map(d => ({v: d === base ? 0 : d, ...single(d)})))
+            .filter((o, i, a) => a.findIndex(x => x.v === o.v) === i)
+            .concat(DrumDomain.MULTI_STEPS.map(([m, n]) => {
+              const nm = note(den * pow2(n) / m);
+              return {v: m + ":" + n, top: nm || m + "拍", name: n + "連"};
+            }));
+          stepSizes = {key, list};
           $("drStepSize").innerHTML = stepSizes.list.map((o, i) =>
             '<button type="button" role="radio" data-i="' + i + '" data-name="' + o.top + o.name + '">' + (o.top ? "<i>" + o.top + "</i>" : "") + "<b>" + o.name + "</b></button>").join("");
         }
