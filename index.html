@@ -516,6 +516,141 @@
   @media (prefers-reduced-motion:reduce){.fs-beat,.fs-ctl,.fs-fbar,.fs-track,.fs-flash,.fs-fill{transition:none}}
   /* ミュートでも拍の進行は表示する。破線と斜線で発音する拍と区別する。 */
   .pdot.muted,.beat.muted,.fs-beat.muted{border-style:dashed;box-shadow:none;text-decoration:line-through;opacity:.5}
+
+  /* ===== ドラム入力（別モード）。リズムグループの拍子・くり返し・BPM に乗せてドラムの打点を置く全画面ビュー。
+     全画面の練習モードと同じく濃色。クラス・id は dr で名前空間（メトロノーム側の .chip / .pad 等と衝突させない） ===== */
+  .dock-modes{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--rule)}
+  .dock-modes .fs-enter{border-top:none;letter-spacing:.06em;font-size:11.5px}
+  .dock-modes .fs-enter + .fs-enter{border-left:1px solid var(--rule)}
+  @media (max-width:420px){ .dock-modes .fs-enter-ic{display:none} }
+  .drums-opt{display:flex;align-items:center;gap:6px;margin-top:10px;font-family:var(--mono);font-size:10px;letter-spacing:.06em;color:var(--dim);cursor:pointer}
+  .drums-opt input{accent-color:var(--signal);width:14px;height:14px}
+  .chip.drm{border-color:var(--brass);color:var(--brass)}
+
+  .dr{--dbg:#141a24; --dpanel:#1b2331; --dline:#2b3546; --dline2:#3a465b;
+    --dtext:#e6eaf1; --dmuted:#8792a6; --dfaint:#5c6779;
+    --dcym:#d9a441; --dcym-bg:rgba(217,164,65,.14); --dcym-bd:rgba(217,164,65,.45);
+    --ddrm:#5aa4e6; --ddrm-bg:rgba(90,164,230,.14); --ddrm-bd:rgba(90,164,230,.45);
+    --dkick-bg:rgba(230,234,241,.08); --dkick-bd:rgba(230,234,241,.35);
+    --drec:#e4574b; --dwarn:#f08c2e; --dplay:#7fd9c0;
+    position:fixed;inset:0;z-index:9985;background:var(--dbg);color:var(--dtext);
+    font-family:var(--body);font-size:13px;overflow:hidden;touch-action:none;overscroll-behavior:none;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+    display:grid;grid-template-rows:minmax(0,1.25fr) minmax(0,1fr);gap:6px;
+    padding:calc(4px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left))}
+  .dr[hidden]{display:none !important}
+  .dr *{-webkit-tap-highlight-color:transparent}
+  .dr button{font-family:var(--mono);font-size:12px;color:inherit;background:transparent;border:1px solid var(--dline2);border-radius:8px;
+    padding:0 10px;height:30px;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;flex:none}
+  .dr button:active{background:var(--dline)}
+  .dr button.on{border-color:var(--dplay);color:var(--dplay)}
+  .dr button.off{opacity:.45}
+  .dr button:disabled{opacity:.35;cursor:default}
+  .dr select{font-family:var(--mono);font-size:12px;color:var(--dtext);background:var(--dpanel);border:1px solid var(--dline2);border-radius:8px;height:30px;padding:0 4px;min-width:0}
+
+  .dr-seq{display:grid;grid-template-rows:30px minmax(0,1fr) 26px;gap:4px;min-width:0;min-height:0}
+  .dr-bar1,.dr-bar3{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
+  .dr-bar3{overflow-x:auto;scrollbar-width:none;touch-action:pan-x}
+  .dr-bar3::-webkit-scrollbar,.dr-groups::-webkit-scrollbar{display:none}
+  .dr-bar3 button{height:24px;font-size:11px;padding:0 9px}
+  .dr-close{width:30px;padding:0 !important}
+  /* グループのチップ列は縮められる（flex-basis 0）ようにして、あふれたぶんは列の中で横スクロールさせる */
+  .dr-groups{display:flex;gap:6px;width:0;flex:1 1 0;overflow-x:auto;overflow-y:hidden;touch-action:pan-x;scrollbar-width:none;padding-bottom:1px}
+  .dr-chip{flex:none;padding:5px 10px;border:1px solid var(--dline2);border-radius:8px;color:var(--dmuted);white-space:nowrap;font-size:12px;cursor:pointer}
+  .dr-chip.cur{border-color:var(--dplay);color:var(--dtext)}
+  .dr-chip.play{border-color:var(--drec)}
+  .dr-chip i{font-style:normal;color:var(--dfaint);margin-left:5px;font-family:var(--mono);font-size:10.5px}
+  .dr-chip.has::after{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ddrm);margin-left:6px;vertical-align:2px}
+  .dr-span{flex:none;max-width:9.5em}
+  .dr-meter{flex:none;font-family:var(--mono);font-size:11px;color:var(--dmuted);white-space:nowrap;max-width:40%;overflow:hidden;text-overflow:ellipsis}
+  .dr-meter b{font-weight:500;color:var(--dtext)}
+  .dr-status{margin-left:auto;padding-left:6px;color:var(--dmuted);white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11.5px;flex:none}
+  .dr-status .rec{color:var(--drec)}
+
+  .dr-stage{position:relative;min-width:0;min-height:0;background:var(--dpanel);border-radius:12px;overflow:hidden}
+  .dr-score{position:absolute;left:0;right:0;top:0;bottom:30px;padding:4px 8px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;display:flex;align-items:center;touch-action:none}
+  .dr-score::-webkit-scrollbar{display:none}
+  .dr-score svg{display:block;flex:none}
+  .dr-score .hit{cursor:pointer}
+  .dr-head{position:absolute;top:0;height:100%;width:2px;background:var(--dplay);opacity:.9;pointer-events:none;display:none;left:0}
+  .dr-ruler{position:absolute;left:8px;right:8px;bottom:1px;height:18px;border-radius:5px;background:#151c27;touch-action:none;overflow:hidden}
+  .dr-ruler svg{width:100%;height:100%;display:block}
+  .dr-hint{position:absolute;left:10px;right:10px;bottom:32px;color:var(--dfaint);font-size:11px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .dr-selbar,.dr-rangebar{display:none;align-items:center;gap:6px;min-width:0;flex:1 1 auto}
+  .dr-selbar.show,.dr-rangebar.show{display:flex}
+  .dr-bar3.sub > button,.dr-bar3.sub > .dr-status{display:none}
+  .dr-selbar .arrow{min-width:40px;font-size:14px}
+  .dr-selbar .del,.dr-rangebar .del{border-color:var(--drec);color:var(--drec)}
+  .dr-rangebar button.set{border-color:var(--dwarn);color:var(--dwarn)}
+  .dr-rangetext{color:var(--dmuted);white-space:nowrap;font-size:11px}
+  #drAutofix.warn{border-color:var(--dwarn);color:var(--dwarn)}
+
+  .dr-pads{display:grid;grid-template-columns:minmax(0,1fr) 60px minmax(0,1fr);gap:8px;min-height:0}
+  .dr-side{display:grid;grid-template-rows:1fr 1.4fr;gap:6px;min-height:0}
+  .dr-prow{display:grid;gap:4px;min-height:0}
+  .dr-pad{display:flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid var(--dline2);
+    background:var(--dpanel);font-size:12px;color:var(--dmuted);position:relative;overflow:hidden;min-width:0;cursor:pointer}
+  .dr-pad span{pointer-events:none;white-space:nowrap}
+  .dr-pad.cym{background:var(--dcym-bg);border-color:var(--dcym-bd);color:#f0d9a4}
+  .dr-pad.drm{background:var(--ddrm-bg);border-color:var(--ddrm-bd);color:#bcd9f5}
+  .dr-pad.kick{background:var(--dkick-bg);border-color:var(--dkick-bd);color:var(--dtext)}
+  .dr-pad.big{font-size:14px;font-weight:500;border-radius:11px}
+  .dr-pad.soft{color:#8fb3d6;font-weight:400}
+  .dr-pad.hit{filter:brightness(1.9)}
+  .dr-pad.hit.cym{box-shadow:inset 0 0 0 2px var(--dcym)}
+  .dr-pad.hit.drm{box-shadow:inset 0 0 0 2px var(--ddrm)}
+  .dr-pad.hit.kick{box-shadow:inset 0 0 0 2px var(--dtext)}
+  .dr-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:0}
+  .dr-mid button{width:52px;height:28px;padding:0;font-size:11px}
+  .dr-mid select{width:52px;height:28px;font-size:11px;text-align:center}
+  .dr-playrow{display:flex;gap:5px}
+  .dr-mid .dr-playrow button{width:34px;height:34px;font-size:14px}
+  .dr-mid .prim{background:var(--dplay);border-color:var(--dplay);color:#10261f;font-weight:600}
+  .dr-steprow{display:none;gap:4px}
+  .dr-mid .dr-steprow button{width:24px;font-size:13px}
+  #drStepSize{display:none}
+  .dr-mid.stepping .dr-steprow,.dr-mid.stepping #drStepSize{display:flex}
+  .dr-dot{width:9px;height:9px;border-radius:50%;background:var(--dfaint)}
+  #drRec.on{border-color:var(--drec);color:var(--drec)}
+  #drRec.on .dr-dot{background:var(--drec);animation:dr-blink 1s steps(2) infinite}
+  @keyframes dr-blink{50%{opacity:.25}}
+  @media (prefers-reduced-motion:reduce){#drRec.on .dr-dot{animation:none}}
+
+  /* 縦持ち：パッドを 2 列に積み、中央の操作列は横一列にする */
+  @media (orientation:portrait){
+    .dr{grid-template-rows:minmax(0,.9fr) minmax(0,1.1fr)}
+    .dr-pads{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:6px}
+    .dr-mid{grid-column:1 / 3;grid-row:1;flex-direction:row;justify-content:center;gap:8px}
+    .dr-mid button{width:auto;min-width:44px;padding:0 10px}
+    .dr-mid .dr-playrow button{height:30px}
+    .dr-steprow{gap:6px}
+    .dr-side{grid-row:2}
+    .dr-pad{font-size:11px}
+    .dr-pad.big{font-size:12px}
+    .dr-meter{display:none}
+  }
+
+  /* 設定シート・タップ補正（ドラム入力の中だけで開く） */
+  .dr-sheet{position:absolute;inset:0;z-index:5;background:rgba(20,26,36,.92);display:none;align-items:center;justify-content:center;padding:16px}
+  .dr-sheet.show{display:flex}
+  .dr-card{background:var(--dpanel);border:1px solid var(--dline2);border-radius:14px;padding:16px 18px;width:min(92vw,420px);display:flex;flex-direction:column;gap:12px}
+  .dr-card h1{font-size:15px;font-weight:500;margin:0}
+  .dr-card label{display:flex;flex-direction:column;gap:6px;color:var(--dmuted);font-size:12px}
+  .dr-card label.row{flex-direction:row;align-items:center;gap:8px;color:var(--dtext)}
+  .dr-card select{height:36px;font-size:14px}
+  .dr-card .pair{display:flex;align-items:center;gap:8px}
+  .dr-card .pair button{height:36px;flex:1}
+  .dr-card .val{font-family:var(--mono);color:var(--dtext);font-variant-numeric:tabular-nums}
+  .dr-card p{margin:0;color:var(--dmuted);font-size:12px;line-height:1.6}
+  .dr-card .foot{display:flex;justify-content:flex-end;gap:8px}
+  .dr-card input[type=checkbox]{accent-color:var(--dplay);width:16px;height:16px}
+  .dr-cal{flex-direction:column;gap:14px;text-align:center}
+  .dr-cal h1{font-size:16px;font-weight:500;margin:0}
+  .dr-cal p{margin:0;color:var(--dmuted);max-width:36em;line-height:1.6}
+  .dr-calpad{width:min(60vw,320px);height:min(28vh,120px);border-radius:14px;border:1px solid var(--dline2);background:var(--dpanel);display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer}
+  .dr-calpad.hit{filter:brightness(1.8)}
+  .dr-calres{font-variant-numeric:tabular-nums;font-family:var(--mono)}
 </style>
 </head>
 <body>
@@ -559,6 +694,7 @@
       <span class="vol-val" id="volVal">50%</span>
     </div>
     <input type="range" id="volRange" min="0" max="100" step="1" value="50" aria-label="メトロノームの音量">
+    <label class="drums-opt"><input type="checkbox" id="drumsOn" checked><span>ドラム入力で置いた打点も鳴らす</span></label>
   </section>
 
   <section class="yt">
@@ -637,7 +773,10 @@
     </div>
 
     <!-- 全画面（横画面 練習HUD）への入口。常時表示 -->
-    <button class="fs-enter" id="fsBtn" type="button"><span class="msym fs-enter-ic">fullscreen</span>練習モード（全画面再生）</button>
+    <div class="dock-modes">
+      <button class="fs-enter" id="fsBtn" type="button"><span class="msym fs-enter-ic">fullscreen</span>練習モード（全画面）</button>
+      <button class="fs-enter" id="drEnter" type="button">ドラム入力</button>
+    </div>
   </footer>
 </main>
 
@@ -692,6 +831,87 @@
   </div>
 </div>
 
+<!-- ============ ドラム入力（別モード）。拍子・くり返し・BPM はリズムグループのものをそのまま使い、
+     打点だけを group.drums に置く。再生は既存の Transport（グループ無限再生／全体再生）を再利用 ============ -->
+<div class="dr" id="drum" hidden>
+  <section class="dr-seq">
+    <div class="dr-bar1">
+      <button class="dr-close" id="drClose" type="button" aria-label="ドラム入力を閉じる">✕</button>
+      <div class="dr-groups" id="drGroups"></div>
+      <select class="dr-span" id="drSpan" aria-label="パターンの長さ" title="何小節ぶんを1つのパターンとしてくり返すか"></select>
+      <span class="dr-meter" id="drMeter"></span>
+    </div>
+    <div class="dr-stage" id="drStage">
+      <div class="dr-score" id="drScore"></div>
+      <div class="dr-head" id="drHead"></div>
+      <div class="dr-ruler" id="drRuler"></div>
+      <div class="dr-hint" id="drHint">パッドを叩くとカーソルの位置に置けます。● で再生しながら重ね録り</div>
+    </div>
+    <div class="dr-bar3" id="drBar3">
+      <div class="dr-selbar" id="drSelbar">
+        <button class="arrow" id="drSelLeft" type="button" aria-label="ひとつ前へ">←</button>
+        <button class="arrow" id="drSelRight" type="button" aria-label="ひとつ後へ">→</button>
+        <button class="del" id="drSelDel" type="button">削除</button>
+        <button id="drSelClr" type="button" aria-label="選択解除">✕</button>
+      </div>
+      <div class="dr-rangebar" id="drRangebar">
+        <button id="drRin" type="button">In</button><button id="drRout" type="button">Out</button>
+        <span class="dr-rangetext" id="drRangeText"></span>
+        <button id="drRcopy" type="button">コピー</button><button id="drRpaste" type="button">貼り付け</button>
+        <button class="del" id="drRdel" type="button">削除</button>
+        <button id="drRclr" type="button" aria-label="範囲を閉じる">✕</button>
+      </div>
+      <button id="drSong" type="button" title="曲の頭から全体を再生">通し</button>
+      <button id="drUndo" type="button" aria-label="元に戻す">↶</button>
+      <button id="drRedo" type="button" aria-label="やり直す">↷</button>
+      <button id="drAutofix" type="button" title="ずれた打点を拍の格子に載せる">自動補正</button>
+      <button id="drClear" type="button" title="このグループの打点をすべて消す">消す</button>
+      <button id="drClick" type="button" class="on" title="メトロノームのクリックを鳴らす／止める">クリック</button>
+      <button id="drCfgOpen" type="button">設定</button>
+      <span class="dr-status" id="drStatus">停止中</span>
+    </div>
+  </section>
+  <section class="dr-pads" id="drPads">
+    <div class="dr-side" id="drLeft"></div>
+    <div class="dr-mid" id="drMid">
+      <div class="dr-playrow">
+        <button class="prim" id="drPlay" type="button" aria-label="このグループをくり返し再生">▶</button>
+        <button id="drStop" type="button" aria-label="停止">■</button>
+      </div>
+      <button id="drStep" type="button" aria-label="ステップ入力">STEP</button>
+      <div class="dr-steprow">
+        <button id="drStepBack" type="button" aria-label="1歩戻る">←</button>
+        <button id="drStepFwd" type="button" aria-label="1歩進む（休符）">→</button>
+      </div>
+      <select id="drStepSize" aria-label="歩幅"></select>
+      <button id="drRec" type="button" aria-label="重ね録り" title="重ね録り"><span class="dr-dot"></span></button>
+    </div>
+    <div class="dr-side" id="drRight"></div>
+  </section>
+
+  <div class="dr-sheet" id="drCfg">
+    <div class="dr-card">
+      <h1>ドラム入力の設定</h1>
+      <label>音源<select id="drKit" aria-label="音源"></select><span id="drKitStat"></span></label>
+      <label>入力遅延（叩いてから音になるまで）
+        <span class="pair"><button id="drCalOpen" type="button">タップ補正</button><span class="val" id="drOffset">+0ms</span></span>
+      </label>
+      <p>拍子・くり返し・BPM はメトロノーム画面のリズムグループで変えます。打点は拍に付いているので、BPM や speed を変えてもずれません。</p>
+      <div class="foot"><button id="drCfgClose" type="button">閉じる</button></div>
+    </div>
+  </div>
+  <div class="dr-sheet dr-cal" id="drCal">
+    <h1>タップ補正</h1>
+    <p>クリックに合わせて下のパッドを 8 回叩いてください。叩いてから音になるまでの遅れを測り、重ね録りの位置から差し引きます。</p>
+    <div class="dr-calpad" id="drCalPad">ここを叩く</div>
+    <div class="dr-calres" id="drCalRes">—</div>
+    <div class="pair" style="display:flex;gap:8px">
+      <button id="drCalRetry" type="button">やり直す</button>
+      <button id="drCalClose" type="button">閉じる</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ earphone delay（イヤホン遅延の補正）ダイアログ。showModal で最前面（全画面中も）に出す ============ -->
 <dialog class="lat-dialog" id="latDialog" aria-labelledby="latTitle">
   <form method="dialog">
@@ -743,6 +963,7 @@
 
        domain    … 純粋。エンティティ生成・拍子計算・定数・ID/クランプ・派生計算の唯一の真実
                    Sequence › RhythmGroup › RhythmPattern › Rhythm（DOM も状態も持たない）
+                   DrumDomain … ドラムの打点（楽器・拍位置）とクオンタイズ
        store     … 状態コンテナ。domain entity と編集付随状態を getState/apply/subscribe/
                    snapshot/restore の一定インタフェースで扱う（DOM も再生制御も持たない）
        infra     … ブラウザ API アダプタ。Yaml / SoundGateway / ClockGateway /
@@ -750,15 +971,17 @@
        usecase   … 操作の集約と DTO⇔entity 変換。編集操作はエンティティ階層ごとに分割
                    （SequenceService / GroupService / PatternService / RhythmService）。
                    ほかに HistoryService / SequenceMapper / SequenceIO /
-                   PlaybackScheduler / VideoSync / Transport
+                   PlaybackScheduler / VideoSync / Transport、
+                   ドラムは DrumService（打点の編集）/ DrumPlayback（拍の頭ごとの予約・叩いた位置の対応づけ）
        ui        … DOM のみ。責務ごとに分割（RhythmView / PatternView / GroupView /
-                   SequenceView と TempoView / TransportView / IoView / VideoView）。
+                   SequenceView と TempoView / TransportView / IoView / VideoView / DrumView）。
                    操作は各サービスを呼び、Store.subscribe と Transport の view を購読して再描画
        bootstrap … 各層を配線（infra を usecase に注入、ui を購読登録）して初期描画
 
      エンティティ階層（データ構造）:
        Sequence      … 曲ひとつ分（name, tempo, preroll, video, groups）
-        └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern）
+        └ RhythmGroup … 曲の一区間（id, name, reps, cue, pattern, drums）
+            ├ drums … ドラムの打点 [{p, inst}]。周（pattern 1回ぶん）の先頭からの拍位置
             └ RhythmPattern … 拍子の並び（rhythms）。YAML の pattern に対応
                 └ Rhythm … 1拍子 例 7/8（num, den, accents）。UI 表示は「拍子」
 
@@ -775,10 +998,230 @@
                                            長さは num。1拍に複数置ける。既定は全拍 [0]＝拍の頭だけ
                                            accents=強く鳴らす拍番号（0起点）の配列。既定 [0]。muted=無音の拍番号。既定 []
        RhythmPattern {rhythms:[Rhythm]}  … 拍子の並び（YAML の pattern に対応）
-       RhythmGroup   {id,name,reps,bpm,toBpm,cue,pattern} … toBpm=到達BPM（線形テンポ変化）
+       RhythmGroup   {id,name,reps,bpm,toBpm,cue,pattern,drums} … toBpm=到達BPM（線形テンポ変化）
+                                           drums=ドラムの打点 [{p, inst}]（DrumDomain）。空＝ドラムなし
        Sequence      {name,tempo,preroll,video,groups} … 曲ひとつ分
      生成はすべてここを通し、reps/cue/name/tempo/preroll の正規化を1箇所に集約する。
      ======================================================================== */
+  /* ========================================================================
+     DrumDomain … ドラムパターン（打点）の純粋計算。Domain と同じく DOM・状態・音を持たない。
+     打点は RhythmGroup に付く1レイヤー（group.drums）で、1周（＝1パターン）はグループの拍子の並び（rhythms）の
+     drumSpan 回ぶん。既定は拍子が1つのグループなら2回（4/4 なら 4/4×2＝2小節で1パターン）、2つ以上なら1回。
+     くり返し（reps）の間は、同じパターンを rep % drumSpan 回目の位置から順に鳴らす（4/4 ×8 なら 2小節 ×4）。
+       Hit {p, inst} … p＝周の先頭からの拍位置（拍＝その小節の分母の音価。7/8 なら8分音符）。
+                       0 <= p < 周の拍数。秒ではなく拍で持つので、グループBPM・到達BPM・speed・
+                       動画同期のどれで鳴らしても拍からずれない
+     打点は叩いたままの位置（唯一の真実）で持ち、譜面・再生用の格子は quantize で都度求める。
+     ======================================================================== */
+  const DrumDomain = (() => {
+    // 楽器の正。表記位置 pos は五線の上端（第5線）を 0、半段ごとに +1（第1間 = 7）。
+    // head: "x" シンバル / "o" 太鼓。label は譜面に添える文字（表記では区別しないぶんを文字で補う）。
+    const INST = {
+      crash:    {name:"Crash",   kind:"cym", pos:-1, head:"x", label:null},
+      effect:   {name:"Effect",  kind:"cym", pos:-1, head:"x", label:"Eff."},
+      ride:     {name:"Ride",    kind:"cym", pos:0,  head:"x", label:"Ride"},
+      hh_close: {name:"HH close",kind:"cym", pos:0,  head:"x", label:null},
+      hh_open:  {name:"HH open", kind:"cym", pos:0,  head:"x", label:null, open:true},
+      tom_hi:   {name:"Hi",      kind:"drm", pos:1,  head:"o", label:null},
+      tom_low:  {name:"Low",     kind:"drm", pos:2,  head:"o", label:null},
+      snare:    {name:"Snare",   kind:"drm", pos:3,  head:"o", label:null},
+      ghost:    {name:"Ghost",   kind:"drm", pos:3,  head:"o", label:null, ghost:true},
+      rim:      {name:"Rim",     kind:"drm", pos:3,  head:"x", label:null},
+      floor:    {name:"Floor",   kind:"drm", pos:5,  head:"o", label:null},
+      kick:     {name:"Kick",    kind:"kick",pos:7,  head:"o", label:null}
+    };
+    // 上下順（高い音が上）。保存時のキー順もこれ
+    const ORDER = ["crash","effect","ride","hh_open","hh_close","tom_hi","tom_low","snare","ghost","rim","floor","kick"];
+    // パッド配置。太鼓系は左、シンバル系は右、Kick と Snare は両側。weights は幅の比率、未指定は 1
+    const LAYOUT = {
+      left:  {top:["tom_hi","tom_low","floor"],   bottom:["snare","ghost","rim","kick"]},
+      right: {top:["crash","effect","ride"],      bottom:["kick","snare","hh_close","hh_open"]},
+      weights:{left:{snare:1.5,ghost:0.9,rim:0.9,kick:1.3}, right:{hh_close:1.6,kick:1.4,snare:1,hh_open:1,ride:1.2}}
+    };
+    const isInst = v => Object.prototype.hasOwnProperty.call(INST, v);
+
+    /* 1拍の基本分割数：拍が4分音符なら 16分＝4分割、8分音符なら 2分割、16分以下なら分割なし。
+       慣用の音価でない分母（5, 7, 11…）は 4分割を既定にする */
+    const baseSub = den => { const b = 16/den; return Number.isInteger(b) ? Math.max(1, b) : (b < 1 ? 1 : 4); };
+    // 拍子の並びの拍数（渡した並びの合計。パターン1周ぶんなら cycleRhythms を渡す）
+    const cycleBeats = rhythms => (rhythms || []).reduce((n, r) => n + r.num, 0);
+    /* パターンの長さ（拍子の並びの何回ぶんか）。1〜8、null＝自動。
+       自動は「拍子が1つだけなら2回、2つ以上なら1回」＝既定で2小節以上を1つのパターンとして扱う。
+       打点を置いたグループでは値を固定する（DrumService / PatternService）。拍子を足しても長さが勝手に変わらないように */
+    const SPAN_MAX = 8;
+    const normSpan = v => { const n = Math.round(Number(v)); return (v == null || v === "" || !(n >= 1 && n <= SPAN_MAX)) ? null : n; };
+    const autoSpan = rhythms => (rhythms && rhythms.length === 1) ? 2 : 1;
+    const spanOf = g => (g && g.drumSpan != null) ? g.drumSpan : autoSpan(g && g.pattern.rhythms);
+    function repeatRhythms(rhythms, span){
+      const out = [];
+      for(let k = 0; k < span; k++) (rhythms || []).forEach(r => out.push(r));
+      return out;
+    }
+    const cycleRhythms = g => repeatRhythms(g.pattern.rhythms, spanOf(g));
+    // くり返し rep 回目・その周の cb 拍目 → パターン内の拍位置
+    const cyclePos = (g, rep, cb) => (rep % spanOf(g)) * cycleBeats(g.pattern.rhythms) + cb;
+    // 並び1回ぶんの小節の移り先 map を、パターン（span 回ぶん）の小節の移り先へ広げる
+    function expandMap(map, oldLen, newLen, span){
+      const out = [];
+      for(let k = 0; k < span; k++) for(let i = 0; i < oldLen; i++) out.push(map[i] < 0 ? -1 : map[i] + k * newLen);
+      return out;
+    }
+    /* パターンの長さを from → to 回ぶんへ。長くするときは今のパターンを後ろへ敷き詰め（2小節目以降は複製から直す）、
+       短くするときははみ出した打点を落とす。passBeats＝拍子の並び1回ぶんの拍数 */
+    function respan(hits, passBeats, from, to){
+      const end = to * passBeats, len = from * passBeats, out = [];
+      (hits || []).forEach(h => { for(let q = h.p; q < end - 1e-9; q += len) out.push({p: round3(q), inst: h.inst}); });
+      return out.sort((a, b) => a.p - b.p);
+    }
+    // 各小節の先頭の拍位置
+    function barStarts(rhythms){
+      const out = []; let p = 0;
+      (rhythms || []).forEach(r => { out.push(p); p += r.num; });
+      return out;
+    }
+    // 拍番号 b（周の先頭から 0 起点）→ {bar, beat}（小節番号と小節内の拍）
+    function locate(rhythms, b){
+      let p = 0;
+      for(let i = 0; i < rhythms.length; i++){
+        if(b < p + rhythms[i].num) return {bar:i, beat:b - p};
+        p += rhythms[i].num;
+      }
+      return {bar:rhythms.length, beat:0};
+    }
+    const denAt = (rhythms, b) => { const l = locate(rhythms, Math.floor(b)); return (rhythms[l.bar] || rhythms[rhythms.length-1] || {den:4}).den; };
+
+    const round3 = v => Math.round(v * 1000) / 1000;
+    /* 打点の正規化。受け付ける形：
+         [{p, inst}]              … 実行時の形（下書き・履歴）
+         {kick:[0, 1.5], ...}      … 保存形式（楽器ごとの拍位置の並び）
+       楽器名が不明・位置が数値でない・周の外（0 未満、拍数以上）の打点は落とす。位置順に並べる */
+    function normHits(v, nb){
+      const out = [];
+      const push = (p, inst) => {
+        const n = Number(p);
+        if(!isInst(inst) || p == null || p === "" || !isFinite(n) || n < 0 || n >= nb) return;
+        out.push({p: round3(n), inst});
+      };
+      if(Array.isArray(v)) v.forEach(h => { if(h && typeof h === "object") push(h.p, h.inst); });
+      else if(v && typeof v === "object") Object.keys(v).forEach(inst => {
+        const list = v[inst];
+        (Array.isArray(list) ? list : [list]).forEach(p => push(p, inst));
+      });
+      return out.sort((a, b) => a.p - b.p);
+    }
+    // 保存用：楽器ごとの拍位置（昇順）。打点が無ければ null（キーごと省略＝後方互換）
+    function toDto(hits){
+      if(!hits || !hits.length) return null;
+      const out = {};
+      ORDER.forEach(inst => {
+        const ps = hits.filter(h => h.inst === inst).map(h => round3(h.p)).sort((a, b) => a - b);
+        if(ps.length) out[inst] = ps;
+      });
+      return out;
+    }
+
+    /* 打点 → 格子（クオンタイズ）
+       格子は「拍ごと」に選ぶ。候補は基本分割に加えて 2〜9 分割の連符。
+       その拍に落ちた打点との残差（拍長比）の合計が最小の格子を採用する。
+       連符系には小さな罰則（拍あたり一定）を付け、16分を少し遅れて叩いた程度では3連と判定しないようにする。
+       - 基本分割で割り切れる分割（base=4 に対する 2 など）は基本と同じ位置しか作らないので除く
+       - 罰則は「4分音符の拍で 0.04 拍前後」相当。拍が短い分母では同じ秒数になるように拍長比で拡大する
+       - 細かい連符ほど、打点がそれなりに揃っていないと候補にしない（min = 最低打点数）
+       返り値: {beats:[{sub, base, slots:[Map<inst,{n,dev}>]}]}  dev = 格子からのずれ（スロット長比、-0.5..0.5） */
+    const TUPLETS = [
+      {sub:2, pen:0.03}, {sub:3, pen:0.04}, {sub:5, pen:0.06, min:3}, {sub:6, pen:0.07, min:3},
+      {sub:7, pen:0.08, min:4}, {sub:8, pen:0.05, min:3}, {sub:9, pen:0.09, min:5}
+    ];
+    const gridsFor = (base, count) => [{sub:base, pen:0}]
+      .concat(TUPLETS.filter(t => base % t.sub !== 0).map(t => ({sub:t.sub, pen:t.pen*(4/base), min:t.min})))
+      .filter((g, i, a) => a.findIndex(x => x.sub === g.sub) === i && count >= (g.min || 0));
+    function chooseGrid(fracs, fallback){
+      if(!fracs.length) return fallback;
+      let best = null;
+      gridsFor(fallback, fracs.length).forEach(g => {
+        let cost = g.pen;
+        fracs.forEach(f => { const k = f * g.sub; cost += Math.abs(k - Math.round(k)) / g.sub; });
+        if(!best || cost < best.cost - 1e-9) best = {sub:g.sub, cost};
+      });
+      return best.sub;
+    }
+    // 拍位置 → {b, f}。拍末ぎりぎり（8% 以内）の打点は次の拍頭として扱い、周末は周頭へ回す
+    function split(p, nb){
+      let b = Math.floor(p), f = p - b;
+      if(f > 0.92){ b += 1; f -= 1; }
+      b = ((b % nb) + nb) % nb;
+      return {b, f};
+    }
+    function quantize(rhythms, hits){
+      const nb = cycleBeats(rhythms);
+      const perBeat = Array.from({length:nb}, () => []);
+      (hits || []).forEach(h => { if(nb){ const s = split(h.p, nb); perBeat[s.b].push({h, f:s.f}); } });
+      const beats = perBeat.map((list, b) => {
+        const base = baseSub(denAt(rhythms, b));
+        // 格子の判定にはゴーストを使わない（間を埋める音なので格子を歪めやすい）。配置は選ばれた格子に従う
+        const sub = chooseGrid(list.filter(x => !INST[x.h.inst].ghost).map(x => x.f), base);
+        const slots = Array.from({length:sub}, () => new Map());
+        list.forEach(({h, f}) => {
+          const k = f * sub; let idx = Math.round(k); const dev = k - idx;
+          idx = ((idx % sub) + sub) % sub;
+          const prev = slots[idx].get(h.inst);
+          slots[idx].set(h.inst, {n:(prev?prev.n:0)+1, dev: prev && Math.abs(prev.dev) > Math.abs(dev) ? prev.dev : dev});
+        });
+        return {sub, base, slots};
+      });
+      return {beats};
+    }
+    // 打点がいまの格子でどのスロットに落ちるか
+    function slotOf(grid, p){
+      const nb = grid.beats.length, s = split(p, nb);
+      const sub = grid.beats[s.b].sub, k = ((Math.round(s.f*sub) % sub) + sub) % sub;
+      return {b:s.b, k, sub};
+    }
+    const slotPos = (b, k, sub) => b + k / sub;
+    // 拍位置 → いまの格子で最寄りのスロット {b, k, sub, p}。周末は {b:nb, p:nb}（範囲の Out 点に使う）
+    function snap(grid, p){
+      const nb = grid.beats.length;
+      let b = Math.floor(p), f = p - b; if(f > 0.92){ b += 1; f -= 1; }
+      if(b >= nb) return {b:nb, k:0, sub:1, p:nb};
+      b = Math.max(0, b);
+      const sub = grid.beats[b].sub, k = Math.max(0, Math.min(sub - 1, Math.round(f * sub)));
+      return {b, k, sub, p: slotPos(b, k, sub)};
+    }
+    const UNCERTAIN = 0.3;  // 採用した格子からさらに 30% 以上ずれた打点は色を変えて知らせる
+    const isUncertain = h => Math.abs(h.dev) >= UNCERTAIN;
+    /* 再生用：拍ごとの発音 [{f, inst}]（f＝拍内の位置 0..1）。格子に吸着した位置で鳴らす。
+       ghost は snare と同じスロットにあれば鳴らさない（譜面の表記と同じ扱い） */
+    function playSlots(grid){
+      return grid.beats.map(bt => {
+        const out = [];
+        bt.slots.forEach((cell, k) => cell.forEach((h, inst) => {
+          if(INST[inst].ghost && cell.has("snare")) return;
+          out.push({f: k / bt.sub, inst});
+        }));
+        return out;
+      });
+    }
+    /* 拍子の並びが変わったときの打点の引っ越し。打点は「何小節目の何拍目のどこ」に付いたまま動く。
+       barMap[i] = 旧 i 小節目の移り先（-1 なら消えた小節）。移り先の拍数を超えた拍の打点は落とす */
+    function remap(oldRhythms, newRhythms, hits, barMap){
+      const newStart = barStarts(newRhythms);
+      const nb = cycleBeats(newRhythms), out = [];
+      (hits || []).forEach(h => {
+        const b = Math.floor(h.p + 1e-9), loc = locate(oldRhythms, b);
+        const to = barMap[loc.bar];
+        if(to == null || to < 0 || !newRhythms[to] || loc.beat >= newRhythms[to].num) return;
+        const p = round3(newStart[to] + loc.beat + (h.p - b));
+        if(p >= 0 && p < nb) out.push({p, inst:h.inst});
+      });
+      return out.sort((a, b) => a.p - b.p);
+    }
+    const identityMap = n => Array.from({length:n}, (_, i) => i);
+
+    return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
+            quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
+            SPAN_MAX, normSpan, autoSpan, spanOf, repeatRhythms, cycleRhythms, cyclePos, expandMap, respan};
+  })();
+
   const Domain = (() => {
     // 保存済みの特殊な拍子との互換性のため、取り込みは分母・分子とも1〜32を許容する。
     // 新規追加の分母は一般的な音価（2の累乗）に限定する。
@@ -977,6 +1420,7 @@
       spec = spec || {};
       const rhythms = spec.rhythms || (spec.pattern && spec.pattern.rhythms) || [];
       const reps = clampInt(spec.reps, 1, 999, 1);
+      const pattern = makePattern(rhythms);
       return {
         id: uid(),
         name: (spec.name == null || String(spec.name) === "") ? "リズムグループ" : String(spec.name),
@@ -985,7 +1429,12 @@
         toBpm: normBpm(spec.toBpm),             // 到達BPM。null=テンポ一定。値があるとグループ末尾へ向けて線形変化
         cue: normCue(spec.cue),                 // グループ先頭（=rep0）の動画位置。後方互換で維持
         repCues: fitCues(spec.repCues, reps),   // 各くり返し(rep)の動画位置。パッドの位置突き合わせに使う（UI なし）
-        pattern: makePattern(rhythms)
+        pattern,
+        // ドラムのパターンの長さ（拍子の並びの何回ぶんか）。null＝自動（拍子が1つなら2回＝2小節）
+        drumSpan: DrumDomain.normSpan(spec.drumSpan),
+        // ドラムの打点（1周＝パターン1回ぶん。DrumDomain の Hit の配列）。空＝ドラムなし
+        drums: DrumDomain.normHits(spec.drums, DrumDomain.cycleBeats(DrumDomain.repeatRhythms(pattern.rhythms,
+          DrumDomain.normSpan(spec.drumSpan) || DrumDomain.autoSpan(pattern.rhythms))))
       };
     }
     function cloneGroup(g){
@@ -997,7 +1446,9 @@
         toBpm: g.toBpm != null ? g.toBpm : null,
         cue: g.cue,
         repCues: fitCues(g.repCues, g.reps),
-        pattern: makePattern(g.pattern.rhythms)
+        pattern: makePattern(g.pattern.rhythms),
+        drumSpan: g.drumSpan != null ? g.drumSpan : null,
+        drums: (g.drums || []).map(h => ({p:h.p, inst:h.inst}))
       };
     }
     // Sequence entity：バラバラの name/tempo/preroll/video/groups を1つに正規化する
@@ -1235,6 +1686,12 @@
         }else{
           L.push("    pattern: [" + g.pattern.join(", ") + "]");
         }
+        if(g.drumSpan != null) L.push("    drumSpan: " + g.drumSpan);
+        // ドラムの打点：楽器ごとに、パターンの先頭からの拍位置（拍＝その小節の分母の音価）を並べる
+        if(g.drums){
+          L.push("    drums:");
+          Object.keys(g.drums).forEach(inst => L.push("      " + inst + ": [" + g.drums[inst].join(", ") + "]"));
+        }
       });
       return L.join("\n") + "\n";
     }
@@ -1309,11 +1766,14 @@
     };
   })();
 
-  /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音合成。刻みの進行や DOM は持たない） ---------- */
+  /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音・ドラム音の合成。刻みの進行や DOM は持たない） ---------- */
   const SoundGateway = (() => {
     let ctx = null;
     // 音量係数。スライダー50%＝1.0（既定音量）、0%＝0.0（無音）、100%＝2.0（最大）。
     let vol = 1;
+    let clickOn = true;          // ドラム入力画面の「クリック」切替。false でメトロノームのクリックだけ鳴らさない
+    /* 予約済みの発音。{time, stop(), again(t, ratio)}。speed 変更・イヤホン遅延の微調整・停止で
+       クリックもドラムも同じように取り消し／打ち直す */
     const pending = new Set();
     function ensure(){
       if(!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1322,10 +1782,11 @@
     }
     function now(){ return ctx ? ctx.currentTime : 0; }
     function setVolume(factor){ vol = Math.max(0, factor); }
+    function setClickOn(on){ clickOn = !!on; }
     // 発音の3段階。裏拍（連符の2つ目以降）は表拍の下に沈むよう、低く小さく鳴らす
     const VOICE = {accent:{freq:1760, peak:0.35}, beat:{freq:880, peak:0.22}, sub:{freq:587, peak:0.10}};
     function click(level, time, span){
-      if(level === "mute") return;
+      if(level === "mute" || !clickOn) return;
       const v = VOICE[level] || VOICE.beat;
       const peak = v.peak * vol;
       if(peak < 0.0002) return;   // 無音（スライダー0%付近）なら発音しない
@@ -1338,22 +1799,121 @@
       gain.gain.setValueAtTime(peak, time);
       gain.gain.exponentialRampToValueAtTime(0.0001, time + decay);
       osc.connect(gain).connect(ctx.destination);
-      const note = {osc, level, time, span};
+      const note = {time, stop: () => osc.stop(), again: (t, ratio) => click(level, t, span * ratio)};
       pending.add(note);
       osc.onended = () => { pending.delete(note); osc.disconnect(); gain.disconnect(); };
       osc.start(time); osc.stop(time + decay + 0.015);
     }
+
+    /* ---- ドラム音 ----
+       音源：WebAudioFont の GM ドラムプリセットを1音ずつ読む（ドラム入力画面を開いたときに読み込む）。
+       読めない／読み込み前は内蔵の合成音で鳴らす。1打ごとに GainNode を挟み、取り消しはその切断で行う */
+    let drumBus = null, noiseBuf = null, player = null, kit = null;
+    let drumVol = 1;
+    function setDrumVolume(factor){ drumVol = Math.max(0, factor); if(drumBus) drumBus.gain.value = 0.9 * drumVol; }
+    function ensureDrums(){
+      ensure();
+      if(drumBus) return;
+      drumBus = ctx.createGain(); drumBus.gain.value = 0.9 * drumVol; drumBus.connect(ctx.destination);
+      const len = ctx.sampleRate * 2, b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+      for(let i = 0; i < len; i++) d[i] = Math.random()*2-1;
+      noiseBuf = b;
+    }
+    function env(dest, node, t, peak, decay){
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+      node.connect(g); g.connect(dest); return g;
+    }
+    function noise(dest, t, decay, peak, type, freq, q){
+      const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q || 0.7;
+      s.connect(f); env(dest, f, t, peak, decay);
+      s.start(t); s.stop(t + decay + 0.05);
+    }
+    function tone(dest, t, f0, f1, decay, peak, type){
+      const o = ctx.createOscillator(); o.type = type || "sine";
+      o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + decay*0.6);
+      env(dest, o, t, peak, decay); o.start(t); o.stop(t + decay + 0.05);
+    }
+    // ライド・クラッシュ用：非整数比のサイン数本
+    function metal(dest, t, decay, peak, base){
+      [1, 1.47, 2.09, 2.83, 3.71].forEach((r, i) => tone(dest, t, base*r, base*r*0.98, decay*(1-i*0.12), peak*(0.5/(i+1)), "triangle"));
+    }
+    const SYNTH = {
+      kick:     (d, t) => { tone(d, t, 160, 48, 0.32, 0.9); noise(d, t, 0.03, 0.35, "lowpass", 900); },
+      snare:    (d, t) => { tone(d, t, 190, 150, 0.14, 0.45, "triangle"); noise(d, t, 0.18, 0.7, "highpass", 1800); },
+      ghost:    (d, t) => { tone(d, t, 190, 160, 0.08, 0.12, "triangle"); noise(d, t, 0.09, 0.2, "highpass", 2200); },
+      rim:      (d, t) => { tone(d, t, 900, 700, 0.05, 0.5, "square"); noise(d, t, 0.06, 0.4, "bandpass", 3000, 2); },
+      hh_close: (d, t) => { noise(d, t, 0.06, 0.27, "highpass", 7000, 1); },
+      hh_open:  (d, t) => { noise(d, t, 0.35, 0.24, "highpass", 6000, 1); },
+      crash:    (d, t) => { noise(d, t, 1.2, 0.5, "bandpass", 5000, 0.5); metal(d, t, 1.0, 0.25, 520); },
+      effect:   (d, t) => { noise(d, t, 0.6, 0.6, "bandpass", 3200, 0.6); metal(d, t, 0.5, 0.3, 380); },
+      ride:     (d, t) => { metal(d, t, 0.9, 0.35, 780); noise(d, t, 0.3, 0.12, "highpass", 8000); },
+      tom_hi:   (d, t) => { tone(d, t, 300, 200, 0.28, 0.7); },
+      tom_low:  (d, t) => { tone(d, t, 220, 140, 0.32, 0.75); },
+      floor:    (d, t) => { tone(d, t, 140, 85, 0.4, 0.8); }
+    };
+    // 楽器 → GM ノート番号。ghost は snare を小さく鳴らす。effect は China(52)
+    const GM = {kick:36, snare:38, ghost:38, rim:37, hh_close:42, hh_open:46, crash:49, effect:52, ride:51, tom_hi:48, tom_low:45, floor:41};
+    const GAIN = {ghost:0.28, hh_close:0.6, hh_open:0.6, ride:0.9};
+    // time を省くと今すぐ（パッドを叩いた音）。予約（time あり）は pending に積み、取り消し・打ち直しの対象にする
+    function drum(inst, time){
+      ensureDrums();
+      const at = (time == null) ? ctx.currentTime : time;
+      const hit = ctx.createGain(); hit.connect(drumBus);
+      if(kit && kit.presets[inst]) player.queueWaveTable(ctx, hit, kit.presets[inst], at, GM[inst], 3, GAIN[inst] || 1);
+      else (SYNTH[inst] || SYNTH.snare)(hit, at);
+      if(time == null) return;
+      if(pending.size > 400){ const t0 = ctx.currentTime - 1; for(const n of [...pending]) if(n.time < t0) pending.delete(n); }
+      pending.add({time: at, stop: () => { try{ hit.disconnect(); }catch(_){} }, again: t => drum(inst, t)});
+    }
+    /* kitId: "FluidR3_GM_sf2_file:1" のような "フォント:バリエーション"。null で内蔵合成音へ戻す。
+       プレーヤ本体（WebAudioFontPlayer.js）もここで初めて読み込む＝ドラムを使わない人は何も取りに行かない */
+    const PLAYER_URL = "https://surikov.github.io/webaudiofont/npm/dist/WebAudioFontPlayer.js";
+    function withPlayer(cb){
+      if(window.WebAudioFontPlayer){ cb(true); return; }
+      let tag = document.querySelector("script[data-webaudiofont]");
+      if(!tag){ tag = document.createElement("script"); tag.src = PLAYER_URL; tag.async = true; tag.dataset.webaudiofont = "1"; document.head.appendChild(tag); }
+      tag.addEventListener("load", () => cb(!!window.WebAudioFontPlayer), {once:true});
+      tag.addEventListener("error", () => cb(false), {once:true});
+    }
+    function loadKit(kitId, onProgress){
+      const report = st => { if(onProgress) onProgress(st); };
+      if(!kitId){ kit = null; report({done:true, n:0, total:0}); return; }
+      if(kit && kit.id === kitId){ report({done:true, n:Object.keys(kit.presets).length, total:Object.keys(GM).length}); return; }
+      report({done:false});
+      withPlayer(ok => {
+        if(!ok){ report({error:"音源を取得できず、合成音で鳴らしています"}); return; }
+        ensureDrums(); if(!player) player = new window.WebAudioFontPlayer();
+        const [font, variation] = kitId.split(":");
+        const insts = Object.keys(GM), notes = [...new Set(insts.map(i => GM[i]))];
+        notes.forEach(note => {
+          const key = note + "_" + variation + "_" + font;
+          player.loader.startLoad(ctx, "https://surikov.github.io/webaudiofontdata/sound/128" + key + ".js", "_drum_" + key);
+        });
+        player.loader.waitLoad(() => {
+          const presets = {};
+          insts.forEach(i => { const v = window["_drum_" + GM[i] + "_" + variation + "_" + font]; if(v) presets[i] = v; });
+          kit = {id: kitId, presets};
+          report({done:true, n:Object.keys(presets).length, total:insts.length});
+        });
+      });
+    }
+    // 出力遅延（iOS はここが大きい）。タップ補正の結果表示用
+    const outputLatency = () => ctx ? ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) : 0;
+
     function cancelPending(){
       for(const note of [...pending]){
-        if(note.time > now()){ pending.delete(note); note.osc.stop(); }
+        if(note.time > now()){ pending.delete(note); note.stop(); }
       }
     }
     function retimePending(at, ratio){
       for(const note of [...pending]){
         if(note.time <= at) continue;
         pending.delete(note);
-        note.osc.stop();
-        click(note.level, at + (note.time - at) * ratio, note.span * ratio);
+        note.stop();
+        note.again(at + (note.time - at) * ratio, ratio);
       }
     }
     // 予約済みの発音を一律に delta 秒ずらす（再生中のイヤホン遅延の微調整用）。過去へずれるものは捨てる
@@ -1361,11 +1921,12 @@
       for(const note of [...pending]){
         if(note.time <= at) continue;
         pending.delete(note);
-        note.osc.stop();
-        if(note.time + delta > at) click(note.level, note.time + delta, note.span);
+        note.stop();
+        if(note.time + delta > at) note.again(note.time + delta, 1);
       }
     }
-    return { ensure, now, click, setVolume, retimePending, shiftPending, cancelPending, get ready(){ return !!ctx; } };
+    return { ensure, now, click, drum, loadKit, outputLatency, setVolume, setDrumVolume, setClickOn,
+             retimePending, shiftPending, cancelPending, get ready(){ return !!ctx; } };
   })();
 
   /* ---------- ClockGateway（タイミング源。刻みは AudioContext 時刻、UI 更新は rAF、先読みは setInterval） ---------- */
@@ -1753,6 +2314,19 @@
 
   /* PatternService … リズムパターン（グループ内の拍子の並び）の編集 */
   const PatternService = (() => {
+    // 拍子の並びを変える操作の共通部：打点を「何小節目の何拍目」に付いたまま新しい並びへ引っ越す。
+    // barMap(n) は旧 i 小節目の移り先の配列（-1＝消えた小節）を返す
+    // パターンが拍子の並びの複数回ぶん（drumSpan）なら、各回の中で同じように引っ越す
+    function reshape(g, mutate, barMap){
+      const has = g.drums && g.drums.length;
+      if(has && g.drumSpan == null) g.drumSpan = DrumDomain.spanOf(g);   // 並びが変わってもパターンの長さ（回数）は保つ
+      const before = g.pattern.rhythms.map(r => ({num:r.num, den:r.den}));
+      mutate();
+      if(!has) return;
+      const span = g.drumSpan;
+      g.drums = DrumDomain.remap(DrumDomain.repeatRhythms(before, span), DrumDomain.cycleRhythms(g), g.drums,
+        DrumDomain.expandMap(barMap(before.length), before.length, g.pattern.rhythms.length, span));
+    }
     return {
       setMeter(id, i, num, den){
         const g = Store.findGroup(id);
@@ -1766,13 +2340,16 @@
         HistoryService.commit();
         Store.apply(() => {
           // 連符アクセント位置も引き継ぐ。拍数が変われば normTupletAccents が
-          // 足りない拍を拍の頭で埋め、はみ出した拍を捨てる
-          Object.assign(r, Domain.makeRhythm(n, d, r.accents, r.tuplet, r.muted, r.tupletAccent));
+          // 足りない拍を拍の頭で埋め、はみ出した拍を捨てる（ドラムの打点も同じく、はみ出した拍のぶんは消える）
+          reshape(g, () => Object.assign(r, Domain.makeRhythm(n, d, r.accents, r.tuplet, r.muted, r.tupletAccent)), DrumDomain.identityMap);
         }, {render:true, idle:true});
       },
       addRhythm(id, num, den){
         HistoryService.commit();
-        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.push(Domain.makeRhythm(num, den)); }, {render:true, idle:true});
+        Store.apply(s => {
+          const g = s.groups.find(x=>x.id===id);
+          reshape(g, () => { g.pattern.rhythms.push(Domain.makeRhythm(num, den)); }, DrumDomain.identityMap);
+        }, {render:true, idle:true});
       },
       moveRhythm(id, i, dir){
         const g = Store.findGroup(id);
@@ -1780,13 +2357,19 @@
         const j = i + dir;
         if(j < 0 || j >= rs.length) return;
         HistoryService.commit();
-        Store.apply(() => { [rs[i], rs[j]] = [rs[j], rs[i]]; }, {render:true});
+        Store.apply(() => {
+          reshape(g, () => { [rs[i], rs[j]] = [rs[j], rs[i]]; },
+            n => DrumDomain.identityMap(n).map(k => k === i ? j : k === j ? i : k));
+        }, {render:true});
       },
       removeRhythm(id, i){
         const g = Store.findGroup(id);
         if(!g || g.pattern.rhythms.length <= 1 || !Number.isInteger(i) || i < 0 || i >= g.pattern.rhythms.length) return;
         HistoryService.commit();
-        Store.apply(s => { s.groups.find(x=>x.id===id).pattern.rhythms.splice(i,1); }, {render:true, idle:true});
+        Store.apply(() => {
+          reshape(g, () => { g.pattern.rhythms.splice(i,1); },
+            n => DrumDomain.identityMap(n).map(k => k < i ? k : k === i ? -1 : k - 1));
+        }, {render:true, idle:true});
       },
       // 連符（1拍の分割数）を なし→2→…→9→なし と循環させる。拍ドットの数が変わるので再描画する。
       // アクセントは拍単位のままなので、分割数を変えても accents は触らない。
@@ -1854,6 +2437,187 @@
     };
   })();
 
+  /* DrumService … リズムグループのドラムの打点（group.drums）の編集と、格子（クオンタイズ結果）の提供。
+     位置はすべて「周の先頭からの拍位置 p」。編集は打点の配列を丸ごと差し替える（格子のキャッシュは配列の同一性で判定）。
+     commit:false は重ね録りの2打目以降（1回のレックを1手の履歴にまとめる） */
+  const DrumService = (() => {
+    const cache = new Map();   // gid → {hits, sig, grid, play}
+    const sigOf = g => DrumDomain.spanOf(g) + ":" + g.pattern.rhythms.map(r => r.num + "/" + r.den).join(",");
+    const hitsOf = g => (g && Array.isArray(g.drums)) ? g.drums : [];
+    const nbOf = g => DrumDomain.cycleBeats(DrumDomain.cycleRhythms(g));
+    function entry(g){
+      const hits = hitsOf(g), sig = sigOf(g);
+      let c = cache.get(g.id);
+      if(!c || c.hits !== hits || c.sig !== sig){
+        const grid = DrumDomain.quantize(DrumDomain.cycleRhythms(g), hits);
+        c = {hits, sig, grid, play: DrumDomain.playSlots(grid)};
+        cache.set(g.id, c);
+      }
+      return c;
+    }
+    const byPos = (a, b) => a.p - b.p;
+    function edit(gid, fn, opts){
+      const g = Store.findGroup(gid);
+      if(!g) return;
+      if(!opts || opts.commit !== false) HistoryService.commit();
+      Store.apply(() => {
+        if(g.drumSpan == null) g.drumSpan = DrumDomain.spanOf(g);   // 打点を置いたらパターンの長さを固定する
+        const next = fn(hitsOf(g).slice(), g);
+        if(next) g.drums = next.sort(byPos);
+      }, {drums:true});
+    }
+    // 打点がいまの格子で (b, k) のスロット・楽器 inst に落ちているか
+    const at = (grid, sel) => h => { if(h.inst !== sel.inst) return false; const sl = DrumDomain.slotOf(grid, h.p); return sl.b === sel.b && sl.k === sel.k; };
+    const inRange = (h, a, b) => h.p >= a - 1e-6 && h.p < b - 1e-6;
+    return {
+      grid(gid){ const g = Store.findGroup(gid); return g ? entry(g).grid : {beats:[]}; },
+      // 再生用：くり返し rep 回目・その周の cb 拍目で鳴らす [{f, inst}]
+      playAt(gid, rep, cb){ const g = Store.findGroup(gid); if(!g || !hitsOf(g).length) return []; return entry(g).play[DrumDomain.cyclePos(g, rep, cb)] || []; },
+      cyclePos(gid, rep, cb){ const g = Store.findGroup(gid); return g ? DrumDomain.cyclePos(g, rep, cb) : cb; },
+      span(gid){ const g = Store.findGroup(gid); return g ? DrumDomain.spanOf(g) : 1; },
+      // パターンの長さ（拍子の並びの何回ぶんか）を変える。長くすると今のパターンを複製して敷き詰める
+      setSpan(gid, span){
+        const g = Store.findGroup(gid), to = DrumDomain.normSpan(span);
+        if(!g || to == null || to === DrumDomain.spanOf(g)) return;
+        HistoryService.commit();
+        Store.apply(() => {
+          g.drums = DrumDomain.respan(hitsOf(g), DrumDomain.cycleBeats(g.pattern.rhythms), DrumDomain.spanOf(g), to);
+          g.drumSpan = to;
+        }, {drums:true, render:true});
+      },
+      hits(gid){ return hitsOf(Store.findGroup(gid)); },
+      cycleBeats(gid){ const g = Store.findGroup(gid); return g ? nbOf(g) : 0; },
+      add(gid, p, inst, opts){
+        edit(gid, (hs, g) => {
+          const nb = nbOf(g); if(!nb) return null;
+          const q = Math.round((((p % nb) + nb) % nb) * 1000) / 1000;
+          if(q >= nb) return null;
+          hs.push({p:q, inst}); return hs;
+        }, opts);
+      },
+      // レーン／ステップのスロットをタップ：あれば消す、無ければ格子ちょうどに置く
+      toggleSlot(gid, b, k, inst){
+        edit(gid, hs => {
+          const grid = this.grid(gid), sub = grid.beats[b] ? grid.beats[b].sub : 1, hit = at(grid, {b, k, inst});
+          const rest = hs.filter(h => !hit(h));
+          if(rest.length === hs.length) rest.push({p: DrumDomain.slotPos(b, k, sub), inst});
+          return rest;
+        });
+      },
+      // 選択した音を1発だけ消す。同じ場所に重なっていれば1発ずつ減る。消し切ったら false
+      deleteAt(gid, sel){
+        const grid = this.grid(gid);
+        let left = false;
+        edit(gid, hs => {
+          const i = hs.findIndex(at(grid, sel)); if(i >= 0) hs.splice(i, 1);
+          left = hs.some(at(grid, sel));
+          return hs;
+        });
+        return left;
+      },
+      /* 選択した音を格子1つぶん前後へ。拍をまたぐときは隣の拍の格子に乗り換える。周の端では止まる。
+         動かすのは1発だけ。移動後の選択を返す（動かせなければ元の選択） */
+      nudge(gid, sel, dir){
+        const grid = this.grid(gid), beats = grid.beats, nb = beats.length;
+        if(!beats[sel.b]) return sel;
+        let b = sel.b, k = sel.k + dir, sub = beats[b].sub;
+        if(k >= sub){ if(b + 1 >= nb) return sel; b += 1; k = 0; sub = beats[b].sub; }
+        else if(k < 0){ if(b - 1 < 0) return sel; b -= 1; sub = beats[b].sub; k = sub - 1; }
+        const i = this.hits(gid).findIndex(at(grid, sel));
+        if(i < 0) return sel;
+        edit(gid, hs => { hs[i] = {p: DrumDomain.slotPos(b, k, sub), inst: sel.inst}; return hs; });
+        return {b, k, inst: sel.inst};
+      },
+      // 自動補正：拍ごとに選ばれた格子へ、ずれた打点を吸着させる
+      autoFix(gid){
+        const grid = this.grid(gid);
+        edit(gid, hs => hs.map(h => { const sl = DrumDomain.slotOf(grid, h.p); return {p: DrumDomain.slotPos(sl.b, sl.k, sl.sub), inst: h.inst}; }));
+      },
+      uncertain(gid){
+        let n = 0; this.grid(gid).beats.forEach(bt => bt.slots.forEach(c => c.forEach(h => { if(DrumDomain.isUncertain(h)) n++; })));
+        return n;
+      },
+      clear(gid){ edit(gid, () => []); },
+      // ---- 範囲（拍位置 a..b）：コピー / 貼り付け / 削除 ----
+      copy(gid, a, b){
+        if(a == null || b == null || b <= a) return null;
+        return {items: this.hits(gid).filter(h => inRange(h, a, b)).map(h => ({dp: h.p - a, inst: h.inst})), len: b - a};
+      },
+      // 貼り付けて、続けて貼れるよう次の位置（周末で止まる）を返す
+      paste(gid, p, clip){
+        if(!clip) return p;
+        edit(gid, (hs, g) => {
+          const nb = nbOf(g);
+          clip.items.forEach(it => { const q = p + it.dp; if(q < nb - 1e-6) hs.push({p: Math.round(q * 1000) / 1000, inst: it.inst}); });
+          return hs;
+        });
+        return Math.min(this.cycleBeats(gid), p + clip.len);
+      },
+      deleteRange(gid, a, b){
+        if(a == null || b == null || b <= a) return;
+        edit(gid, hs => hs.filter(h => !inRange(h, a, b)));
+      }
+    };
+  })();
+
+  /* DrumPlayback … 再生中のドラム。PlaybackScheduler の拍の頭ごとの通知を受けて、
+     ① その拍の打点を同じ時刻軸で予約する（BPM・到達BPM・speed・遅延補正はクリックと同じものに乗る）
+     ② 予約した拍の時刻を控え、パッドを叩いた時刻を「どのグループの周の何拍目」へ引き直す（重ね録り） */
+  const DrumPlayback = (() => {
+    const KEY = "csm:drums.on";
+    let on = true, force = false;   // on＝メトロノーム画面でも鳴らす（端末に保存）／force＝ドラム入力を開いている間は常に鳴らす
+    try{ on = window.localStorage.getItem(KEY) !== "0"; }catch(_){}
+    const log = [];            // 予約した拍の頭 {time, len, gid, rep, cb}（新しい順に探す）
+    let flash = null;          // 発音時刻に合わせてパッドを光らせる（ドラム入力画面）
+    const hook = {
+      beat(e, time, len){
+        log.push({time, len, gid:e.gid, rep:e.rep, cb:e.cb});
+        if(log.length > 64) log.shift();
+        if(!on && !force) return;
+        for(const h of DrumService.playAt(e.gid, e.rep, e.cb)){
+          const t = time + h.f * len;
+          SoundGateway.drum(h.inst, t);
+          if(flash) flash(h.inst, t);
+        }
+      },
+      retime(now, ratio){
+        for(const l of log){
+          if(l.time > now){ l.time = now + (l.time - now) * ratio; l.len *= ratio; }
+          else if(l.time + l.len > now){ l.len = (now - l.time) + (l.time + l.len - now) * ratio; }
+        }
+      },
+      shift(now, delta){ for(const l of log) if(l.time > now) l.time += delta; }
+    };
+    /* 時刻 T（AudioContext 時刻。叩いた時刻からタップ補正を引いたもの）→ {gid, p}。
+       直前に予約した拍の頭から、その拍の長さの何割かで拍内の位置を出す（テンポ変化の途中でも正しい）。
+       最初の拍の少し手前（半拍以内）は、周末の位置として返す（クオンタイズで周頭へ回る） */
+    function locate(T){
+      for(let i = log.length - 1; i >= 0; i--){
+        const l = log[i];
+        if(l.time > T) continue;
+        const f = (T - l.time) / l.len;
+        if(f > 2) return null;                 // 古い控え（止めたあと等）
+        return wrap(l.gid, DrumService.cyclePos(l.gid, l.rep, l.cb) + f);
+      }
+      const first = log[0];
+      if(first && first.time - T < first.len * 0.5) return wrap(first.gid, DrumService.cyclePos(first.gid, first.rep, first.cb) - (first.time - T) / first.len);
+      return null;
+    }
+    function wrap(gid, p){
+      const nb = DrumService.cycleBeats(gid);
+      if(!nb) return null;
+      return {gid, p: ((p % nb) + nb) % nb};
+    }
+    return {
+      hook, locate,
+      clearLog(){ log.length = 0; },
+      isOn: () => on,
+      setOn(v){ on = !!v; try{ window.localStorage.setItem(KEY, on ? "1" : "0"); }catch(_){} },
+      setForce(v){ force = !!v; },
+      onFlash(fn){ flash = fn; }
+    };
+  })();
+
   /* ---------- SequenceMapper（entity ⇔ 保存用 DTO。書き側 repeat⇔実行時 reps の対応もここ） ---------- */
   const SequenceMapper = (() => {
     function toDto(seq){
@@ -1885,7 +2649,11 @@
                  // 畳める形から順に 数値／数値の配列／配列の配列（Yaml 側でどの形でも書ける）
                  tupletAccent: Domain.tupletAccentDto(r),
                  ...((r.muted || []).length ? {muted: r.muted.slice()} : {})}
-              : Domain.formatRhythm(r))
+              : Domain.formatRhythm(r)),
+            // ドラムのパターンの長さは、打点があるか長さを指定したときだけ出力
+            drumSpan: (g.drumSpan != null || (g.drums || []).length) ? DrumDomain.spanOf(g) : null,
+            // ドラムの打点は1つでもあるときだけ出力（楽器ごとの拍位置。無ければ非出力＝後方互換）
+            drums: DrumDomain.toDto(g.drums)
           };
         })
       };
@@ -1920,7 +2688,9 @@
           toBpm: g.toBpm,                                // 同上。null＝テンポ一定
           cue: g.cue,
           repCues: Array.isArray(g.repCues) ? g.repCues : null,
-          rhythms
+          rhythms,
+          drumSpan: g.drumSpan,                          // 無指定は自動（拍子が1つなら2回ぶん）
+          drums: g.drums                                 // 楽器ごとの拍位置。不明な楽器・周の外の位置は落とす
         });
       });
       if(!groups.length){ groups.push(Domain.makeGroup({name:"リズムグループ1", reps:1})); notes.push("グループが空だったので、4/4拍子を持つグループを1つ作りました"); }
@@ -2089,6 +2859,7 @@
         const total = Domain.groupBeats(g);   // グループの総拍数（くり返し込み）＝線形補間の分母
         let k = 0;                            // グループ先頭からの通し拍番号
         for(let rep = 0; rep < g.reps; rep++){
+          let cb = 0;                         // rep（＝周）の先頭からの拍番号。ドラムの打点を引く位置
           // 各 rep の先頭で動画位置アンカー：repCues[rep]（無ければ rep0 は group.cue）。単調増加へクランプ
           const anc = (rc && rc[rep] != null) ? rc[rep] : (rep === 0 && g.cue != null ? g.cue : null);
           if(anc != null) vt = Math.max(vt, anc);
@@ -2102,10 +2873,10 @@
               const span = Domain.rhythmSeconds(m.den, tBpm != null ? Domain.rampBpm(ebpm, tBpm, t) : ebpm) / tp;
               for(let sub = 0; sub < tp; sub++){
                 // accent は発音直前に meter から読む（＝再生中にアクセントを変えても次の先読みから反映される）
-                events.push(Object.freeze({off, vt, gid:g.id, gbpm, toBpm:tBpm, t, rep, bar, beat, sub, meter:m}));
+                events.push(Object.freeze({off, vt, gid:g.id, gbpm, toBpm:tBpm, t, rep, bar, beat, sub, cb, meter:m}));
                 off += span; vt += span;
               }
-              k++;
+              k++; cb++;
             }
           }
         }
@@ -2152,14 +2923,18 @@
     // イベント1つ＝1発音の長さ。連符なら拍長を分割数で割る
     const pulseSeconds = e => Domain.rhythmSeconds(e.meter.den, eventBpm(e)) / Domain.tupletOf(e.meter);
     let scheduledRate = 1;
+    /* 拍の頭ごとの通知先（ドラムの打点の予約と、叩いた時刻→拍位置の対応づけに使う）。
+       beat(e, time, beatLen) / retime(now, ratio) / shift(now, delta)。未設定ならクリックだけ */
+    let beatHook = null;
     function syncRate(now){
       const rate = SpeedService.rate(), ratio = scheduledRate / rate;
       if(rate === scheduledRate) return 1;
       SoundGateway.retimePending(now, ratio);
+      if(beatHook) beatHook.retime(now, ratio);
       nextTime = now + Math.max(0, nextTime - now) * ratio;
       if(finished) endTime = now + Math.max(0, endTime - now) * ratio;
       for(const event of queue){
-        if(event.time > now){ event.time = now + (event.time - now) * ratio; event.bpm /= ratio; }
+        if(event.time > now){ event.time = now + (event.time - now) * ratio; event.bpm /= ratio; event.span *= ratio; }
       }
       scheduledRate = rate;
       return ratio;
@@ -2182,9 +2957,10 @@
         const tp = Domain.tupletOf(e.meter);
         const span = Domain.rhythmSeconds(e.meter.den, bpm) / tp;
         SoundGateway.click(Domain.clickLevel(e.meter, e.beat, e.sub), nextTime, span);
+        if(beatHook && e.sub === 0) beatHook.beat(e, nextTime, span * tp);
         // pulse=小節先頭からの通し発音番号（拍ドットの点灯位置）。bpm は拍表示のライブ更新用で、
         // ramp のときだけ実際に表示する（一定テンポでは従来どおり出さない）
-        queue.push({time:nextTime, cycle, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, sub:e.sub,
+        queue.push({time:nextTime, cycle, gid:e.gid, rep:e.rep, bar:e.bar, beat:e.beat, sub:e.sub, cb:e.cb, span,
                     pulse: e.beat * tp + e.sub, meter:e.meter, bpm, ramp: e.toBpm != null});
         nextTime += span;
         i++;
@@ -2198,11 +2974,13 @@
       LOOKAHEAD, AHEAD, queue, resetPointer, prime, primeAtIndex, pump, syncRate,
       // 以降の刻みを一律に delta 秒ずらす（再生中のイヤホン遅延の微調整。予約済みの音は SoundGateway 側で動かす）
       shift(now, delta){
+        if(beatHook) beatHook.shift(now, delta);
         nextTime = Math.max(now, nextTime + delta);
         if(finished) endTime = Math.max(now, endTime + delta);
         for(const event of queue){ if(event.time > now) event.time += delta; }
       },
       setLoop(value){ looping = !!value; },
+      setBeatHook(hook){ beatHook = hook || null; },
       plan: () => PlaybackService.plan(),
       finished: () => finished, endTime: () => endTime
     };
@@ -2389,7 +3167,7 @@
       render(){}, syncIdle(){}, updateTransport(){}, status(){}, videoMsg(){},
       setRunning(){}, startWaiting(){}, clearWaiting(){}, isWaiting(){ return false; },
       endWaiting(){}, prerollTick(){}, clearBeats(){}, paintBeats(){}, showPulse(){}, showTempo(){},
-      highlight(){}, setBeatDot(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
+      highlight(){}, setBeatDot(){}, beat(){}, readPreroll(){ return 0; }, stampCueView(){}, padUpdate(){}, padReset(){}
     };
     const isSoloMode = m => m === "solo";
     const baseStatus = () => loopGroup ? "グループ無限再生" : isSoloMode(mode) ? "グループ再生" : "再生中";
@@ -2473,6 +3251,7 @@
           view.highlight();
         }
         view.setBeatDot(e.pulse);
+        view.beat(e);                      // ドラム入力画面の再生位置（聞こえた拍）
         // BPM は拍ごとに変わるので、小節単位の showPulse とは別に毎拍更新する
         view.showTempo(e.bpm);
       }
@@ -3218,6 +3997,13 @@
         }else{
           g.pattern.rhythms.forEach((b,bi)=> sub.appendChild(RhythmView.chip(b, bi)));
         }
+        if((g.drums || []).length){      // ドラム入力で打点を置いたグループ
+          const d = document.createElement("span");
+          const bars = DrumDomain.cycleRhythms(g).length;
+          d.className = "chip drm"; d.textContent = "ドラム " + bars + "小節";
+          d.title = bars + "小節のドラムパターン（打点 " + g.drums.length + " 音）をくり返します。ドラム入力で編集";
+          sub.appendChild(d);
+        }
         const times = document.createElement("span");
         times.className = "g-times"; times.dataset.role = "times";
         times.title = "再生回数";
@@ -3446,7 +4232,7 @@
       document.addEventListener("click", e=>{
         if(!state().activeId || Transport.running() || Transport.armKind()) return;
         const protectedArea = e.composedPath().some(el => el instanceof Element &&
-          el.matches(".group, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));
+          el.matches(".group, .dr, input, select, textarea, button, label, a, [role='button'], [contenteditable]"));   // .dr＝ドラム入力の画面
         if(!protectedArea) SequenceService.setActive(null);
       }, true);
       let typing = false;
@@ -4161,14 +4947,696 @@
     return { ytSay, updateLock, syncEnabled, bind };
   })();
 
+  /* ---------- DrumView（ドラム入力：別モードの全画面ビュー） ----------
+     曲構成（リズムグループの拍子・くり返し・BPM・到達BPM）はメトロノームのものをそのまま使い、
+     ここではグループの打点（group.drums）だけを編集する。位置はすべて「周の先頭からの拍位置 p」。
+     再生は既存の Transport：▶ ＝そのグループの無限再生（重ね録り向け）、通し＝全体再生。
+     画面だけの状態（カーソル・選択・範囲・ステップ入力・REC）はここに持ち、保存・履歴には載せない。 */
+  const DrumView = (() => {
+    const el = $("drum"), scoreEl = $("drScore"), stageEl = $("drStage"), headEl = $("drHead"), rulerEl = $("drRuler");
+    const OFFSET_KEY = "csm:drums.offset", KIT_KEY = "csm:drums.kit", DEFAULT_KIT = "FluidR3_GM_sf2_file:1";
+    const ui = {
+      open:false, gid:null,
+      cursor:0, sel:null,                       // シーク位置（拍）／選択中の音 {b, k, inst}
+      stepMode:true, stepSize:2,                // 歩幅 0=基本格子、1=拍、2〜9=拍の分割数（既定 2＝8分）
+      rangeMode:false, rin:null, rout:null, clip:null,
+      rec:false, recCommitted:false,            // 重ね録り中／このレックぶんの履歴を積んだか
+      click:true,
+      offset:0,                                 // 入力遅延補正（秒）。叩いた時刻からこれを引く
+      beat:null                                 // いま聞こえている拍 {time, len, cb, gid}
+    };
+    try{ const v = Number(window.localStorage.getItem(OFFSET_KEY)); if(isFinite(v)) ui.offset = v; }catch(_){}
+    const Fmt2 = { ms: s => (s >= 0 ? "+" : "−") + Math.round(Math.abs(s)*1000) + "ms" };
+
+    const playable = () => state().groups.filter(g => g.pattern.rhythms.length);
+    // 編集対象のグループ。消えていたらアクティブ→先頭へ寄せる
+    function group(){
+      let g = ui.gid && findGroup(ui.gid);
+      if(!g || !g.pattern.rhythms.length){
+        g = findGroup(state().activeId) || playable()[0] || null;
+        ui.gid = g ? g.id : null;
+      }
+      return g;
+    }
+    const grid = () => ui.gid ? DrumService.grid(ui.gid) : {beats:[]};
+    const nbOf = g => DrumDomain.cycleBeats(DrumDomain.cycleRhythms(g));
+    // パターンのくり返し回数（くり返し ÷ パターンの長さ）。割り切れなければ小数1桁（最後は途中で終わる）
+    const loopsOf = g => { const v = g.reps / DrumDomain.spanOf(g); return Number.isInteger(v) ? v : Math.round(v * 10) / 10; };
+    const barsOf = g => DrumDomain.cycleRhythms(g).length;
+
+    function select(gid){
+      if(gid === ui.gid) return;
+      if(Transport.running()) Transport.stop(false);
+      ui.gid = gid; ui.sel = null; ui.rin = ui.rout = null; ui.rangeMode = false; ui.cursor = 0;
+      render();
+    }
+
+    /* ---------- 譜面（SVG） ---------- */
+    const Score = (() => {
+      let L = 11, TOP = 34, PW = 17, X0 = 44, TS = 14;
+      const ZOOM = 0.7;
+      let cache = {spans:[], BW:60};
+      function metrics(){
+        const h = (scoreEl.clientHeight || 130) - 2;
+        // 上のラベル帯（18px）と符幹ぶんを含めて H = 36 + 6.6L。これが枠に収まる線間を選ぶ
+        L = Math.max(6, Math.min(17 * ZOOM, (h - 36) / 6.6));
+        TOP = 18 + L * 2.6; PW = Math.round(L * 1.9); TS = Math.min(L * 1.5, 19); X0 = 28 + TS * 1.6;
+      }
+      // 画面に入れる拍数：広ければ約 2 小節、狭ければ約 1 小節
+      const bw = () => { const w = scoreEl.clientWidth || 760, want = (w < 560 ? 4.4 : 8.4) / ZOOM; return Math.max(22, Math.min(110, (w - X0 - 20) / want)); };
+      const yOf = pos => TOP + pos * L / 2;
+      /* グループを左→右に並べる。1グループ＝周1回ぶんを描き、くり返しはリピート記号と ×N で省略する。
+         xs[b] は拍 b の音符の x（xs[nb] は周末）。拍子が変わる小節の前には拍子記号ぶんの幅を足す */
+      function layout(BW){
+        let x = X0, prevR = null;
+        const spans = playable().map(g => {
+          const rs = DrumDomain.cycleRhythms(g), nb = nbOf(g), starts = DrumDomain.barStarts(rs);
+          const first = rs[0], changed = !prevR || prevR.num !== first.num || prevR.den !== first.den;
+          const gap = !prevR ? 0 : (changed ? TS * 1.7 + 14 : 10) + (loopsOf(g) > 1 ? 12 : 0);
+          x += gap;
+          const sp = {g, gid:g.id, rs, nb, starts, reps:loopsOf(g), gap, x0:x, xs:[], meters:[], grid:DrumService.grid(g.id)};
+          let bx = x;
+          rs.forEach((r, i) => {
+            const pr = i === 0 ? prevR : rs[i-1];
+            const show = !pr || pr.num !== r.num || pr.den !== r.den;
+            if(i > 0 && show) bx += TS * 1.4 + 8;
+            sp.meters.push({x: bx, show, r});
+            for(let k = 0; k < r.num; k++){ sp.xs.push(bx); bx += BW; }
+          });
+          sp.xs.push(bx);
+          x = bx;
+          prevR = rs[rs.length - 1];
+          return sp;
+        });
+        return {spans, W: x + 16};
+      }
+      const xAt = (sp, p) => { const b = Math.max(0, Math.min(sp.nb, Math.floor(p))); return b >= sp.nb ? sp.xs[sp.nb] : sp.xs[b] + (p - b) * cache.BW; };
+      function render(){
+        metrics();
+        const BW = bw(), lay = layout(BW), H = TOP + 4*L + 18, W = lay.W;
+        cache = {spans: lay.spans, BW, W};
+        const cur = ui.gid, running = Transport.running(), stemTop = yOf(-4.6);
+        let g = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="譜面">`;
+        for(let i = 0; i < 5; i++) g += `<line x1="8" y1="${TOP+i*L}" x2="${W-8}" y2="${TOP+i*L}" stroke="#7c879b" stroke-width="1"/>`;
+        g += `<rect x="7" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/><rect x="13" y="${TOP+L}" width="3" height="${2*L}" fill="#c8d0dc"/>`;
+        const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+        lay.spans.forEach((sp, si) => {
+          const isCur = sp.gid === cur, left = sp.x0 - PW/2, xEnd = sp.xs[sp.nb] - PW/2;
+          if(si > 0){ const bx = left - sp.gap + 4; g += `<line x1="${bx}" y1="${TOP}" x2="${bx}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="2"/>`; }
+          g += `<text x="${left + (sp.reps > 1 ? 8 : 0)}" y="14" fill="${isCur ? "#7fd9c0" : "#8792a6"}" font-size="11"><tspan fill="${isCur ? "#e6eaf1" : "#c8d0dc"}" font-weight="600">${esc(sp.g.name)}</tspan>${sp.reps > 1 ? "  ×" + sp.reps : ""}</text>`;
+          // 拍子記号（グループ頭は前と変わったときだけ、小節の途中で変わるときはその小節の前に）
+          sp.meters.forEach((m, i) => {
+            if(!m.show) return;
+            const tsx = m.x - PW/2 - 5 - (i === 0 && sp.reps > 1 ? 12 : 0);
+            g += `<text x="${tsx}" y="${TOP+2*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.num}</text>`;
+            g += `<text x="${tsx}" y="${TOP+4*L-1}" fill="#c8d0dc" font-size="${TS}" font-weight="600" text-anchor="end">${m.r.den}</text>`;
+          });
+          if(sp.reps > 1){
+            const dots = x => `<circle cx="${x}" cy="${TOP+1.5*L}" r="${L*0.18}" fill="#c8d0dc"/><circle cx="${x}" cy="${TOP+2.5*L}" r="${L*0.18}" fill="#c8d0dc"/>`;
+            g += `<rect x="${left}" y="${TOP}" width="3" height="${4*L}" fill="#c8d0dc"/><line x1="${left+6}" y1="${TOP}" x2="${left+6}" y2="${TOP+4*L}" stroke="#c8d0dc"/>` + dots(left+11);
+            g += `<rect x="${xEnd-3}" y="${TOP}" width="3" height="${4*L}" fill="#c8d0dc"/><line x1="${xEnd-6}" y1="${TOP}" x2="${xEnd-6}" y2="${TOP+4*L}" stroke="#c8d0dc"/>` + dots(xEnd-11);
+          }
+          if(isCur) g += `<rect x="${left}" y="${TOP-10}" width="${xEnd-left}" height="${4*L+20}" fill="rgba(127,217,192,.06)"/>`;
+          // 小節線・拍の目盛り
+          // 拍子が変わる小節は、前の小節の終わり（拍子記号の手前）に線を引く
+          sp.starts.forEach((b, i) => { if(i > 0){ const x = sp.xs[b] - PW/2 - (sp.meters[i].show ? TS * 1.4 + 8 : 0); g += `<line x1="${x}" y1="${TOP}" x2="${x}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="1"/>`; } });
+          for(let b = 0; b < sp.nb; b++) g += `<line x1="${sp.xs[b]}" y1="${TOP+4*L+4}" x2="${sp.xs[b]}" y2="${TOP+4*L+8}" stroke="#3a465b"/>`;
+          // 範囲とシーク（編集中のグループにだけ）
+          if(isCur){
+            const tx = p => xAt(sp, p) - PW/2;
+            if(ui.rin != null && ui.rout != null && ui.rout > ui.rin)
+              g += `<rect x="${tx(ui.rin)}" y="${TOP-10}" width="${tx(ui.rout)-tx(ui.rin)}" height="${4*L+20}" fill="rgba(240,140,46,.16)" stroke="#f08c2e" stroke-width="0.8"/>`;
+            if(!running){
+              const cx = tx(ui.cursor), on = ui.rangeMode;
+              g += `<line x1="${cx}" y1="${TOP-12}" x2="${cx}" y2="${TOP+4*L+12}" stroke="${on ? "#f08c2e" : "#c8d0dc"}" stroke-width="${on ? 2.5 : 1.5}" stroke-dasharray="${on ? "" : "3 3"}"/>`;
+              if(on) g += `<path d="M${cx-5} ${TOP-12} L${cx+5} ${TOP-12} L${cx} ${TOP-5} Z" fill="#f08c2e"/>`;
+            }
+          }
+          // 音符
+          sp.grid.beats.forEach((bt, b) => {
+            const bx = sp.xs[b], sw = BW / bt.sub;
+            let first = null, last = null;
+            bt.slots.forEach((cell, k) => {
+              if(!cell.size) return;
+              const x = bx + k*sw;
+              if(first == null) first = x; last = x;
+              let topY = Infinity, labels = [], rects = "";
+              cell.forEach((h, inst) => {
+                const d = DrumDomain.INST[inst], yy = yOf(d.pos), unc = DrumDomain.isUncertain(h);
+                if(d.ghost && cell.has("snare")) return;
+                const isSel = isCur && ui.sel && ui.sel.b === b && ui.sel.k === k && ui.sel.inst === inst;
+                const col = isSel ? "#7fd9c0" : (unc ? "#f08c2e" : "#eef2f8");
+                topY = Math.min(topY, yy);
+                if(isSel) g += `<circle cx="${x}" cy="${yy}" r="${L*0.85}" fill="none" stroke="#7fd9c0" stroke-width="1.5"/>`;
+                if(h.n > 1) g += `<text x="${x+8}" y="${yy-6}" fill="${col}" font-size="7">×${h.n}</text>`;
+                if(d.ghost) g += `<text x="${x-L*0.95}" y="${yy+L*0.42}" fill="${col}" font-size="${L*1.2}" text-anchor="middle">(</text><text x="${x+L*0.95}" y="${yy+L*0.42}" fill="${col}" font-size="${L*1.2}" text-anchor="middle">)</text>`;
+                const hs = L*0.4;
+                if(d.head === "x"){
+                  g += `<path d="M${x-hs} ${yy-hs} L${x+hs} ${yy+hs} M${x-hs} ${yy+hs} L${x+hs} ${yy-hs}" stroke="${col}" stroke-width="1.8" stroke-linecap="round"/>`;
+                  if(d.open) g += `<circle cx="${x}" cy="${yy-L}" r="${L*0.28}" fill="none" stroke="${col}" stroke-width="1.2"/>`;
+                } else {
+                  g += `<ellipse cx="${x}" cy="${yy}" rx="${L*0.5}" ry="${L*0.36}" fill="${col}" transform="rotate(-18 ${x} ${yy})"/>`;
+                }
+                if(d.label) labels.push(d.label);
+                rects += `<rect class="hit" data-gid="${sp.gid}" data-b="${b}" data-k="${k}" data-inst="${inst}" x="${x-L}" y="${yy-L*0.9}" width="${L*2}" height="${L*1.8}" fill="transparent"/>`;
+              });
+              g += `<line x1="${x+4.5}" y1="${topY-1}" x2="${x+4.5}" y2="${stemTop}" stroke="#eef2f8" stroke-width="1.2"/>`;
+              if(labels.length) g += `<text x="${x+4}" y="${stemTop-3}" fill="#c8d0dc" font-size="${Math.max(8,L*0.75)}" text-anchor="middle">${[...new Set(labels)].join("/")}</text>`;
+              g += rects;
+            });
+            // 基本の格子と違う割り方（3連など）を選んだ拍には連符の括弧と数字
+            if(bt.sub !== bt.base && first != null){
+              const yy = stemTop - 6, x1 = first + 1, x2 = Math.max(last + 8, first + sw*0.8);
+              g += `<path d="M${x1} ${yy+4} V${yy} H${x2} V${yy+4}" fill="none" stroke="#c8d0dc" stroke-width="1"/>`;
+              g += `<rect x="${(x1+x2)/2-6}" y="${yy-6}" width="12" height="11" fill="#1b2331"/>`;
+              g += `<text x="${(x1+x2)/2}" y="${yy+3}" fill="#c8d0dc" font-size="${Math.max(9,L*0.85)}" font-style="italic" text-anchor="middle">${bt.sub}</text>`;
+            }
+          });
+        });
+        g += `<line x1="${W-10}" y1="${TOP}" x2="${W-10}" y2="${TOP+4*L}" stroke="#a9b3c4" stroke-width="2"/></svg>`;
+        const keep = scoreEl.scrollLeft;
+        scoreEl.innerHTML = g;
+        scoreEl.scrollLeft = keep;
+      }
+      // 画面座標 → {sp, p}（周の拍位置）
+      function hitTest(clientX){
+        const svg = scoreEl.firstElementChild; if(!svg) return null;
+        const x = clientX - svg.getBoundingClientRect().left, spans = cache.spans;
+        // グループの境目の余白は半分ずつ前後のグループに割り当てる
+        const sp = spans.find((z, i) => x < z.xs[z.nb] - PW/2 + (spans[i+1] ? spans[i+1].gap / 2 : Infinity)) || spans[spans.length-1];
+        if(!sp) return null;
+        let b = 0;
+        for(let i = 0; i < sp.nb; i++) if(x >= sp.xs[i] - PW/2) b = i;
+        const p = Math.max(0, Math.min(sp.nb, b + (x - (sp.xs[b] - PW/2)) / cache.BW));
+        return {sp, p};
+      }
+      // 再生位置（拍）→ ステージ基準の x。follow なら再生位置が見えるようにスクロールする
+      function headAt(gid, p, follow){
+        const sp = cache.spans.find(z => z.gid === gid);
+        const svg = scoreEl.firstElementChild;
+        if(!sp || !svg) return null;
+        const x = xAt(sp, p) - PW/2;
+        if(follow){
+          const want = Math.max(0, x - scoreEl.clientWidth * 0.35);
+          if(Math.abs(scoreEl.scrollLeft - want) > 2) scoreEl.scrollLeft = want;
+        }
+        const pr = stageEl.getBoundingClientRect(), r = svg.getBoundingClientRect();
+        return {x: r.left - pr.left + x, top: r.top - pr.top + TOP - 12, height: 4*L + 24};
+      }
+      // 編集中のグループが見えるようにスクロール
+      function reveal(gid){
+        const sp = cache.spans.find(z => z.gid === gid); if(!sp) return;
+        const a = sp.x0 - PW, b = sp.xs[sp.nb];
+        if(a < scoreEl.scrollLeft || b > scoreEl.scrollLeft + scoreEl.clientWidth) scoreEl.scrollLeft = Math.max(0, a - 20);
+      }
+      return {render, hitTest, headAt, reveal, get spans(){ return cache.spans; }};
+    })();
+
+    // タップ位置の拍位置（格子に吸着）。別グループなら先にそちらへ切り替える（範囲モード中は切り替えない）
+    function posAt(clientX){
+      const h = Score.hitTest(clientX); if(!h) return null;
+      if(h.sp.gid !== ui.gid){ if(ui.rangeMode) return null; select(h.sp.gid); }
+      return DrumDomain.snap(grid(), h.p).p;
+    }
+    scoreEl.addEventListener("pointerup", e => {
+      if(Range.dragging) return;              // なぞって範囲を取った直後はタップ扱いしない
+      e.preventDefault();
+      const h = e.target.closest(".hit");
+      if(h){
+        if(h.dataset.gid !== ui.gid){ if(ui.rangeMode) return; select(h.dataset.gid); }
+        const sel = {b:Number(h.dataset.b), k:Number(h.dataset.k), inst:h.dataset.inst}, bt = grid().beats[sel.b];
+        ui.cursor = DrumDomain.slotPos(sel.b, sel.k, bt ? bt.sub : 1);
+        ui.sel = ui.rangeMode ? null : (ui.sel && ui.sel.b === sel.b && ui.sel.k === sel.k && ui.sel.inst === sel.inst) ? null : sel;
+        render();
+        return;
+      }
+      const p = posAt(e.clientX);
+      ui.sel = null; if(p != null) ui.cursor = p;
+      render();
+    });
+
+    /* 五線譜をなぞると範囲選択。タップ（動かさずに離す）は音符選択・シーク位置のまま */
+    const Range = (() => {
+      const SLOP = 10;
+      let down = null, dragging = false;
+      scoreEl.addEventListener("pointerdown", e => {
+        if(e.target.closest("button")) return;
+        down = {id:e.pointerId, x:e.clientX, p0:null}; dragging = false;
+      });
+      stageEl.addEventListener("pointermove", e => {
+        if(!down || e.pointerId !== down.id) return;
+        if(!dragging){
+          if(Math.abs(e.clientX - down.x) <= SLOP) return;
+          down.p0 = posAt(down.x); if(down.p0 == null){ down = null; return; }
+          dragging = true;
+          try{ stageEl.setPointerCapture(down.id); }catch(_){}
+          ui.rangeMode = true; ui.sel = null; ui.rin = ui.rout = ui.cursor = down.p0;
+        }
+        const p = posAt(e.clientX); if(p == null) return;
+        ui.rin = Math.min(down.p0, p); ui.rout = Math.max(down.p0, p); ui.cursor = p;
+        render();
+      });
+      const end = e => {
+        if(!down || e.pointerId !== down.id) return;
+        if(dragging){
+          const p = posAt(e.clientX);
+          if(p != null){ ui.rin = Math.min(down.p0, p); ui.rout = Math.max(down.p0, p); }
+          normalizeRange();
+          render();
+          setTimeout(() => { dragging = false; }, 0);
+        } else dragging = false;
+        down = null;
+      };
+      stageEl.addEventListener("pointerup", end);
+      stageEl.addEventListener("pointercancel", end);
+      return {get dragging(){ return dragging; }};
+    })();
+    // 1 格子ぶん先の位置（周末で止まる）
+    function stepAfter(p){
+      const gr = grid(), s = DrumDomain.snap(gr, p), bt = gr.beats[s.b];
+      return Math.min(gr.beats.length, p + (bt ? 1 / bt.sub : 1));
+    }
+    // In と Out は片方ずつ置ける。前後が逆なら入れ替え、同じ位置なら Out を 1 格子先へ
+    function normalizeRange(){
+      if(ui.rin == null || ui.rout == null) return;
+      if(ui.rout < ui.rin){ const t = ui.rin; ui.rin = ui.rout; ui.rout = t; }
+      if(ui.rout - ui.rin < 1e-6) ui.rout = stepAfter(ui.rin);
+    }
+
+    /* ルーラー＝曲全体のミニマップ。なぞればスクロール、タップでその位置へ */
+    const Ruler = (() => {
+      function render(){
+        const spans = Score.spans, total = spans.reduce((n, sp) => n + sp.nb, 0);
+        if(!total){ rulerEl.innerHTML = ""; return; }
+        const W = rulerEl.clientWidth || 300, H = 18;
+        let x = 0, g = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="曲全体">`;
+        spans.forEach(sp => {
+          const w = sp.nb / total * W;
+          g += `<rect x="${x}" y="3" width="${Math.max(1, w-1)}" height="${H-6}" rx="2" fill="${sp.gid === ui.gid ? "rgba(127,217,192,.28)" : "rgba(255,255,255,.07)"}"/>`;
+          g += `<text x="${x+3}" y="${H-7}" fill="#8792a6" font-size="9">${String(sp.g.name).replace(/[&<>]/g, "")}</text>`;
+          x += w;
+        });
+        const maxS = Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
+        const tw = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * W);
+        const tx = (scoreEl.scrollLeft / maxS) * (W - tw);
+        g += `<rect x="${tx}" y="1" width="${tw}" height="${H-2}" rx="3" fill="rgba(127,217,192,.12)" stroke="#7fd9c0" stroke-width="1.2"/></svg>`;
+        rulerEl.innerHTML = g;
+      }
+      const maxScroll = () => Math.max(1, scoreEl.scrollWidth - scoreEl.clientWidth);
+      function thumb(){
+        const r = rulerEl.getBoundingClientRect(), w = Math.max(24, scoreEl.clientWidth / Math.max(1, scoreEl.scrollWidth) * r.width);
+        return {r, w, x: (scoreEl.scrollLeft / maxScroll()) * (r.width - w)};
+      }
+      function setByThumbX(px){
+        const {r, w} = thumb();
+        scoreEl.scrollLeft = Math.max(0, Math.min(maxScroll(), px / Math.max(1, r.width - w) * maxScroll()));
+      }
+      let drag = null;
+      rulerEl.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        const t = thumb(), x = e.clientX - t.r.left;
+        if(x < t.x || x > t.x + t.w) setByThumbX(x - t.w / 2);
+        drag = {id:e.pointerId, x:e.clientX, at:thumb().x};
+        try{ rulerEl.setPointerCapture(e.pointerId); }catch(_){}
+      });
+      rulerEl.addEventListener("pointermove", e => { if(drag && e.pointerId === drag.id) setByThumbX(drag.at + (e.clientX - drag.x)); });
+      const up = () => { drag = null; };
+      rulerEl.addEventListener("pointerup", up); rulerEl.addEventListener("pointercancel", up);
+      scoreEl.addEventListener("scroll", () => render(), {passive:true});
+      return {render};
+    })();
+
+    /* ---------- 入力：パッド・ステップ・重ね録り ---------- */
+    function stepDiv(b){
+      const den = DrumDomain.denAt(DrumDomain.cycleRhythms(group()), b);
+      return ui.stepSize === 0 ? DrumDomain.baseSub(den) : ui.stepSize;
+    }
+    // ステップ入力のカーソルを 1 歩進める／戻す（拍をまたぐと隣の拍の歩幅で数える）
+    function stepMove(dir){
+      const g = group(); if(!g) return;
+      const nb = nbOf(g);
+      let b = Math.floor(ui.cursor + 1e-9), k;
+      if(b >= nb){ if(dir > 0) return; b = nb - 1; k = stepDiv(b); }
+      else k = Math.round((ui.cursor - b) * stepDiv(b));
+      k += dir;
+      if(k >= stepDiv(b)){ b += 1; k = 0; }
+      else if(k < 0){ b -= 1; if(b < 0){ b = 0; k = 0; } else k = stepDiv(b) - 1; }
+      ui.cursor = b >= nb ? nb : b + k / stepDiv(b);
+      render();
+    }
+    /* ステップ入力：カーソルの位置に置く。指を全部離したら 1 歩進む（同時押しは同じ位置＝和音） */
+    let stepPlaced = false;
+    function stepTap(inst){
+      const g = group(); if(!g) return;
+      const nb = nbOf(g), b = Math.floor(ui.cursor + 1e-9);
+      if(b >= nb) return;                                    // 周末より先には置けない
+      const d = stepDiv(b), p = b + Math.round((ui.cursor - b) * d) / d;
+      if(p >= nb - 1e-6) return;
+      SoundGateway.drum(inst);
+      stepPlaced = true;
+      ui.cursor = p;
+      DrumService.add(ui.gid, p, inst);
+    }
+    function stepRelease(){ if(stepPlaced){ stepPlaced = false; stepMove(+1); } }
+    let lastTap = null;
+    // パッドが叩かれた。音はすぐ出し、重ね録り中なら「いま鳴っている周の何拍目か」に打点を積む
+    function tap(inst){
+      SoundGateway.ensure();
+      if(ui.stepMode && !Transport.running()){ stepTap(inst); return; }
+      const now = SoundGateway.now();
+      SoundGateway.drum(inst);
+      if(!(Transport.running() && ui.rec)) return;
+      const loc = DrumPlayback.locate(now - ui.offset);
+      if(!loc) return;
+      // 両側のキックを同時に踏んだ等、同じ楽器が 50ms 以内に来たら 1 発とみなす
+      if(lastTap && lastTap.inst === inst && now - lastTap.at < 0.05) return;
+      lastTap = {inst, at: now};
+      DrumService.add(loc.gid, loc.p, inst, {commit: !ui.recCommitted});   // 1回のレックは1手の履歴
+      ui.recCommitted = true;
+    }
+
+    const Pads = (() => {
+      function side(id, spec, weights){
+        const root = $(id); root.innerHTML = "";
+        ["top","bottom"].forEach(rowName => {
+          const row = document.createElement("div"); row.className = "dr-prow";
+          row.style.gridTemplateColumns = spec[rowName].map(i => (weights[i] || 1) + "fr").join(" ");
+          spec[rowName].forEach(inst => {
+            const d = DrumDomain.INST[inst], b = document.createElement("div");
+            b.className = "dr-pad " + d.kind + (rowName === "bottom" ? " big" : "") + (d.ghost || inst === "rim" ? " soft" : "");
+            b.dataset.inst = inst; b.setAttribute("role", "button"); b.setAttribute("aria-label", d.name);
+            b.innerHTML = "<span>" + d.name + "</span>";
+            row.appendChild(b);
+          });
+          root.appendChild(row);
+        });
+      }
+      const flashPad = pad => { pad.classList.add("hit"); setTimeout(() => pad.classList.remove("hit"), 90); };
+      function mount(){
+        const Lx = DrumDomain.LAYOUT;
+        side("drLeft", Lx.left, Lx.weights.left); side("drRight", Lx.right, Lx.weights.right);
+        // 指ごとに pointerdown を拾う（マルチタッチ）。click は遅いので使わない
+        const root = $("drPads"), held = new Set();
+        let lastDown = 0;
+        root.addEventListener("pointerdown", e => {
+          const pad = e.target.closest(".dr-pad"); if(!pad) return;
+          e.preventDefault();
+          // pointerup を取りこぼしたときの保険：前の押下から時間が空いていたら押しっぱなし扱いを捨てる
+          if(held.size && performance.now() - lastDown > 800) held.clear();
+          held.add(e.pointerId); lastDown = performance.now();
+          flashPad(pad); tap(pad.dataset.inst);
+        }, {passive:false});
+        const up = e => { if(held.delete(e.pointerId) && held.size === 0) stepRelease(); };
+        root.addEventListener("pointerup", up); root.addEventListener("pointercancel", up);
+        // 再生した打点のパッドも発音時刻に光らせる（録った音がいまどこで鳴っているか分かる）
+        DrumPlayback.onFlash((inst, t) => {
+          if(!ui.open) return;
+          setTimeout(() => document.querySelectorAll('.dr-pad[data-inst="' + inst + '"]').forEach(flashPad),
+            Math.max(0, (t + LatencyService.seconds() - SoundGateway.now()) * 1000));
+        });
+      }
+      return {mount};
+    })();
+
+    /* ---------- 再生位置（聞こえている拍を rAF で補間） ---------- */
+    let raf = null;
+    function frame(){
+      raf = null;
+      if(!ui.open) return;
+      const b = ui.beat;
+      if(!Transport.running() || !b){ headEl.style.display = "none"; return; }
+      const heard = SoundGateway.now() - LatencyService.seconds();
+      const p = b.cb + Math.max(0, Math.min(0.999, (heard - b.time) / b.len));
+      const hp = Score.headAt(b.gid, p, true);
+      if(hp){ headEl.style.display = "block"; headEl.style.left = hp.x + "px"; headEl.style.top = hp.top + "px"; headEl.style.height = hp.height + "px"; }
+      raf = requestAnimationFrame(frame);
+    }
+    function onBeat(e){
+      if(!ui.open) return;
+      ui.beat = {time:e.time, len:e.span * Domain.tupletOf(e.meter), cb:DrumService.cyclePos(e.gid, e.rep, e.cb), gid:e.gid};
+      // 再生に合わせて編集対象のグループも移る（通し再生・グループ間の移動）
+      if(e.gid !== ui.gid){ ui.gid = e.gid; ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; render(); }
+      else if(e.bar === 0 && e.beat === 0) controls();
+      if(!raf) raf = requestAnimationFrame(frame);
+    }
+
+    /* ---------- 操作列・状態表示 ---------- */
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+    function controls(){
+      const g = group(), running = Transport.running(), cur = Transport.cur();
+      const chips = $("drGroups"), keep = chips.scrollLeft;
+      chips.innerHTML = state().groups.map(x => {
+        const ok = x.pattern.rhythms.length > 0;
+        return '<span class="dr-chip' + (x.id === ui.gid ? " cur" : "") + (running && cur.gid === x.id ? " play" : "") +
+          ((x.drums || []).length ? " has" : "") + '" data-gid="' + x.id + '"' + (ok ? "" : ' aria-disabled="true"') + ">" +
+          esc(x.name) + "<i>" + (ok ? barsOf(x) + "小節 ×" + loopsOf(x) : "") + "</i></span>";
+      }).join("") + '<span class="dr-chip" id="drGroupAdd" title="リズムグループを追加">＋</span>';
+      chips.scrollLeft = keep;
+      const curChip = chips.querySelector(".dr-chip.cur");
+      if(curChip){
+        const box = chips.getBoundingClientRect(), c = curChip.getBoundingClientRect();
+        if(c.left < box.left) chips.scrollLeft -= (box.left - c.left) + 8;
+        else if(c.right > box.right) chips.scrollLeft += (c.right - box.right) + 8;
+      }
+      $("drMeter").innerHTML = g ? "<b>" + g.pattern.rhythms.map(Domain.formatRhythm).join(" · ") + "</b>  ♩=" + Fmt.bpmSpan(g, state().bpm) : "";
+      // パターンの長さ：拍子の並びの 1・2・4・8 回ぶん（4/4 なら 1・2・4・8 小節）
+      if(g){
+        const span = DrumDomain.spanOf(g), n = g.pattern.rhythms.length, sel = $("drSpan");
+        const opts = [1, 2, 4, 8].concat(span).filter((v, i, a) => a.indexOf(v) === i && v <= DrumDomain.SPAN_MAX).sort((a, b) => a - b);
+        const key = n + ":" + opts.join(",");
+        if(sel.dataset.key !== key){
+          sel.dataset.key = key;
+          sel.innerHTML = opts.map(v => '<option value="' + v + '">' + (v * n) + "小節パターン</option>").join("");
+        }
+        sel.value = String(span);
+        sel.disabled = Transport.running();
+      }
+      // 状態
+      const st = $("drStatus");
+      if(running){
+        const pg = findGroup(cur.gid);
+        st.innerHTML = (pg ? esc(pg.name) + " " + (cur.rep + 1) + "/" + pg.reps : "再生中") + (ui.rec ? ' <span class="rec">● REC</span>' : "");
+      }else st.textContent = Transport.armKind() ? "準備中…" : "停止中";
+      $("drPlay").style.opacity = running ? ".55" : "1";
+      $("drStop").style.opacity = running || Transport.armKind() ? "1" : ".45";
+      $("drRec").classList.toggle("on", ui.rec && running);
+      $("drSong").classList.toggle("on", running && Transport.mode() === "all");
+      $("drUndo").disabled = !HistoryService.canUndo();
+      $("drRedo").disabled = !HistoryService.canRedo();
+      $("drClick").classList.toggle("on", ui.click); $("drClick").classList.toggle("off", !ui.click);
+      $("drStep").classList.toggle("on", ui.stepMode);
+      $("drMid").classList.toggle("stepping", ui.stepMode && !running);
+      const unc = ui.gid ? DrumService.uncertain(ui.gid) : 0;
+      $("drAutofix").textContent = unc ? "自動補正 " + unc : "自動補正";
+      $("drAutofix").classList.toggle("warn", unc > 0);
+      $("drHint").style.display = (g && !(g.drums || []).length && !ui.sel && !ui.rangeMode) ? "block" : "none";
+      // 歩幅：基本格子・拍・2〜9 分割。音価が慣用なら音符名（8分・16分…）、それ以外は N連
+      if(g){
+        const b = Math.min(nbOf(g) - 1, Math.floor(ui.cursor + 1e-9)), den = DrumDomain.denAt(DrumDomain.cycleRhythms(g), Math.max(0, b)), base = DrumDomain.baseSub(den);
+        const divName = d => ({2:"2分",4:"4分",8:"8分",16:"16分",32:"32分"})[den * d] || (d + "連");
+        const sel = $("drStepSize"), key = den + ":" + base;
+        if(sel.dataset.key !== key){
+          sel.dataset.key = key;
+          sel.innerHTML = '<option value="0">' + divName(base) + '</option><option value="1">拍</option>' +
+            [2,3,4,5,6,7,8,9].filter(d => d !== base).map(d => '<option value="' + d + '">' + divName(d) + "</option>").join("");
+        }
+        if(ui.stepSize === base) ui.stepSize = 0;
+        sel.value = String(ui.stepSize);
+        if(!sel.selectedOptions.length){ ui.stepSize = 0; sel.value = "0"; }
+      }
+      $("drSelbar").classList.toggle("show", !!ui.sel && !ui.rangeMode);
+      $("drRangebar").classList.toggle("show", ui.rangeMode);
+      $("drBar3").classList.toggle("sub", ui.rangeMode || !!ui.sel);
+      if(ui.rangeMode){
+        const has = ui.rin != null && ui.rout != null;
+        $("drRangeText").textContent = ui.clip ? "複製 " + ui.clip.items.length + "音" : "";
+        $("drRin").classList.toggle("set", ui.rin != null); $("drRout").classList.toggle("set", ui.rout != null);
+        $("drRpaste").disabled = !ui.clip; $("drRcopy").disabled = !has; $("drRdel").disabled = !has;
+      }
+      $("drOffset").textContent = Fmt2.ms(ui.offset);
+    }
+    function render(){
+      if(!ui.open) return;
+      const g = group();
+      if(g){ const nb = nbOf(g); if(ui.cursor > nb) ui.cursor = nb; }
+      Score.render();
+      Ruler.render();
+      controls();
+    }
+
+    /* ---------- 再生・レック ---------- */
+    function playGroup(){
+      if(Transport.running() || Transport.armKind() || !group()) return;
+      SequenceService.setActive(ui.gid);                 // グループ無限再生の対象
+      DrumPlayback.clearLog();
+      ui.sel = null;
+      Transport.start("solo", {loop:true});
+    }
+    function stop(){
+      if(Transport.armKind()) Transport.armCancel();
+      else if(Transport.running()) Transport.stop(false);
+    }
+    // Transport の再生状態が変わったとき（view.setRunning / updateTransport から）
+    function sync(){
+      if(!ui.open) return;
+      if(!Transport.running()){
+        if(!Transport.armKind()) ui.rec = false;   // 動画の頭出し待ちの間はレックの予約を残す
+        ui.beat = null; headEl.style.display = "none";
+      }
+      render();
+    }
+
+    /* ---------- 音源・タップ補正 ---------- */
+    function kitPref(){ try{ const v = window.localStorage.getItem(KIT_KEY); return v == null ? DEFAULT_KIT : v; }catch(_){ return DEFAULT_KIT; } }
+    function loadKit(id){
+      const stat = $("drKitStat");
+      stat.textContent = id ? "読込中…" : "";
+      SoundGateway.loadKit(id || null, st => {
+        if(st.error){ stat.textContent = st.error; return; }
+        if(st.done) stat.textContent = id ? (st.n === st.total ? "準備OK" : st.n + "/" + st.total + " 音のみ") : "";
+      });
+    }
+    const Cal = (() => {
+      const box = $("drCal"), pad = $("drCalPad"), res = $("drCalRes"), N = 8, BPM = 100;
+      let timer = null, next = 0, first = 0, taps = [];
+      function beat(){ const limit = SoundGateway.now() + 0.15; while(next < limit){ SoundGateway.click("beat", next, 0.6); next += 60/BPM; } }
+      function open(){
+        if(Transport.running()) Transport.stop(false);
+        SoundGateway.ensure(); SoundGateway.setClickOn(true);
+        box.classList.add("show"); taps = []; res.textContent = "0 / " + N;
+        first = next = SoundGateway.now() + 0.5;
+        clearInterval(timer); timer = setInterval(beat, 25); beat();
+      }
+      function close(){ clearInterval(timer); timer = null; box.classList.remove("show"); SoundGateway.setClickOn(ui.click); }
+      const median = a => { const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m-1] + b[m]) / 2; };
+      pad.addEventListener("pointerdown", e => {
+        e.preventDefault(); if(taps.length >= N || !timer) return;
+        const t = SoundGateway.now(), spb = 60/BPM, k = Math.round((t - first) / spb), diff = t - (first + k * spb);
+        pad.classList.add("hit"); setTimeout(() => pad.classList.remove("hit"), 90);
+        if(taps.length === 0 && k < 1) return;          // 最初のクリック前のフライングは無視
+        taps.push(diff);
+        if(taps.length < N){ res.textContent = taps.length + " / " + N; return; }
+        ui.offset = median(taps);
+        try{ window.localStorage.setItem(OFFSET_KEY, String(ui.offset)); }catch(_){}
+        res.textContent = "タップ補正 " + Fmt2.ms(ui.offset) + "（出力遅延 " + Math.round(SoundGateway.outputLatency() * 1000) + "ms 含む）";
+        controls();
+      });
+      $("drCalRetry").addEventListener("click", () => { close(); open(); });
+      $("drCalClose").addEventListener("click", close);
+      return {open, close};
+    })();
+
+    /* ---------- 開閉 ---------- */
+    function open(){
+      if(ui.open) return;
+      if(FullscreenView.isOpen && FullscreenView.isOpen()) return;
+      ui.open = true;
+      el.hidden = false;
+      document.body.classList.add("fs-lock");
+      SoundGateway.ensure();
+      SoundGateway.setClickOn(ui.click);
+      DrumPlayback.setForce(true);
+      loadKit($("drKit").value);
+      group();
+      render();
+      Score.reveal(ui.gid);
+      if(Transport.running()) sync();
+    }
+    function close(){
+      if(!ui.open) return;
+      Cal.close();
+      $("drCfg").classList.remove("show");
+      ui.open = false; ui.rec = false; ui.beat = null;
+      el.hidden = true;
+      document.body.classList.remove("fs-lock");
+      SoundGateway.setClickOn(true);
+      DrumPlayback.setForce(false);
+      SequenceView.render();                    // グループのカードに「ドラム」表示を反映
+    }
+
+    function bind(){
+      Pads.mount();
+      const on = (id, fn) => $(id).addEventListener("click", fn);
+      $("drEnter").addEventListener("click", open);
+      on("drClose", close);
+      document.addEventListener("keydown", e => {
+        if(!ui.open) return;
+        if(e.key === "Escape" && !e.target.closest("dialog")){ e.preventDefault(); close(); }
+      });
+      $("drGroups").addEventListener("click", e => {
+        const c = e.target.closest(".dr-chip"); if(!c) return;
+        if(c.id === "drGroupAdd"){
+          if(Transport.running()) Transport.stop(false);
+          SequenceService.addGroup();
+          const gs = state().groups; ui.gid = null; select(gs[gs.length - 1].id);
+          Score.reveal(ui.gid);
+          return;
+        }
+        if(c.getAttribute("aria-disabled")) return;
+        select(c.dataset.gid); Score.reveal(ui.gid);
+      });
+      on("drPlay", playGroup);
+      on("drStop", stop);
+      on("drSong", () => { if(Transport.running() || Transport.armKind()) stop(); else { DrumPlayback.clearLog(); Transport.start("all"); } });
+      on("drRec", () => {
+        if(!Transport.running()){ ui.rec = true; ui.recCommitted = false; playGroup(); if(!Transport.running() && !Transport.armKind()) ui.rec = false; controls(); return; }
+        ui.rec = !ui.rec; ui.recCommitted = false;
+        controls();
+      });
+      on("drStep", () => { if(Transport.running()) Transport.stop(false); ui.stepMode = !ui.stepMode; controls(); });
+      $("drStepSize").addEventListener("change", () => { ui.stepSize = Number($("drStepSize").value); controls(); });
+      $("drSpan").addEventListener("change", () => { if(ui.gid){ ui.sel = null; ui.rangeMode = false; ui.rin = ui.rout = null; DrumService.setSpan(ui.gid, Number($("drSpan").value)); } });
+      on("drStepBack", () => stepMove(-1));
+      on("drStepFwd", () => stepMove(+1));
+      on("drUndo", () => HistoryService.undo());
+      on("drRedo", () => HistoryService.redo());
+      on("drAutofix", () => { if(ui.gid) DrumService.autoFix(ui.gid); });
+      on("drClear", () => { if(ui.gid && DrumService.hits(ui.gid).length){ ui.sel = null; DrumService.clear(ui.gid); } });
+      on("drClick", () => { ui.click = !ui.click; SoundGateway.setClickOn(ui.click); controls(); });
+      // 選択した音の操作
+      on("drSelDel", () => { if(ui.sel && !DrumService.deleteAt(ui.gid, ui.sel)){ ui.sel = null; render(); } });
+      on("drSelLeft", () => { if(ui.sel){ ui.sel = DrumService.nudge(ui.gid, ui.sel, -1); render(); } });
+      on("drSelRight", () => { if(ui.sel){ ui.sel = DrumService.nudge(ui.gid, ui.sel, +1); render(); } });
+      on("drSelClr", () => { ui.sel = null; render(); });
+      // 範囲
+      on("drRin", () => { ui.rin = ui.cursor; normalizeRange(); render(); });
+      on("drRout", () => { ui.rout = ui.cursor; normalizeRange(); render(); });
+      on("drRcopy", () => { const c = DrumService.copy(ui.gid, ui.rin, ui.rout); if(c){ ui.clip = c; controls(); } });
+      on("drRpaste", () => { if(ui.clip){ const next = DrumService.paste(ui.gid, ui.cursor, ui.clip); ui.cursor = DrumDomain.snap(grid(), next).p; render(); } });
+      on("drRdel", () => { DrumService.deleteRange(ui.gid, ui.rin, ui.rout); });
+      on("drRclr", () => { ui.rangeMode = false; ui.rin = ui.rout = null; render(); });
+      $("drSelbar").addEventListener("pointerdown", e => e.stopPropagation());
+      $("drRangebar").addEventListener("pointerdown", e => e.stopPropagation());
+      // 設定
+      const kit = $("drKit");
+      kit.innerHTML = '<option value="' + DEFAULT_KIT + '">FluidR3 #1</option><option value="">内蔵の合成音</option>';
+      const saved = kitPref();
+      kit.value = [...kit.options].some(o => o.value === saved) ? saved : DEFAULT_KIT;
+      kit.addEventListener("change", () => { try{ window.localStorage.setItem(KIT_KEY, kit.value); }catch(_){} loadKit(kit.value); });
+      on("drCfgOpen", () => $("drCfg").classList.add("show"));
+      on("drCfgClose", () => $("drCfg").classList.remove("show"));
+      $("drCfg").addEventListener("click", e => { if(e.target === $("drCfg")) $("drCfg").classList.remove("show"); });
+      on("drCalOpen", () => Cal.open());
+      // メトロノーム画面：ドラムの打点も鳴らすか（ドラム入力の中では常に鳴らす）
+      const drumsOn = $("drumsOn");
+      drumsOn.checked = DrumPlayback.isOn();
+      drumsOn.addEventListener("change", () => DrumPlayback.setOn(drumsOn.checked));
+      // iOS のピンチ・ダブルタップ拡大を抑える（ドラム入力の中だけ）
+      el.addEventListener("gesturestart", e => e.preventDefault());
+      el.addEventListener("dblclick", e => e.preventDefault());
+      window.addEventListener("resize", () => render());
+    }
+    return {bind, open, close, render, sync, onBeat, isOpen: () => ui.open};
+  })();
+
   /* ---------- 連携：Transport への view（DOM 反映）と Store の購読ディスパッチ ---------- */
   const view = {
     render: SequenceView.render,
     syncIdle: () => { TransportView.syncIdle(); FullscreenView.sync(); },
-    updateTransport: () => { TransportView.update(); FullscreenView.updatePlay(); },
+    updateTransport: () => { TransportView.update(); FullscreenView.updatePlay(); DrumView.sync(); },
     status: TransportView.status,
     videoMsg: VideoView.ytSay,
-    setRunning: on => { TransportView.setRunning(on); FullscreenView.updatePlay(); },
+    setRunning: on => { TransportView.setRunning(on); FullscreenView.updatePlay(); DrumView.sync(); },
     startWaiting: TransportView.startWaiting,
     clearWaiting: TransportView.clearWaiting,
     isWaiting: TransportView.isWaiting,
@@ -4180,6 +5648,7 @@
     showTempo: bpm => { TransportView.showTempo(bpm); FullscreenView.showTempo(bpm); },
     highlight: () => { TransportView.highlight(); FullscreenView.sync(); },
     setBeatDot: b => { TransportView.setBeatDot(b); FullscreenView.setBeatDot(b); },
+    beat: e => DrumView.onBeat(e),
     readPreroll: TransportView.readPreroll,
     stampCueView: GroupView.stampCueView,
     padUpdate: () => { PlaybarView.update(); FullscreenView.updatePlay(); },
@@ -4202,8 +5671,8 @@
      ======================================================================== */
   HistoryService.init({
     capture: () => Store.snapshot(),
-    apply: s => { Store.restore(s); SequenceView.afterRestore(); },
-    onChange: () => SequenceView.updateHistory()
+    apply: s => { Store.restore(s); SequenceView.afterRestore(); DrumView.render(); },
+    onChange: () => { SequenceView.updateHistory(); DrumView.render(); }
   });
   VideoGateway.init({
     onMsg: (text, bad) => VideoView.ytSay(text, bad),
@@ -4217,6 +5686,8 @@
   VideoSync.init({ view });
   VideoPadService.init({ view });
   Store.subscribe(dispatch);
+  Store.subscribe(() => DrumView.render());          // ドラム入力を開いているときだけ描き直す
+  PlaybackScheduler.setBeatHook(DrumPlayback.hook);  // 拍の頭ごとにドラムの打点を予約・叩いた位置の対応づけ
   TempoView.bind();
   SpeedView.bind();
   VolumeView.bind();
@@ -4227,6 +5698,7 @@
   FullscreenView.bind();
   IoView.bind();
   VideoView.bind();
+  DrumView.bind();
 
   /* ---------- 初期化 ---------- */
   SequenceView.render();
