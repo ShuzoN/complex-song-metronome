@@ -1498,6 +1498,19 @@
       return {tuplet: {at: b, beats: 1, n: d}};
     }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
+    /* 拍子の並びが変わったときの、パートの並び全体の引っ越し。パートは拍子の並びの何回ぶん（span）かで
+       長さを持つので、各パートの各回の中で「何小節目の何拍目」に付いたまま移す。
+       barMap[i] = 旧 i 小節目の移り先（-1 なら消えた小節）。新しいパートの並びを返す（引数は書き換えない） */
+    function remapParts(parts, oldRhythms, newRhythms, barMap){
+      return (parts || []).map(pt => {
+        const from = repeatRhythms(oldRhythms, pt.span), to = repeatRhythms(newRhythms, pt.span);
+        const map = expandMap(barMap, oldRhythms.length, newRhythms.length, pt.span);
+        const next = Object.assign({}, pt);
+        if(pt.hits.length) next.hits = remap(from, to, pt.hits, map);
+        if((pt.tuplets || []).length) next.tuplets = remapTuplets(from, to, pt.tuplets, map);
+        return next;
+      });
+    }
 
     return {INST, ORDER, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
             quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
@@ -1505,7 +1518,7 @@
             makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto,
             SWING_UNITS, SWING_MIN, SWING_MAX, SWING_DEFAULT, normSwing, swingKey, swingPos,
             baseAt, TUP_N_MIN, TUP_N_MAX, TUP_BEATS_MAX, normTuplets, tupletAt, tupletSub, withTuplet, withoutTuplet,
-            respanTuplets, remapTuplets,
+            respanTuplets, remapTuplets, remapParts,
             MULTI_STEPS, STEP_TOL, stepGrid, stepBefore, stepTuplet};
   })();
 
@@ -2630,18 +2643,12 @@
 
   /* PatternService … リズムパターン（グループ内の拍子の並び）の編集 */
   const PatternService = (() => {
-    // 拍子の並びを変える操作の共通部：打点を「何小節目の何拍目」に付いたまま新しい並びへ引っ越す。
-    // barMap(n) は旧 i 小節目の移り先の配列（-1＝消えた小節）を返す
-    // ドラムのパートは拍子の並びの何回ぶん（span）かで長さを持つので、各パートの各回の中で同じように引っ越す
+    // 拍子の並びを変える操作の共通部：ドラムの打点も「何小節目の何拍目」に付いたまま新しい並びへ引っ越す。
+    // barMap(n) は旧 i 小節目の移り先の配列（-1＝消えた小節）を返す。パートの構造に沿った移し方は DrumDomain が持つ
     function reshape(g, mutate, barMap){
       const before = g.pattern.rhythms.map(r => ({num:r.num, den:r.den}));
       mutate();
-      (g.drums || []).forEach(pt => {
-        const from = DrumDomain.repeatRhythms(before, pt.span), to = DrumDomain.partRhythms(g, pt);
-        const map = DrumDomain.expandMap(barMap(before.length), before.length, g.pattern.rhythms.length, pt.span);
-        if(pt.hits.length) pt.hits = DrumDomain.remap(from, to, pt.hits, map);
-        if((pt.tuplets || []).length) pt.tuplets = DrumDomain.remapTuplets(from, to, pt.tuplets, map);
-      });
+      if((g.drums || []).length) g.drums = DrumDomain.remapParts(g.drums, before, g.pattern.rhythms, barMap(before.length));
     }
     return {
       setMeter(id, i, num, den){
