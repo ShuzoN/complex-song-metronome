@@ -1,15 +1,15 @@
 {
  "notes": [
-  "ずれ part0 occ0 0.0 hh_close",
-  "ずれ part0 occ0 0.0 kick",
-  "ずれ part0 occ0 0.2 hh_close",
-  "ずれ part0 occ0 1.0 snare",
-  "ずれ part0 occ0 1.2 hh_close",
-  "ずれ part0 occ0 2.0 kick",
-  "ずれ part0 occ0 2.1 hh_close",
-  "ずれ part0 occ0 2.2 kick",
-  "ずれ part0 occ0 3.0 snare",
-  "ずれ part0 occ0 3.2 hh_close"
+  "ずれ 0.0 hh_close",
+  "ずれ 0.0 kick",
+  "ずれ 0.2 hh_close",
+  "ずれ 1.0 snare",
+  "ずれ 1.2 hh_close",
+  "ずれ 2.0 kick",
+  "ずれ 2.1 hh_close",
+  "ずれ 2.2 kick",
+  "ずれ 3.0 snare",
+  "ずれ 3.2 hh_close"
  ],
  "texts": [
   "ずれ",

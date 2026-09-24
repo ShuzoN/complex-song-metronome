@@ -75,11 +75,8 @@ class App {
     await base.expect(this.page.locator("#drum")).toBeHidden();
   }
   groupChip(name){ return this.page.locator("#drGroups .dr-chip[data-gid]", {hasText: name}); }
-  partChip(i){ return this.page.locator(`#drParts .dr-chip[data-pi="${i}"]`); }
   async selectGroup(name){ await this.groupChip(name).click(); await base.expect(this.groupChip(name)).toHaveClass(/\bcur\b/); }
-  async selectPart(i){ await this.partChip(i).click(); await base.expect(this.partChip(i)).toHaveClass(/\bcur\b/); }
   async currentGroupName(){ return (await this.page.locator("#drGroups .dr-chip.cur").innerText()).replace(/×\d+$/, "").trim(); }
-  async currentPart(){ return Number(await this.page.locator("#drParts .dr-chip.cur").getAttribute("data-pi")); }
   async click(id){ await this.page.click("#" + id); }
   // 歩幅は横に並んだボタン。並び順は粗い→細かい
   async stepSizeOptions(){ return this.page.locator("#drStepSize button").evaluateAll(ts => ts.map(t => t.dataset.name)); }
@@ -98,8 +95,10 @@ class App {
     for(let k = 0; k < ps.length; k++) await ps[k].dispatchEvent("pointerdown", {pointerId: k + 1});
     for(let k = 0; k < ps.length; k++) await ps[k].dispatchEvent("pointerup", {pointerId: k + 1});
   }
-  // 譜面上の音符（いま見えている出現のうち n 番目）をタップして選ぶ
+  // 譜面上の音符（data-b はグループの頭からの拍、data-k はその拍の格子の何番目）
   hitRects(sel = ""){ return this.page.locator("#drScore rect.hit" + sel); }
+  // グループの長さの表示（「全 8小節」）
+  async groupLength(){ return this.page.locator("#drLen").innerText(); }
 
   // ---- 音 ----
   async audio(){ return this.page.evaluate(() => window.__audioSpy.events()); }
@@ -130,11 +129,31 @@ class App {
 
 function groupOf(doc, name){ const g = doc.groups.find(x => x.name === name); if(!g) throw new Error("no group " + name); return g; }
 
+/* 書き出したグループのドラム（パートの並び）を、グループの頭からの拍位置に並べ直す＝各小節で何が鳴るか。
+   {inst: [p...]}（昇順）。パートが1つならグループの終わりまでくり返し、2つ以上なら並べたぶんだけ鳴らす（アプリの規則のまま） */
+function groupHits(g){
+  const pb = (g.pattern || []).reduce((n, x) => n + Number(String(typeof x === "string" ? x : x.meter).split("/")[0]), 0);
+  const parts = (g.drums || []).map(d => ({span: d.span, repeat: d.repeat || 1, hits: d.hits || {}}));
+  const total = parts.reduce((n, d) => n + d.span * d.repeat, 0), out = {};
+  if(!total) return out;
+  for(let rep = 0; rep < g.repeat; rep++){
+    if(parts.length > 1 && rep >= total) break;
+    let r = rep % total, pi = 0;
+    while(r >= parts[pi].span * parts[pi].repeat){ r -= parts[pi].span * parts[pi].repeat; pi++; }
+    const d = parts[pi], p0 = (r % d.span) * pb;
+    Object.entries(d.hits).forEach(([inst, ps]) => ps.forEach(p => {
+      if(p >= p0 && p < p0 + pb) (out[inst] = out[inst] || []).push(Math.round((rep * pb + p - p0) * 1000) / 1000);
+    }));
+  }
+  Object.values(out).forEach(a => a.sort((x, y) => x - y));
+  return out;
+}
+
 const test = base.test.extend({
   app: async ({page}, use) => { const app = new App(page); await app.goto(); await use(app); }
 });
 
-module.exports = { test, expect: base.expect, App, fixture, fixtureNames, GOLDEN, groupOf, YAML };
+module.exports = { test, expect: base.expect, App, fixture, fixtureNames, GOLDEN, groupOf, groupHits, YAML };
 
 // ---- ゴールデン（フィクスチャごとの期待値ファイル）----
 // UPDATE_GOLDEN=1 のときは書き出す。リファクタリングの PR ではゴールデンを書き換えない（変わったらふるまいが変わった合図）
@@ -146,14 +165,14 @@ function golden(file, actual){
   base.expect(text, file).toBe(fs.readFileSync(p, "utf8"));
 }
 
-// 譜面の要約：音符（どの出現の何拍目のどの格子にどの楽器）と、譜面上の文字（グループ名・パート名・拍子・連符・シミレの数など）
+// 譜面の要約：音符（どのグループの何拍目のどの格子にどの楽器）と、譜面上の文字（グループ名・拍子・連符・シミレの数など）
 App.prototype.scoreDigest = async function(){
   return this.page.evaluate(() => {
     const names = {};
     document.querySelectorAll("#drGroups .dr-chip[data-gid]").forEach(c => { names[c.dataset.gid] = c.firstChild.textContent; });
     const svg = document.querySelector("#drScore svg");
     const notes = [...svg.querySelectorAll("rect.hit")].map(r =>
-      [names[r.dataset.gid], "part" + r.dataset.pi, "occ" + r.dataset.occ, r.dataset.b + "." + r.dataset.k, r.dataset.inst].join(" "));
+      [names[r.dataset.gid], r.dataset.b + "." + r.dataset.k, r.dataset.inst].join(" "));
     const texts = [...svg.querySelectorAll("text")].map(t => t.textContent.trim()).filter(Boolean);
     return {notes, texts};
   });

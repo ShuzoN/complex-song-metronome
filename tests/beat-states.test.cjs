@@ -600,7 +600,7 @@ test('meter edits keep drum hits attached to their bar and beat in every part', 
   assert.equal(run('hits(0)'), '["kick@0","snare@3.5","kick@4","hh_close@6.5"]');
 });
 
-test('parts play in order across the group repeats and taps map back to the right part', () => {
+test('parts play in order across the group repeats and taps map back to the position in the group', () => {
   const run = load(['Domain', 'Store', 'HistoryService', 'SpeedService', 'PlaybackService', 'PlaybackScheduler', 'DrumService', 'DrumPlayback']);
   run(`const clicks=[], drums=[];
     const SoundGateway={click:(level,time)=>clicks.push(time), drum:(inst,time)=>drums.push(inst+'@'+Math.round(time*1e6)/1e6)};
@@ -616,44 +616,73 @@ test('parts play in order across the group repeats and taps map back to the righ
     PlaybackService.update('all', null); PlaybackScheduler.prime(0); PlaybackScheduler.pump(10);`);
   assert.equal(run('clicks.length'), 30);
   assert.equal(run('JSON.stringify(drums)'), JSON.stringify(['kick@0','snare@1.75','kick@2','snare@3.75','crash@4','snare@4.5','snare@4.75']));
-  // 叩いた時刻 → {パート, 拍位置}。2回目の A の2小節目の頭（t=3）と、B の頭の少し手前（t=3.95＝B の頭として）
+  // 叩いた時刻 → {グループ, グループの頭からの拍位置}。4回目の頭（t=3）の裏と、B の頭の少し手前（t=3.95＝B の頭の手前）
   run('var l = DrumPlayback.locate(3.25);');
-  assert.equal(run('JSON.stringify([l.gid === group.id, l.pi, Math.round(l.p*1000)/1000])'), '[true,0,2.5]');
-  assert.equal(run('JSON.stringify([DrumPlayback.locate(3.95).pi, Math.round(DrumPlayback.locate(3.95).p*100)/100])'), '[1,1.9]');
-  assert.equal(run('DrumPlayback.locate(4.25).pi'), 1);
+  assert.equal(run('JSON.stringify([l.gid === group.id, Math.round(l.p*1000)/1000])'), '[true,6.5]');
+  assert.equal(run('Math.round(DrumPlayback.locate(3.95).p*100)/100'), 7.9);
+  assert.equal(run('DrumPlayback.locate(4.25).p'), 8.5);
   assert.equal(run('DrumPlayback.locate(50)'), null);
-  // 追記は1手の履歴にまとめられる（commit:false の2打目以降は積まない）
-  run(`DrumService.add(group.id, 1, 0.5, 'hh_close'); DrumService.add(group.id, 1, 1, 'hh_close', {commit:false});`);
-  assert.equal(run('Store.findGroup(group.id).drums[1].hits.length'), 5);
+  // 追記は1手の履歴にまとめられる（commit:false の2打目以降は積まない）。B の小節だけが変わり、A のくり返しはそのまま
+  run(`DrumService.add(group.id, 8.5, 'hh_close'); DrumService.add(group.id, 9, 'hh_close', {commit:false});`);
+  assert.equal(run('JSON.stringify(Store.findGroup(group.id).drums.map(p=>[p.span,p.repeat,p.hits.length]))'), '[[2,2,2],[1,1,5]]');
   run('HistoryService.undo();');
   assert.equal(run('Store.findGroup(group.id).drums[1].hits.length'), 3);
 });
 
-test('parts are created on first edit and can be resized, repeated, duplicated and removed', () => {
+test('the group is edited as one row of bars and identical neighbouring bars fold into repeats', () => {
   const run = load(['Domain', 'Store', 'HistoryService', 'PatternService', 'DrumService']);
   run(`const Transport={running:()=>false};
-    const g44=Domain.makeGroup({reps:5, rhythms:[{num:4,den:4}]});
+    const g44=Domain.makeGroup({reps:8, rhythms:[{num:4,den:4}]});
     Store.apply({groups:[g44]});
     HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
     const parts = () => JSON.stringify(Store.findGroup(g44.id).drums.map(p=>[p.span,p.repeat,p.hits.map(h=>h.inst+'@'+h.p).join(' ')]));`);
-  // 未作成のグループは既定のパート（4/4 なら2小節）に見え、最初の編集で実体化する
+  // 何も置いていないグループはパートなし。位置はグループの頭から（8小節＝32拍）
   assert.equal(run('g44.drums.length'), 0);
-  assert.equal(run('JSON.stringify(DrumDomain.partsOf(g44).map(p=>p.span))'), '[2]');
-  run(`DrumService.add(g44.id, 0, 0, 'kick'); DrumService.add(g44.id, 0, 6, 'snare');`);
-  assert.equal(run('parts()'), '[[2,1,"kick@0 snare@6"]]');
-  // 2小節 ×2 → 複製して 1小節 に縮めればフィルの叩き台（計 5 小節）
-  run(`DrumService.setRepeat(g44.id, 0, 2); var b = DrumService.duplicatePart(g44.id, 0); DrumService.setSpan(g44.id, b, 1);`);
-  assert.equal(run('parts()'), '[[2,2,"kick@0 snare@6"],[1,1,"kick@0"]]');
-  assert.equal(run('DrumDomain.totalPasses(Store.findGroup(g44.id).drums)'), 5);
-  // 伸ばすと今のパターンを敷き詰める
-  run(`DrumService.setSpan(g44.id, 1, 2);`);
-  assert.equal(run('parts()'), '[[2,2,"kick@0 snare@6"],[2,1,"kick@0 kick@4"]]');
+  assert.equal(run('DrumService.beats(g44.id)'), 32);
+  // 1小節目に置くと、残りの7小節は空き（くり返さない）
+  run(`DrumService.add(g44.id, 0, 'kick'); DrumService.add(g44.id, 2, 'snare');`);
+  assert.equal(run('parts()'), '[[1,1,"kick@0 snare@2"],[1,7,""]]');
+  // 1小節目をコピーして2〜4小節目へ貼ると、同じ内容の4小節は1つのパートのくり返しになる
+  run(`var clip = DrumService.copy(g44.id, 0, 4); [4, 8, 12].forEach(p => DrumService.paste(g44.id, p, clip));`);
+  assert.equal(run('parts()'), '[[1,4,"kick@0 snare@2"],[1,4,""]]');
+  // 3小節目だけを直すと、くり返しから外れる（くり返しにならない小節は続けて1つのパートにまとめる）
+  run(`DrumService.add(g44.id, 9, 'crash');`);
+  assert.equal(run('parts()'), '[[1,2,"kick@0 snare@2"],[2,1,"kick@0 crash@1 snare@2 kick@4 snare@6"],[1,4,""]]');
+  // 貼り付けは貼る先の音を置き換える（戻せば、またくり返しにまとまる）
+  run(`DrumService.paste(g44.id, 8, clip);`);
+  assert.equal(run('parts()'), '[[1,4,"kick@0 snare@2"],[1,4,""]]');
+  // 2小節のパターンのくり返しは2小節のパートにまとまる
+  run(`DrumService.add(g44.id, 7, 'crash'); var two = DrumService.copy(g44.id, 0, 8); DrumService.paste(g44.id, 8, two);`);
+  assert.equal(run('parts()'), '[[2,2,"kick@0 snare@2 kick@4 snare@6 crash@7"],[1,4,""]]');
+  // 1回の Undo は1回の編集ぶん
   run('HistoryService.undo();');
-  // 追加・削除（最後の1つは消せない）
-  run(`var c = DrumService.addPart(g44.id);`);
-  assert.equal(run('c'), 2);
-  run(`DrumService.removePart(g44.id, 2); DrumService.removePart(g44.id, 1); DrumService.removePart(g44.id, 0);`);
-  assert.equal(run('parts()'), '[[2,2,"kick@0 snare@6"]]');
+  assert.equal(run('parts()'), '[[2,1,"kick@0 snare@2 kick@4 snare@6 crash@7"],[1,2,"kick@0 snare@2"],[1,4,""]]');
+  // 全部消せばパートなし（ドラムなし）
+  run('DrumService.clear(g44.id);');
+  assert.equal(run('Store.findGroup(g44.id).drums.length'), 0);
+});
+
+test('compress and flatten keep what plays in every bar', () => {
+  const run = load(['DrumDomain']);
+  run(`var G = (reps, drums) => ({reps, pattern:{rhythms:[{num:4,den:4}]}, drums});
+    var sh = parts => JSON.stringify(parts.map(p => p.span + 'x' + p.repeat + ':' + p.hits.map(h => h.inst[0] + h.p).join(',')));
+    var bar = (r, hs) => hs.map(([p, inst]) => ({p: r * 4 + p, inst}));
+    var A = r => bar(r, [[0,'kick'],[2,'snare']]), B = r => bar(r, [[1,'hh_close']]);
+    var fold = (reps, bars) => DrumDomain.compress(G(reps, []), bars.flatMap((f, r) => f ? f(r) : []), []);`);
+  assert.equal(run('sh(fold(8, [A,A,A,A,A,A,A,A]))'), '["1x8:k0,s2"]');
+  // 2小節のくり返しは2小節のパート。くり返しにならない小節は続けて1つのパートにまとめる
+  assert.equal(run('sh(fold(8, [A,B,A,B,A,B,A,B]))'), '["2x4:k0,s2,h5"]');
+  assert.equal(run('sh(fold(5, [A,null,B,A,A]))'), '["3x1:k0,s2,h9","1x2:k0,s2"]');
+  assert.equal(run('fold(4, []).length'), 0);
+  // 以前のパート（1つだけならグループの終わりまで回す）をひと続きにしても、鳴る小節は同じ
+  run(`var old = G(8, [{span:2, repeat:1, hits:[{p:0,inst:'kick'},{p:6,inst:'snare'},{p:7.96,inst:'crash'}], tuplets:[]}]);
+    var f = DrumDomain.flatten(old);`);
+  // パートの末ぎりぎりの crash（パートの頭として鳴る）は、各2小節の頭の直前（グループの頭のものは末尾）へ
+  assert.equal(run('f.hits.map(h => h.inst[0] + h.p).join(",")'), 'k0,s6,c7.96,k8,s14,c15.96,k16,s22,c23.96,k24,s30,c31.96');
+  assert.equal(run('sh(DrumDomain.compress(old, f.hits, f.tuplets))'), '["2x4:k0,s6,c7.96"]');
+  // 小節をまたぐ連符の区間は途中で切らない（区間を含む2小節を1つの塊にする）
+  run(`var c = DrumDomain.compress(G(4, []), [2, 6, 10, 14].map(p => ({p, inst:'kick'})), [{at:2, beats:4, n:5}, {at:10, beats:4, n:5}]);`);
+  assert.equal(run('JSON.stringify(c.map(p => [p.span, p.repeat, p.tuplets]))'), '[[2,2,[{"at":2,"beats":4,"n":5}]]]');
 });
 
 test('drum audio is cancelled and retimed together with clicks', () => {
@@ -687,17 +716,20 @@ test('score occurrences write repeated patterns as simile and restart notes afte
   const run = load(['DrumDomain']);
   const occ = spec => run(`JSON.stringify(DrumDomain.occurrences(${spec}).map(o => o.mode === 'rest' ? '-' + o.passes : (o.mode === 'simile' ? '%' : '') + String.fromCharCode(65 + o.pi) + o.passes + (o.mode === 'simile' ? '<' + o.src : '')))`);
   const g = (reps, parts) => `{reps:${reps}, pattern:{rhythms:[{num:4,den:4}]}, drums:${JSON.stringify(parts)}}`;
-  // 4/4 ×8、既定（パートなし）＝2小節パターン：音符 → 2小節シミレ ×3
-  assert.equal(occ(g(8, [])), '["A2","%A2<0","%A2<0","%A2<0"]');
+  const K = [{p:0, inst:'kick'}];
+  // 4/4 ×8、既定（パートなし）＝空の小節：シミレにせず、どれも空の五線で書く（そこへ置ける）
+  assert.equal(occ(g(8, [])), '["A2","A2","A2","A2"]');
+  // 中身のあるパートのくり返しはシミレ
+  assert.equal(occ(g(8, [{span:2, repeat:1, hits:K}])), '["A2","%A2<0","%A2<0","%A2<0"]');
   // A 2小節 ×2 → B 1小節（計5）を ×10 に：パートが2つ以上なら頭から回さず、残り5小節は空き
-  assert.equal(occ(g(10, [{span:2, repeat:2, hits:[]}, {span:1, repeat:1, hits:[]}])), '["A2","%A2<0","B1","-5"]');
+  assert.equal(occ(g(10, [{span:2, repeat:2, hits:K}, {span:1, repeat:1, hits:[]}])), '["A2","%A2<0","B1","-5"]');
   // 空きの小節はどのパートでもない（鳴らさない・編集対象にしない）
   const loc = rep => run(`JSON.stringify(DrumDomain.locatePass(${g(10, [{span:2, repeat:2, hits:[]}, {span:1, repeat:1, hits:[]}])}, ${rep}, 0).pi)`);
   assert.deepEqual([0, 3, 4, 5, 9].map(loc), ['0', '0', '1', '-1', '-1']);
   // 割り切れない最後は音符（パターンの頭ぶんだけ）
-  assert.equal(occ(g(5, [{span:2, repeat:1, hits:[]}])), '["A2","%A2<0","A1"]');
+  assert.equal(occ(g(5, [{span:2, repeat:1, hits:K}])), '["A2","%A2<0","A1"]');
   // 1小節パート ×3 → 1小節シミレを小節ぶん
-  assert.equal(occ(g(3, [{span:1, repeat:3, hits:[]}])), '["A1","%A1<0","%A1<0"]');
+  assert.equal(occ(g(3, [{span:1, repeat:3, hits:K}])), '["A1","%A1<0","%A1<0"]');
 });
 
 /* ---------- ドラムのスウィング ---------- */
@@ -817,8 +849,6 @@ test('tuplet ranges round-trip through YAML and follow part length and meter edi
   assert.equal(run('tups()'), '[[2,4,5]]');
   run('HistoryService.undo(); HistoryService.undo();');
   assert.equal(run('tups()'), '[[0,4,5],[5,2,3]]');
-  // パートを伸ばすと区間も敷き詰める
-  assert.equal(run('JSON.stringify(DrumDomain.respanTuplets([{at:0,beats:4,n:5},{at:5,beats:2,n:3}], 7, 1, 2).map(t=>t.at))'), '[0,5,7,12]');
 });
 
 test('step input with tuplet steps creates, keeps and removes tuplet ranges in one undo step', () => {
@@ -826,21 +856,21 @@ test('step input with tuplet steps creates, keeps and removes tuplet ranges in o
   run(`const g=Domain.makeGroup({rhythms:[{num:4,den:4}], drums:[{span:1}]});
     Store.apply({groups:[g]});
     HistoryService.init({capture:()=>Store.snapshot(),apply:s=>Store.restore(s)});
-    const tups = () => JSON.stringify(DrumService.tuplets(g.id, 0).map(t=>[t.at,t.beats,t.n]));`);
-  run(`DrumService.add(g.id, 0, 0, 'snare', {tuplet:{at:0, beats:2, n:3}});`);
+    const tups = () => JSON.stringify(DrumService.tuplets(g.id).map(t=>[t.at,t.beats,t.n]));`);
+  run(`DrumService.add(g.id, 0, 'snare', {tuplet:{at:0, beats:2, n:3}});`);
   assert.equal(run('tups()'), '[[0,2,3]]');
-  assert.equal(run('JSON.stringify(DrumService.grid(g.id, 0).beats.map(b=>b.sub))'), '[3,3,4,4]');
+  assert.equal(run('JSON.stringify(DrumService.grid(g.id).beats.map(b=>b.sub))'), '[3,3,4,4]');
   // 重なる区間を置くと古い区間は外れる。Undo は打点と区間をまとめて戻す
-  run(`DrumService.add(g.id, 0, 1, 'kick', {tuplet:{at:1, beats:1, n:5}});`);
+  run(`DrumService.add(g.id, 1, 'kick', {tuplet:{at:1, beats:1, n:5}});`);
   assert.equal(run('tups()'), '[[1,1,5]]');
   run('HistoryService.undo();');
   assert.equal(run('tups()'), '[[0,2,3]]');
-  assert.equal(run('DrumService.hits(g.id, 0).length'), 1);
+  assert.equal(run('DrumService.hits(g.id).length'), 1);
   // 範囲のコピーは丸ごと入る区間も運ぶ
-  run('var clip = DrumService.copy(g.id, 0, 0, 2); DrumService.paste(g.id, 0, 2, clip);');
+  run('var clip = DrumService.copy(g.id, 0, 2); DrumService.paste(g.id, 2, clip);');
   assert.equal(run('tups()'), '[[0,2,3],[2,2,3]]');
-  run('DrumService.removeTuplet(g.id, 0, 3);');
+  run('DrumService.removeTuplet(g.id, 3);');
   assert.equal(run('tups()'), '[[0,2,3]]');
-  run('DrumService.clear(g.id, 0);');
+  run('DrumService.clear(g.id);');
   assert.equal(run('tups()'), '[]');
 });

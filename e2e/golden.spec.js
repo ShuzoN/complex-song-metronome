@@ -1,6 +1,6 @@
 /* フィクスチャ（e2e/fixtures/*.yml）ごとに、同じ観点を毎回確かめる。
    - 読み込んで書き出した YAML
-   - ドラム画面で各グループ・各パートを見て回ったあとでも、書き出しが変わらないこと（仮のパートは保存されない）
+   - ドラム画面で各グループを見て回ったあとでも、書き出しが変わらないこと（見るだけではパートを作り直さない）
    - 譜面に出る音符と文字
    - 通し再生で鳴る音（最初の数秒）
    期待値は e2e/golden/ にある。 */
@@ -20,11 +20,7 @@ for(const name of fixtureNames()){
       await app.openDrums();
       const chips = page.locator("#drGroups .dr-chip[data-gid]:not([aria-disabled])");
       const n = await chips.count();
-      for(let i = 0; i < n; i++){
-        await chips.nth(i).click();
-        const parts = await page.locator("#drParts .dr-chip[data-pi]").count();
-        for(let pi = 0; pi < parts; pi++) await app.selectPart(pi);
-      }
+      for(let i = 0; i < n; i++) await chips.nth(i).click();
       await chips.first().click();
       golden(name + ".score.json", await app.scoreDigest());
       await app.closeDrums();
