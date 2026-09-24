@@ -1123,12 +1123,6 @@
     };
     // 上下順（高い音が上）。保存時のキー順もこれ
     const ORDER = ["crash","effect","ride","hh_open","hh_close","tom_hi","tom_low","snare","ghost","rim","floor","kick"];
-    // パッド配置。太鼓系は左、シンバル系は右、Kick と Snare は両側。weights は幅の比率、未指定は 1
-    const LAYOUT = {
-      left:  {top:["tom_hi","tom_low","floor"],   bottom:["snare","ghost","rim","kick"]},
-      right: {top:["crash","effect","ride"],      bottom:["kick","snare","hh_close","hh_open"]},
-      weights:{left:{snare:1.5,ghost:0.9,rim:0.9,kick:1.3}, right:{hh_close:1.6,kick:1.4,snare:1,hh_open:1,ride:1.2}}
-    };
     const isInst = v => Object.prototype.hasOwnProperty.call(INST, v);
 
     /* 1拍の基本分割数：拍が4分音符なら 16分＝4分割、8分音符なら 2分割、16分以下なら分割なし。
@@ -1505,7 +1499,7 @@
     }
     const identityMap = n => Array.from({length:n}, (_, i) => i);
 
-    return {INST, ORDER, LAYOUT, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
+    return {INST, ORDER, isInst, baseSub, cycleBeats, barStarts, locate, denAt, normHits, toDto,
             quantize, slotOf, slotPos, snap, isUncertain, playSlots, remap, identityMap,
             SPAN_MAX, REPEAT_MAX, normSpan, normRepeat, autoSpan, repeatRhythms, passBeats, partRhythms, partBeats,
             makePart, defaultPart, partsOf, totalPasses, locatePass, occurrences, expandMap, respan, normDrums, cloneParts, hitsDto,
@@ -6214,9 +6208,15 @@
         });
       }
       const flashPad = pad => { pad.classList.add("hit"); setTimeout(() => pad.classList.remove("hit"), 90); };
+      // パッド配置（画面のレイアウトなのでここに持つ）。太鼓系は左、シンバル系は右、Kick と Snare は
+      // 両側。weights は幅の比率、未指定は 1
+      const LAYOUT = {
+        left:  {top:["tom_hi","tom_low","floor"],   bottom:["snare","ghost","rim","kick"]},
+        right: {top:["crash","effect","ride"],      bottom:["kick","snare","hh_close","hh_open"]},
+        weights:{left:{snare:1.5,ghost:0.9,rim:0.9,kick:1.3}, right:{hh_close:1.6,kick:1.4,snare:1,hh_open:1,ride:1.2}}
+      };
       function mount(){
-        const Lx = DrumDomain.LAYOUT;
-        side("drLeft", Lx.left, Lx.weights.left); side("drRight", Lx.right, Lx.weights.right);
+        side("drLeft", LAYOUT.left, LAYOUT.weights.left); side("drRight", LAYOUT.right, LAYOUT.weights.right);
         // 指ごとに pointerdown を拾う（マルチタッチ）。click は遅いので使わない
         const root = $("drPads"), held = new Set();
         let lastDown = 0;
