@@ -2035,6 +2035,22 @@
     };
   })();
 
+  /* ---------- DrumTapLatency（ドラム入力のタップ補正。端末ごとの設定なので YAML ではなく localStorage に置く）----------
+     叩いてから音になるまでの遅れの実測値（秒）。earphone delay（LatencyService）とは別の値で、
+     重ね録りの位置を割り出すとき「叩いた時刻からこれを引く」形で使う。 */
+  const DrumTapLatency = (() => {
+    const KEY = "csm:drums.offset";
+    let sec = 0;
+    try{ const v = Number(window.localStorage.getItem(KEY)); if(isFinite(v)) sec = v; }catch(_){}
+    function set(value){
+      const next = Number(value);
+      if(!isFinite(next)) return;
+      sec = next;
+      try{ window.localStorage.setItem(KEY, String(sec)); }catch(_){}
+    }
+    return { seconds: () => sec, set };
+  })();
+
   /* ---------- SoundGateway（AudioContext のライフサイクルとクリック音・ドラム音の合成。刻みの進行や DOM は持たない） ---------- */
   const SoundGateway = (() => {
     let ctx = null;
@@ -3130,6 +3146,14 @@
   const DrumSwingMemory = (() => {
     const st = SessionState.define("drum.swingMemory", () => ({amount: DrumDomain.SWING_DEFAULT}));
     return Object.freeze({ get: () => st.get().amount, set(amount){ st.put({amount}); } });
+  })();
+
+  /* DrumClickToggle … ドラム入力の「クリック」切替。false でメトロノームのクリックだけ鳴らさない
+     （ドラムの音はここに関わらず鳴る）。実際に鳴らすかどうかの判断（画面が開いているか・タップ補正中か
+     も合わせる）は DrumView.clickAudible が持ち、これはユーザーが選んだ状態だけを持つ */
+  const DrumClickToggle = (() => {
+    const st = SessionState.define("drum.clickToggle", () => ({on: true}));
+    return Object.freeze({ isOn: () => st.get().on, toggle(){ st.put({on: !st.get().on}); } });
   })();
 
   /* ---------- SequenceMapper（entity ⇔ 保存用 DTO。書き側 repeat⇔実行時 reps の対応もここ） ---------- */
@@ -5469,16 +5493,14 @@
      画面だけの状態（カーソル・選択・範囲・ステップ入力・REC）はここに持ち、保存・履歴には載せない。 */
   const DrumView = (() => {
     const el = $("drum"), scoreEl = $("drScore"), stageEl = $("drStage"), headEl = $("drHead"), rulerEl = $("drRuler");
-    const OFFSET_KEY = "csm:drums.offset", KIT_KEY = "csm:drums.kit", DEFAULT_KIT = "FluidR3_GM_sf2_file:1";
+    const KIT_KEY = "csm:drums.kit", DEFAULT_KIT = "FluidR3_GM_sf2_file:1";
     const ui = {
       open:false,                               // 編集中のグループ・パート・出現は DrumTarget が持つ
+                                                // クリック・タップ補正は DrumClickToggle / DrumTapLatency が持つ
                                                 // カーソル・選んだ音・範囲・コピーは DrumCursor / DrumSelection / DrumRange / DrumClipboard
                                                 // ステップ入力・録音・ハネの記憶は DrumStepInput / DrumTake / DrumSwingMemory が持つ
-      click:true,
-      offset:0,                                 // 入力遅延補正（秒）。叩いた時刻からこれを引く
       beat:null                                 // いま聞こえている拍 {time, len, cb, gid}
     };
-    try{ const v = Number(window.localStorage.getItem(OFFSET_KEY)); if(isFinite(v)) ui.offset = v; }catch(_){}
     const Fmt2 = { ms: s => (s >= 0 ? "+" : "−") + Math.round(Math.abs(s)*1000) + "ms" };
     // SVG の属性には CSS 変数を書けないので、.dr の色トークンを読んで使う（色は CSS 側だけで決める）
     const C = new Proxy({}, {get: (o, k) => o[k] || (o[k] = getComputedStyle(el).getPropertyValue("--" + k.replace(/_/g, "-")).trim())});
@@ -6078,7 +6100,7 @@
       const now = SoundGateway.now();
       SoundGateway.drum(inst);
       if(!(Transport.running() && DrumTake.isRecording())) return;
-      const loc = DrumPlayback.locate(now - ui.offset);
+      const loc = DrumPlayback.locate(now - DrumTapLatency.seconds());
       if(!loc) return;
       const t = DrumTake.record(inst, now);   // 両側のキックを同時に踏んだ等の重複除けと、1回のレックを履歴1手にまとめる判断
       if(!t) return;
@@ -6317,7 +6339,7 @@
       $("drSong").classList.toggle("on", running && Transport.mode() === "all");
       $("drUndo").disabled = !HistoryService.canUndo();
       $("drRedo").disabled = !HistoryService.canRedo();
-      $("drClick").classList.toggle("on", ui.click); $("drClick").classList.toggle("off", !ui.click);
+      $("drClick").classList.toggle("on", DrumClickToggle.isOn()); $("drClick").classList.toggle("off", !DrumClickToggle.isOn());
       $("drStep").classList.toggle("on", DrumStepInput.mode());
       $("drMid").classList.toggle("stepping", DrumStepInput.mode() && !playing());
       const unc = DrumTarget.gid() ? DrumService.uncertain(DrumTarget.gid(), DrumTarget.part()) : 0;
@@ -6356,7 +6378,7 @@
         $("drRin").classList.toggle("set", DrumRange.rin() != null); $("drRout").classList.toggle("set", DrumRange.rout() != null);
         $("drRpaste").disabled = !DrumClipboard.get(); $("drRcopy").disabled = !has; $("drRdel").disabled = !has;
       }
-      $("drOffset").textContent = Fmt2.ms(ui.offset);
+      $("drOffset").textContent = Fmt2.ms(DrumTapLatency.seconds());
     }
     function render(){
       if(!ui.open) return;
@@ -6421,9 +6443,8 @@
         if(taps.length === 0 && k < 1) return;          // 最初のクリック前のフライングは無視
         taps.push(diff);
         if(taps.length < N){ res.textContent = taps.length + " / " + N; return; }
-        ui.offset = median(taps);
-        try{ window.localStorage.setItem(OFFSET_KEY, String(ui.offset)); }catch(_){}
-        res.textContent = "タップ補正 " + Fmt2.ms(ui.offset) + "（出力遅延 " + Math.round(SoundGateway.outputLatency() * 1000) + "ms 含む）";
+        DrumTapLatency.set(median(taps));
+        res.textContent = "タップ補正 " + Fmt2.ms(DrumTapLatency.seconds()) + "（出力遅延 " + Math.round(SoundGateway.outputLatency() * 1000) + "ms 含む）";
         controls();
       });
       $("drCalRetry").addEventListener("click", () => { close(); open(); });
@@ -6514,7 +6535,7 @@
       on("drAutofix", () => { if(DrumTarget.gid()) DrumService.autoFix(DrumTarget.gid(), DrumTarget.part()); });
       on("drTupOff", () => { if(DrumTarget.gid()) DrumService.removeTuplet(DrumTarget.gid(), DrumTarget.part(), Math.floor(DrumCursor.get() + 1e-6)); });
       on("drClear", () => { if(DrumTarget.gid() && DrumService.hits(DrumTarget.gid(), DrumTarget.part()).length){ DrumSelection.clear(); DrumService.clear(DrumTarget.gid(), DrumTarget.part()); } });
-      on("drClick", () => { ui.click = !ui.click; controls(); });
+      on("drClick", () => { DrumClickToggle.toggle(); controls(); });
       // 選択した音の操作
       on("drSelDel", () => { const sel = DrumSelection.get(); if(sel && !DrumService.deleteAt(DrumTarget.gid(), DrumTarget.part(), sel)){ DrumSelection.clear(); render(); } });
       const nudge = dir => { const sel = DrumSelection.get(); if(sel){ DrumSelection.set(DrumService.nudge(DrumTarget.gid(), DrumTarget.part(), sel, dir)); render(); } };
@@ -6555,7 +6576,7 @@
       window.addEventListener("resize", () => render());
     }
     // いまクリックを鳴らすか：ドラム入力を閉じているとき・タップ補正中は常に、開いているときは「クリック」の切替に従う
-    const clickAudible = () => !ui.open || Cal.isOpen() || ui.click;
+    const clickAudible = () => !ui.open || Cal.isOpen() || DrumClickToggle.isOn();
     return {bind, open, close, render, sync, onBeat, isOpen: () => ui.open, clickAudible};
   })();
 
