@@ -74,6 +74,23 @@
       <button id="leaveBtn" type="button" class="rounded-full px-3 py-1 text-sm text-paper/70 ring-1 ring-white/20 active:bg-white/10">退室</button>
     </header>
 
+    <!-- タイマー（全員で同期） -->
+    <div id="timer" class="mt-4 flex items-center gap-2 rounded-xl bg-felt-2 px-3 py-2 ring-1 ring-white/10">
+      <div id="timerDisplay" class="min-w-[4.5ch] font-num text-3xl font-bold tabular-nums" aria-live="off">00:00</div>
+      <div id="timerIdle" class="ml-auto flex items-center gap-2">
+        <label class="flex items-center gap-1 text-sm text-paper/80">
+          <input id="timerMin" type="number" inputmode="decimal" min="0" max="180" step="any" value="3"
+            class="w-16 rounded-lg border-0 bg-paper px-2 py-2 text-right text-base text-ink focus:outline-none focus:ring-2 focus:ring-gold">
+          分
+        </label>
+        <button id="timerStart" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] bg-gold text-ink disabled:opacity-40">スタート</button>
+      </div>
+      <div id="timerRun" class="ml-auto flex items-center gap-2" hidden>
+        <button id="timerPause" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] bg-paper text-ink">一時停止</button>
+        <button id="timerReset" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] text-paper/80 ring-1 ring-white/20">リセット</button>
+      </div>
+    </div>
+
     <p id="notice" class="mt-4 rounded-xl bg-felt-2 px-4 py-3 text-sm text-paper/80 ring-1 ring-white/10" hidden></p>
 
     <!-- 配る前 -->
@@ -219,6 +236,7 @@ $("joinForm").addEventListener("submit", async e => {
   $("joinBtn").disabled = true;
   $("joinMsg").textContent = "";
   try{
+    unlockAudio();   // 時間切れの音を鳴らせるよう、入室の操作のうちに音を使えるようにしておく
     lib = await import(TRYSTERO_URL);
     myName = name; keyword = key;
     store.set("name", name); store.set("key", key);
@@ -246,7 +264,7 @@ function enter(){
 function connect(){
   // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
   const r = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
-  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free")};
+  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free"), timer: r.makeAction("timer")};
   const live = fn => (...args) => { if(r === room) fn(...args); };
   room = r; act = a;
 
@@ -256,6 +274,7 @@ function connect(){
     a.name.send({name: myName, ask}, {target: id});
     if(game) a.game.send(game, {target: id});
     if(free.list.length) a.free.send(free, {target: id});
+    if(timer.v) a.timer.send(timerWire(), {target: id});
   };
   r.onPeerJoin = live(id => {
     peers.set(id, peers.get(id) || "");
@@ -270,6 +289,7 @@ function connect(){
   });
   a.game.onMessage = live(g => { if(validGame(g)) merge(g); });
   a.free.onMessage = live(f => { if(validFree(f)) mergeFree(f); });
+  a.timer.onMessage = live(t => { if(validTimer(t)) mergeTimer(t); });
 
   clearTimeout(noPeerTimer);
   joinedAt = Date.now();
@@ -299,6 +319,8 @@ function leave(){
   room = act = null;
   peers.clear();
   game = null;
+  timer = {v: 0, by: "", status: "idle", total: 0, left: 0, endAt: 0};
+  renderTimer();
   clearTimeout(noPeerTimer);
   $("table").hidden = true;
   $("join").hidden = false;
@@ -366,6 +388,97 @@ for(const b of document.querySelectorAll("[data-view]"))
   b.addEventListener("click", () => { view = b.dataset.view; store.set("view", view); render(); });
 for(const b of document.querySelectorAll("[data-mode]"))
   b.addEventListener("click", () => { mode = b.dataset.mode; store.set("mode", mode); render(); });
+
+// ---- タイマー ----
+// 端末ごとの時計はずれていることがあるので、終了時刻ではなく「送った時点の残り時間」を送り、受け取った側が自分の時計で終了時刻を決める。
+// 操作は誰がしてもよく、v が大きい方（同じなら by が大きい方）を採る。時間切れは各端末がそれぞれ判断する
+const TIMER_MAX_MIN = 180;
+let timer = {v: 0, by: "", status: "idle", total: 0, left: 0, endAt: 0};   // status: idle / running / paused / done
+let timerTick = 0, audioCtx = null;
+
+const timerLeft = () => timer.status === "running" ? Math.max(0, timer.endAt - Date.now()) : timer.status === "done" ? 0 : timer.left;
+const timerWire = () => ({v: timer.v, by: timer.by, status: timer.status, total: timer.total, left: timerLeft()});
+function validTimer(t){
+  return t && Number.isInteger(t.v) && typeof t.by === "string" && ["idle", "running", "paused", "done"].includes(t.status)
+    && Number.isFinite(t.total) && Number.isFinite(t.left) && t.left >= 0 && t.total <= TIMER_MAX_MIN * 60000;
+}
+function applyTimer(t){
+  timer = {v: t.v, by: t.by, status: t.status, total: t.total, left: t.left, endAt: Date.now() + t.left};
+  if(timer.status === "running" && t.left <= 0) timer.status = "done";
+  renderTimer();
+}
+function mergeTimer(t){
+  if(t.v < timer.v || (t.v === timer.v && t.by <= timer.by)) return;
+  applyTimer(t);
+}
+function setTimer(status, total, left){
+  unlockAudio();
+  applyTimer({v: timer.v + 1, by: selfId || "", status, total, left});
+  if(act) act.timer.send(timerWire());
+}
+$("timerStart").addEventListener("click", () => {
+  const min = Number($("timerMin").value);
+  if(!(min > 0 && min <= TIMER_MAX_MIN)) return;
+  store.set("timerMin", String(min));
+  const ms = Math.round(min * 60000);
+  setTimer("running", ms, ms);
+});
+$("timerPause").addEventListener("click", () => {
+  if(timer.status === "running") setTimer("paused", timer.total, timerLeft());
+  else if(timer.status === "paused") setTimer("running", timer.total, timer.left);
+});
+$("timerReset").addEventListener("click", () => setTimer("idle", 0, 0));
+$("timerMin").value = store.get("timerMin") || "3";
+$("timerMin").addEventListener("input", renderTimer);
+
+function fmt(ms){
+  const sec = Math.ceil(ms / 1000), m = Math.floor(sec / 60), s = sec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+function renderTimer(){
+  clearInterval(timerTick);
+  if(timer.status === "running"){
+    if(timerLeft() <= 0){ timer.status = "done"; timeUp(); }
+    else timerTick = setInterval(renderTimer, 250);
+  }
+  const st = timer.status, min = Number($("timerMin").value);
+  const d = $("timerDisplay");
+  d.textContent = st === "idle" ? fmt(min > 0 && min <= TIMER_MAX_MIN ? min * 60000 : 0) : fmt(timerLeft());
+  d.classList.toggle("text-paper/40", st === "idle");
+  d.classList.toggle("text-red-400", st === "done");
+  d.classList.toggle("animate-pulse", st === "done" || st === "paused");
+  $("timerIdle").hidden = st !== "idle";
+  $("timerRun").hidden = st === "idle";
+  $("timerStart").disabled = !(min > 0 && min <= TIMER_MAX_MIN);
+  $("timerPause").hidden = st === "done";
+  $("timerPause").textContent = st === "paused" ? "再開" : "一時停止";
+  $("timerReset").textContent = st === "done" ? "閉じる" : "リセット";
+  $("timer").classList.toggle("ring-red-400", st === "done");
+  $("timer").dataset.status = st;
+}
+// 時間切れ：画面を赤くし、音と振動で知らせる
+function timeUp(){
+  try{ navigator.vibrate?.([300, 150, 300, 150, 300]); }catch(_){}
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  for(let i = 0; i < 3; i++){
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, t0 + i * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.3, t0 + i * 0.4 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.4 + 0.3);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t0 + i * 0.4);
+    o.stop(t0 + i * 0.4 + 0.32);
+  }
+}
+function unlockAudio(){
+  try{
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
+  }catch(_){}
+}
+renderTimer();
 
 // ---- フリーワード ----
 function validFree(f){
