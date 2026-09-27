@@ -338,3 +338,50 @@ test.describe("フリーワードモード", () => {
     await expect(b.locator("#freeInput")).toHaveValue("ねこ\nいぬ");
   });
 });
+
+test.describe("自分だけ見える", () => {
+  test("自分のカードだけ見えて、ほかの人は伏せられ、答え合わせで全員に開く", async ({context}) => {
+    const names = ["あき", "はる", "なつ"];
+    const pages = [];
+    for(const n of names) pages.push(await openPlayer(context, n));
+    await expect(pages[0].locator("#dealBtn")).toBeEnabled();
+    await pages[0].click('[data-view="self"]');
+    await expect(pages[0].locator('[data-view="self"]')).toHaveAttribute("aria-checked", "true");
+    await pages[0].click("#dealBtn");
+
+    const mine = {};
+    for(const [i, p] of pages.entries()){
+      await expect(p.locator("#rangeLabel")).toHaveText("1〜100・自分だけ見える");
+      await expect(num(p, names[i])).toHaveCount(1);
+      mine[names[i]] = await num(p, names[i]).textContent();
+      for(const other of names.filter(n => n !== names[i])){
+        await expect(num(p, other)).toHaveCount(0);
+        await expect(card(p, other)).toContainText("?");
+      }
+    }
+
+    await pages[2].click("#revealBtn");
+    await pages[2].click("#revealBtn");
+    for(const p of pages) for(const n of names) await expect(num(p, n)).toHaveText(mine[n]);
+  });
+
+  test("お題と組み合わせられ、見え方を戻すと次のラウンドはふだんの見え方になる", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+    await a.click('[data-view="self"]');
+    await a.click('[data-mode="word"]');
+    await a.click("#dealBtn");
+    await expect(card(b, "はる").locator("[data-word]")).toHaveCount(1);
+    await expect(card(b, "あき").locator("[data-word]")).toHaveCount(0);
+
+    await b.click("#revealBtn");
+    await b.click("#revealBtn");
+    await b.click('[data-view="others"]');
+    await b.click('[data-mode="word"]');           // 配るものと見え方は、配る人の端末の選択で決まる
+    await b.click("#dealBtn");
+    await expect(a.locator("#roundLabel")).toHaveText("第2ラウンド");
+    await expect(card(a, "あき").locator("[data-word]")).toHaveCount(0);
+    await expect(card(a, "はる").locator("[data-word]")).toHaveCount(1);
+  });
+});
