@@ -40,7 +40,7 @@
   <!-- 入室 -->
   <section id="join" class="pt-10">
     <h1 class="text-center text-3xl font-bold tracking-wide">インディアンポーカー</h1>
-    <p class="mt-3 text-center text-sm text-paper/70">同じ合言葉の人どうしで、同じテーブルに着きます。<br>自分の数字だけが見えません。</p>
+    <p class="mt-3 text-center text-sm text-paper/70">同じ合言葉の人どうしで、同じテーブルに着きます。<br>自分の数字（お題）だけが見えません。</p>
     <form id="joinForm" class="mt-8 space-y-4 rounded-2xl bg-felt-2 p-5 shadow-lg ring-1 ring-white/10">
       <label class="block">
         <span class="text-sm text-paper/80">名前</span>
@@ -101,6 +101,10 @@
       <button id="revealBtn" type="button" hidden
         class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
       <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
+        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
+          <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字（1〜100）</button>
+          <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題（名詞）</button>
+        </div>
         <button id="dealBtn" type="button"
           class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
         <p id="dealMsg" class="mt-2 min-h-4 text-center text-xs text-paper/60"></p>
@@ -114,6 +118,29 @@ const TRYSTERO_URL = "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm";
 const APP_ID = "shuzon-complex-song-metronome/indian-poker/v1";
 const NO_PEER_HINT_MS = 20000;
 const MAX = 100;   // 数字は 1〜100
+// お題モードで配る名詞（300個）
+const WORDS = [
+  "うさぎ","ねこ","いぬ","ぞう","きりん","ライオン","とら","くま","パンダ","さる","ぶた","うし","うま","ひつじ","やぎ","にわとり","ペンギン",
+  "いるか","くじら","さめ","かめ","かえる","へび","ワニ","カンガルー","コアラ","ゴリラ","きつね","たぬき","りす","ハムスター","ふくろう","からす",
+  "はと","すずめ","つばめ","わし","フラミンゴ","かに","たこ","いか","飛行機","電車","新幹線","自転車","バス","タクシー","船","ヘリコプター","ロケット",
+  "救急車","消防車","パトカー","トラック","バイク","ヨット","潜水艦","気球","ショベルカー","一輪車","観覧車","エレベーター","エスカレーター","スケートボード",
+  "工具","ハンマー","ドライバー","のこぎり","ペンチ","スパナ","はしご","ドリル","スコップ","ほうき","バケツ","ロープ","くぎ","ねじ","懐中電灯","りんご",
+  "バナナ","みかん","ぶどう","いちご","すいか","メロン","もも","さくらんぼ","パイナップル","レモン","かき","トマト","きゅうり","にんじん","たまねぎ",
+  "じゃがいも","キャベツ","なす","かぼちゃ","とうもろこし","おにぎり","ラーメン","カレーライス","すし","うどん","そば","天ぷら","ハンバーガー","ピザ",
+  "サンドイッチ","パン","ケーキ","ドーナツ","アイスクリーム","チョコレート","クッキー","プリン","団子","ぎょうざ","たこ焼き","お好み焼き","オムライス",
+  "スパゲッティ","ホットドッグ","牛乳","コーヒー","お茶","ジュース","テレビ","冷蔵庫","電子レンジ","洗濯機","掃除機","エアコン","せんぷう機","ドライヤー",
+  "時計","カメラ","スマートフォン","パソコン","電話","ラジオ","電球","こたつ","フライパン","なべ","包丁","おはし","スプーン","フォーク","コップ","お皿",
+  "茶わん","いす","つくえ","ベッド","ソファ","まくら","ふとん","カーテン","かがみ","本棚","ゴミ箱","傘","かばん","財布","かぎ","めがね","腕時計",
+  "帽子","くつ","長ぐつ","手ぶくろ","マフラー","Tシャツ","セーター","コート","ズボン","水着","指輪","えんぴつ","消しゴム","ボールペン","ノート","はさみ",
+  "クレヨン","絵の具","筆","地球儀","黒板","ランドセル","教科書","カレンダー","地図","新聞","絵本","まんが","ピアノ","ギター","バイオリン","たいこ",
+  "トランペット","フルート","ハーモニカ","マイク","サッカーボール","バット","グローブ","ラケット","なわとび","ブランコ","すべり台","けん玉","こま","風船",
+  "たこあげ","シャボン玉","ぬいぐるみ","人形","トランプ","サイコロ","パズル","太陽","月","星","雲","雨","雪","虹","かみなり","風","山","川","海",
+  "島","湖","滝","森","砂漠","火山","花火","ひまわり","チューリップ","さくら","バラ","たんぽぽ","あさがお","もみじ","きのこ","サボテン","学校",
+  "病院","公園","駅","空港","図書館","動物園","水族館","遊園地","映画館","美術館","郵便局","神社","お寺","お城","灯台","橋","トンネル","ポスト",
+  "自動販売機","コンビニ","スーパー","温泉","キャンプ","テント","医者","看護師","先生","警察官","消防士","パイロット","運転手","コック","大工","歌手",
+  "忍者","侍","王様","お姫様","宇宙飛行士","サンタクロース","雪だるま","ロボット","恐竜","おばけ","鬼","かっぱ","魔法使い","海賊","宝箱"
+];
+const MODES = {num: "数字", word: "お題"};
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -128,7 +155,8 @@ const cleanKey = s => String(s ?? "").normalize("NFKC").trim();
 let lib = null, room = null, act = null, selfId = null;
 let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
-let game = null;           // {round, dealer, max, hands:[{id, name, n}], revealed}
+let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
+let mode = store.get("mode") === "word" ? "word" : "num";   // 次に配るもの
 let noPeerTimer = 0, joinedAt = 0, revealArmTimer = 0;
 
 // 自分の手札か。再読み込みすると peerId が変わるので、名前でも自分とみなす（自分の数字を見せないため）
@@ -232,12 +260,15 @@ addEventListener("pagehide", () => { if(room) room.leave(); });
 // ---- ゲームの同期 ----
 // 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
 function validGame(g){
-  return g && Number.isInteger(g.round) && typeof g.dealer === "string" && Number.isInteger(g.max)
-    && Array.isArray(g.hands) && g.hands.every(h => h && typeof h.id === "string" && Number.isInteger(h.n));
+  if(!g || !Number.isInteger(g.round) || typeof g.dealer !== "string" || !Array.isArray(g.hands)) return false;
+  const word = g.mode === "word";
+  return g.hands.every(h => h && typeof h.id === "string" && (word ? typeof h.w === "string" : Number.isInteger(h.n)));
 }
 function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
 function merge(g){
-  g = {...g, hands: g.hands.map(h => ({id: h.id, name: cleanName(h.name), n: h.n})), revealed: !!g.revealed};
+  const word = g.mode === "word";
+  g = {...g, mode: word ? "word" : "num", revealed: !!g.revealed,
+    hands: g.hands.map(h => word ? {id: h.id, name: cleanName(h.name), w: String(h.w).slice(0, 20)} : {id: h.id, name: cleanName(h.name), n: h.n})};
   if(!game || order(g, game) > 0) game = g;
   else if(order(g, game) === 0 && g.revealed && !game.revealed) game.revealed = true;
   else return;
@@ -252,24 +283,33 @@ function players(){
   return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 }
 
+function poolFor(m){
+  if(m === "num") return Array.from({length: MAX}, (_, i) => i + 1);
+  // お題は直前のラウンドと同じものが続かないようにする
+  const last = new Set(game?.mode === "word" ? game.hands.map(h => h.w) : []);
+  const fresh = WORDS.filter(w => !last.has(w));
+  return fresh.length >= players().length ? fresh : [...WORDS];
+}
 function deal(){
-  const ps = players();
+  const ps = players(), m = mode;
   if(ps.length < 2 || ps.length > MAX) return;
-  // 1〜100 から重ならないように人数ぶん引く
-  const pool = Array.from({length: MAX}, (_, i) => i + 1);
+  // 重ならないように人数ぶん引く
+  const pool = poolFor(m);
   const rnd = new Uint32Array(ps.length);
   crypto.getRandomValues(rnd);
   const hands = ps.map((p, i) => {
     const j = i + rnd[i] % (pool.length - i);
     [pool[i], pool[j]] = [pool[j], pool[i]];
-    return {id: p.id, name: p.name, n: pool[i]};
+    return m === "word" ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
   });
-  game = {round: (game?.round || 0) + 1, dealer: selfId, max: MAX, hands, revealed: false};
+  game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, max: MAX, hands, revealed: false};
   disarmReveal();
   broadcast();
   render();
 }
 $("dealBtn").addEventListener("click", deal);
+for(const b of document.querySelectorAll("[data-mode]"))
+  b.addEventListener("click", () => { mode = b.dataset.mode; store.set("mode", mode); render(); });
 
 // 誤タップで全員の数字が開かないよう、2回押しで開く
 function disarmReveal(){ clearTimeout(revealArmTimer); revealArmTimer = 0; }
@@ -310,7 +350,12 @@ function render(){
   // 配るボタン
   const ps = players();
   $("dealBox").hidden = !!game && !game.revealed;
-  $("dealBtn").textContent = game ? "次のラウンドを配る" : "数字を配る";
+  $("dealBtn").textContent = game ? `次のラウンド（${MODES[mode]}）を配る` : `${MODES[mode]}を配る`;
+  for(const b of document.querySelectorAll("[data-mode]")){
+    const on = b.dataset.mode === mode;
+    b.setAttribute("aria-checked", on);
+    b.className = `rounded-lg py-2 ${on ? "bg-paper text-ink shadow" : "text-paper/70"}`;
+  }
   $("dealBtn").disabled = ps.length < 2 || ps.length > MAX;
   $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
     : ps.length > MAX ? `${MAX}人までしか配れません`
@@ -319,7 +364,7 @@ function render(){
   // 答え合わせボタン
   const rb = $("revealBtn");
   rb.hidden = !game || game.revealed;
-  rb.textContent = revealArmTimer ? "もう一度押すと全員の数字を開きます" : "答え合わせ";
+  rb.textContent = revealArmTimer ? `もう一度押すと全員の${MODES[game?.mode] || "数字"}を開きます` : "答え合わせ";
   rb.classList.toggle("ring-4", !!revealArmTimer);
   rb.classList.toggle("ring-gold", !!revealArmTimer);
 }
@@ -336,12 +381,13 @@ function renderLobby(){
 function renderBoard(){
   const g = game;
   $("roundLabel").textContent = `第${g.round}ラウンド${g.revealed ? "（答え合わせ）" : ""}`;
-  $("rangeLabel").textContent = `1〜${g.max}`;
+  const word = g.mode === "word";
+  $("rangeLabel").textContent = word ? "お題（名詞）" : `1〜${g.max}`;
   $("spectator").hidden = g.hands.some(isMe);
 
-  // 答え合わせ後は大きい順に並べて順位を付ける
-  const ranked = [...g.hands].sort((a, b) => b.n - a.n);
-  const hands = g.revealed ? ranked : g.hands;
+  // 数字は答え合わせ後に大きい順に並べて順位を付ける。お題は順位なし
+  const ranked = word ? [] : [...g.hands].sort((a, b) => b.n - a.n);
+  const hands = g.revealed && !word ? ranked : g.hands;
   const hi = ranked[0]?.n, lo = ranked[ranked.length - 1]?.n;
 
   $("cards").innerHTML = hands.map(h => {
@@ -349,6 +395,11 @@ function renderBoard(){
     const rank = ranked.findIndex(r => r.n === h.n) + 1;
     const face = hidden
       ? `<div class="card-back flex aspect-[5/7] items-center justify-center rounded-xl text-4xl font-bold text-white/90 shadow-lg ring-2 ring-white/70">?</div>`
+      : word
+      // 文字数に合わせてカードの幅に収まる大きさにし、1行で見せる
+      ? `<div class="@container flex aspect-[5/7] items-center justify-center rounded-xl bg-paper text-ink shadow-lg ring-2 ring-white/70">
+           <span class="whitespace-nowrap font-bold" style="font-size:min(2rem, calc(86cqw / ${[...h.w].length}))" data-word>${esc(h.w)}</span>
+         </div>`
       : `<div class="flex aspect-[5/7] flex-col items-center justify-center rounded-xl bg-paper text-ink shadow-lg ring-2 ${
             g.revealed && h.n === hi ? "ring-gold" : g.revealed && h.n === lo ? "ring-sky-400" : "ring-white/70"}">
            <span class="font-num text-5xl font-bold tabular-nums" data-num>${h.n}</span>
