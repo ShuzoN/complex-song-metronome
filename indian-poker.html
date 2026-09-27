@@ -99,20 +99,8 @@
       <button id="revealBtn" type="button" hidden
         class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
       <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
-        <label class="flex items-center justify-between gap-3 text-sm">
-          <span class="text-paper/80">数字の範囲</span>
-          <span class="flex items-center gap-2">
-            1 〜
-            <select id="maxSelect" class="rounded-lg border-0 bg-paper px-2 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-gold">
-              <option value="13">13</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
-          </span>
-        </label>
         <button id="dealBtn" type="button"
-          class="mt-3 w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
+          class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
         <p id="dealMsg" class="mt-2 min-h-4 text-center text-xs text-paper/60"></p>
       </div>
     </div>
@@ -123,6 +111,7 @@
 const TRYSTERO_URL = "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm";
 const APP_ID = "shuzon-complex-song-metronome/indian-poker/v1";
 const NO_PEER_HINT_MS = 20000;
+const MAX = 100;   // 数字は 1〜100
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -147,7 +136,6 @@ const isOnline = h => isMe(h) || peers.has(h.id) || [...peers.values()].includes
 // ---- 入室・退室 ----
 $("nameInput").value = store.get("name") || "";
 $("keyInput").value = new URLSearchParams(location.search).get("room") || store.get("key") || "";
-$("maxSelect").value = store.get("max") || "100";
 
 $("joinForm").addEventListener("submit", async e => {
   e.preventDefault();
@@ -229,10 +217,10 @@ function players(){
 }
 
 function deal(){
-  const ps = players(), max = Number($("maxSelect").value);
-  if(ps.length < 2 || ps.length > max) return;
-  // 1〜max から重ならないように人数ぶん引く
-  const pool = Array.from({length: max}, (_, i) => i + 1);
+  const ps = players();
+  if(ps.length < 2 || ps.length > MAX) return;
+  // 1〜100 から重ならないように人数ぶん引く
+  const pool = Array.from({length: MAX}, (_, i) => i + 1);
   const rnd = new Uint32Array(ps.length);
   crypto.getRandomValues(rnd);
   const hands = ps.map((p, i) => {
@@ -240,13 +228,12 @@ function deal(){
     [pool[i], pool[j]] = [pool[j], pool[i]];
     return {id: p.id, name: p.name, n: pool[i]};
   });
-  game = {round: (game?.round || 0) + 1, dealer: selfId, max, hands, revealed: false};
+  game = {round: (game?.round || 0) + 1, dealer: selfId, max: MAX, hands, revealed: false};
   disarmReveal();
   broadcast();
   render();
 }
 $("dealBtn").addEventListener("click", deal);
-$("maxSelect").addEventListener("change", () => { store.set("max", $("maxSelect").value); render(); });
 
 // 誤タップで全員の数字が開かないよう、2回押しで開く
 function disarmReveal(){ clearTimeout(revealArmTimer); revealArmTimer = 0; }
@@ -285,12 +272,12 @@ function render(){
   if(!game) renderLobby(); else renderBoard();
 
   // 配るボタン
-  const ps = players(), max = Number($("maxSelect").value);
+  const ps = players();
   $("dealBox").hidden = !!game && !game.revealed;
   $("dealBtn").textContent = game ? "次のラウンドを配る" : "数字を配る";
-  $("dealBtn").disabled = ps.length < 2 || ps.length > max;
+  $("dealBtn").disabled = ps.length < 2 || ps.length > MAX;
   $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
-    : ps.length > max ? `人数（${ps.length}人）が範囲より多いので、範囲を広げてください`
+    : ps.length > MAX ? `${MAX}人までしか配れません`
     : `${ps.length}人に配ります（誰が押しても全員に配られます）`;
 
   // 答え合わせボタン
