@@ -105,6 +105,12 @@
       <button id="revealBtn" type="button" hidden
         class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
       <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
+        <div class="mb-2 text-xs font-bold text-paper/60">見え方</div>
+        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="見え方">
+          <button type="button" role="radio" data-view="others" class="rounded-lg py-2">自分以外が見える</button>
+          <button type="button" role="radio" data-view="self" class="rounded-lg py-2">自分だけ見える</button>
+        </div>
+        <div class="mb-2 text-xs font-bold text-paper/60">配るもの</div>
         <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
           <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字</button>
           <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題</button>
@@ -191,6 +197,8 @@ let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
 let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
 let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
+// 見え方。others＝自分以外が見える（インディアンポーカー）、self＝自分だけ見える
+let view = store.get("view") === "self" ? "self" : "others";
 // フリーワードの一覧。テーブルで共有し、v が大きい方（同じなら by が大きい方）を採る
 let free = {list: parseFree(store.get("free") || "").list, v: 0, by: ""};
 let freeSendTimer = 0;
@@ -308,7 +316,7 @@ function validGame(g){
 function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
 function merge(g){
   const word = isWordy(g.mode);
-  g = {...g, mode: word ? g.mode : "num", revealed: !!g.revealed,
+  g = {...g, mode: word ? g.mode : "num", view: g.view === "self" ? "self" : "others", revealed: !!g.revealed,
     pool: g.mode === "free" && Array.isArray(g.pool) ? g.pool.map(w => String(w).slice(0, 20)).slice(0, FREE_MAX) : undefined,
     hands: g.hands.map(h => word ? {id: h.id, name: cleanName(h.name), w: String(h.w).slice(0, 20)} : {id: h.id, name: cleanName(h.name), n: h.n})};
   if(!game || order(g, game) > 0) game = g;
@@ -347,13 +355,15 @@ function deal(){
     [pool[i], pool[j]] = [pool[j], pool[i]];
     return isWordy(m) ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
   });
-  game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, max: MAX, hands, revealed: false};
+  game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, view, max: MAX, hands, revealed: false};
   if(m === "free") game.pool = [...free.list];
   disarmReveal();
   broadcast();
   render();
 }
 $("dealBtn").addEventListener("click", deal);
+for(const b of document.querySelectorAll("[data-view]"))
+  b.addEventListener("click", () => { view = b.dataset.view; store.set("view", view); render(); });
 for(const b of document.querySelectorAll("[data-mode]"))
   b.addEventListener("click", () => { mode = b.dataset.mode; store.set("mode", mode); render(); });
 
@@ -426,8 +436,8 @@ function render(){
   const ps = players();
   $("dealBox").hidden = !!game && !game.revealed;
   $("dealBtn").textContent = game ? "次のラウンドを配る" : `${MODES[mode]}を配る`;
-  for(const b of document.querySelectorAll("[data-mode]")){
-    const on = b.dataset.mode === mode;
+  for(const b of document.querySelectorAll("[data-mode], [data-view]")){
+    const on = b.dataset.mode ? b.dataset.mode === mode : b.dataset.view === view;
     b.setAttribute("aria-checked", on);
     b.className = `rounded-lg py-2 ${on ? "bg-paper text-ink shadow" : "text-paper/70"}`;
   }
@@ -462,7 +472,8 @@ function renderBoard(){
   $("poolBox").hidden = !g.pool;
   $("poolList").innerHTML = (g.pool || []).map(w =>
     `<li class="rounded-full bg-felt-2 px-2.5 py-0.5 text-xs text-paper/80 ring-1 ring-white/10">${esc(w)}</li>`).join("");
-  $("rangeLabel").textContent = LABELS[g.mode] || LABELS.num;
+  const selfView = g.view === "self";
+  $("rangeLabel").textContent = (LABELS[g.mode] || LABELS.num) + (selfView ? "・自分だけ見える" : "");
   $("spectator").hidden = g.hands.some(isMe);
 
   // 数字は答え合わせ後に大きい順に並べて順位を付ける。お題は順位なし
@@ -471,7 +482,8 @@ function renderBoard(){
   const hi = ranked[0]?.n, lo = ranked[ranked.length - 1]?.n;
 
   $("cards").innerHTML = hands.map(h => {
-    const me = isMe(h), hidden = me && !g.revealed, online = isOnline(h);
+    // 答え合わせまでは、ふだんは自分のカードだけ、「自分だけ見える」では自分以外のカードを伏せる
+    const me = isMe(h), hidden = !g.revealed && (selfView ? !me : me), online = isOnline(h);
     const rank = ranked.findIndex(r => r.n === h.n) + 1;
     const face = hidden
       ? `<div class="card-back flex aspect-[5/7] items-center justify-center rounded-xl text-4xl font-bold text-white/90 shadow-lg ring-2 ring-white/70">?</div>`
