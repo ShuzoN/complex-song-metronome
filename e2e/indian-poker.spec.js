@@ -385,3 +385,73 @@ test.describe("自分だけ見える", () => {
     await expect(card(a, "はる").locator("[data-word]")).toHaveCount(1);
   });
 });
+
+test.describe("タイマー", () => {
+  const secs = async page => {
+    const [m, s] = (await page.locator("#timerDisplay").textContent()).split(":").map(Number);
+    return m * 60 + s;
+  };
+
+  test("分を入れてスタートすると全員の画面で動き、一時停止・再開・リセットも全員に届く", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#peerCount")).toHaveText("2人");
+
+    await a.fill("#timerMin", "2");
+    await expect(a.locator("#timerDisplay")).toHaveText("02:00");
+    await a.click("#timerStart");
+    for(const p of [a, b]) await expect(p.locator("#timer")).toHaveAttribute("data-status", "running");
+    await expect.poll(() => secs(b)).toBeLessThan(120);           // 動いている
+    expect(await secs(b)).toBeGreaterThan(110);
+
+    await b.click("#timerPause");                                    // 止めたのは はる
+    for(const p of [a, b]) await expect(p.locator("#timer")).toHaveAttribute("data-status", "paused");
+    await expect(a.locator("#timerPause")).toHaveText("再開");
+    const stopped = await secs(a);
+    await a.waitForTimeout(1200);
+    expect(await secs(a)).toBe(stopped);                             // 止まったまま
+    expect(Math.abs(await secs(b) - stopped)).toBeLessThanOrEqual(1); // 全員ほぼ同じ残り
+
+    await a.click("#timerPause");                                    // 再開
+    for(const p of [a, b]) await expect(p.locator("#timer")).toHaveAttribute("data-status", "running");
+    await b.click("#timerReset");
+    for(const p of [a, b]) await expect(p.locator("#timer")).toHaveAttribute("data-status", "idle");
+  });
+
+  test("時間になると全員の画面で時間切れになる", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#peerCount")).toHaveText("2人");
+    await a.fill("#timerMin", "0.05");                               // 3秒
+    await a.click("#timerStart");
+    for(const p of [a, b]){
+      await expect(p.locator("#timer")).toHaveAttribute("data-status", "done", {timeout: 6000});
+      await expect(p.locator("#timerDisplay")).toHaveText("00:00");
+      await expect(p.locator("#timerReset")).toHaveText("閉じる");
+    }
+    await b.click("#timerReset");
+    await expect(a.locator("#timer")).toHaveAttribute("data-status", "idle");
+  });
+
+  test("動いている途中に来た人にも残り時間が届く", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    await a.fill("#timerMin", "5");
+    await a.click("#timerStart");
+    await a.waitForTimeout(1500);
+    const b = await openPlayer(context, "はる");
+    await expect(b.locator("#timer")).toHaveAttribute("data-status", "running");
+    const left = await secs(b);
+    expect(left).toBeLessThan(300);
+    expect(Math.abs(left - await secs(a))).toBeLessThanOrEqual(1);
+  });
+
+  test("0分や数字でない入力ではスタートできない", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    await a.fill("#timerMin", "0");
+    await expect(a.locator("#timerStart")).toBeDisabled();
+    await a.fill("#timerMin", "");
+    await expect(a.locator("#timerStart")).toBeDisabled();
+    await a.fill("#timerMin", "10");
+    await expect(a.locator("#timerStart")).toBeEnabled();
+  });
+});
