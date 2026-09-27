@@ -94,7 +94,7 @@ test("自分の数字だけ見えず、答え合わせで全員の数字が全�
   for(const p of pages){
     await expect(p.locator("#revealBtn")).toBeHidden();
     for(const n of names) await expect(num(p, n)).toHaveText(String(seen[n]));
-    await expect(p.locator("#dealBtn")).toHaveText("次のラウンドを配る");
+    await expect(p.locator("#dealBtn")).toHaveText("次のラウンド（数字）を配る");
   }
 });
 
@@ -183,4 +183,56 @@ test("切れている間に配り直されても、再接続すると新しい�
   await expect(c.locator("#roundLabel")).toHaveText("第2ラウンド");
   await expect(num(c, "なつ")).toHaveCount(0);
   await expect(num(c, "あき")).toHaveText(await num(b, "あき").textContent());
+});
+
+test.describe("お題モード", () => {
+  const WORDS = JSON.parse("[" + PAGE.toString().match(/const WORDS = \[([\s\S]*?)\];/)[1] + "]");
+  const word = (page, name) => card(page, name).locator("[data-word]");
+
+  test("名詞は重なりなく300個", () => {
+    expect(WORDS).toHaveLength(300);
+    expect(new Set(WORDS).size).toBe(300);
+    for(const w of ["うさぎ", "飛行機", "工具"]) expect(WORDS).toContain(w);
+  });
+
+  test("お題を選んで配ると、自分のお題だけ見えず、答え合わせで全員に開く", async ({context}) => {
+    const names = ["あき", "はる", "なつ"];
+    const pages = [];
+    for(const n of names) pages.push(await openPlayer(context, n));
+    await expect(pages[0].locator("#dealBtn")).toBeEnabled();
+    await pages[0].click('[data-mode="word"]');
+    await expect(pages[0].locator('[data-mode="word"]')).toHaveAttribute("aria-checked", "true");
+    await expect(pages[0].locator("#dealBtn")).toHaveText("お題を配る");
+    await pages[0].click("#dealBtn");
+
+    const seen = {};
+    for(const [i, p] of pages.entries()){
+      await expect(p.locator("#rangeLabel")).toHaveText("お題（名詞）");
+      await expect(word(p, names[i])).toHaveCount(0);
+      await expect(card(p, names[i])).toContainText("?");
+      await expect(p.locator("[data-num]")).toHaveCount(0);
+      for(const other of names.filter(n => n !== names[i])){
+        const w = await word(p, other).textContent();
+        expect(WORDS).toContain(w);
+        if(other in seen) expect(w).toBe(seen[other]);
+        seen[other] = w;
+      }
+    }
+    expect(new Set(Object.values(seen)).size).toBe(3);
+
+    await pages[1].click("#revealBtn");
+    await expect(pages[1].locator("#revealBtn")).toHaveText("もう一度押すと全員のお題を開きます");
+    await pages[1].click("#revealBtn");
+    for(const p of pages){
+      for(const n of names) await expect(word(p, n)).toHaveText(seen[n]);
+      await expect(p.locator("#cards")).not.toContainText("位");
+    }
+
+    // 数字に戻して配り直せる
+    await pages[2].click('[data-mode="num"]');
+    await pages[2].click("#dealBtn");
+    await expect(pages[0].locator("#roundLabel")).toHaveText("第2ラウンド");
+    await expect(num(pages[0], "はる")).toHaveCount(1);
+    await expect(pages[0].locator("[data-word]")).toHaveCount(0);
+  });
 });
