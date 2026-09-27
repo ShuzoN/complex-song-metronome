@@ -455,3 +455,71 @@ test.describe("タイマー", () => {
     await expect(a.locator("#timerStart")).toBeEnabled();
   });
 });
+
+test.describe("接続の安定性", () => {
+  test("ページを読み直しても、同じテーブル・同じラウンド・動いているタイマーのまま戻る", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+    await a.click("#dealBtn");
+    await a.fill("#timerMin", "5");
+    await a.click("#timerStart");
+    await expect(b.locator("#timer")).toHaveAttribute("data-status", "running");
+    const bNum = await num(a, "はる").textContent();
+
+    await b.reload();
+    await expect(b.locator("#table")).toBeVisible();              // 入室画面を経ずに戻る
+    await expect(b.locator("#peerCount")).toHaveText("2人");
+    await expect(b.locator("#roundLabel")).toHaveText("第1ラウンド");
+    await expect(num(b, "はる")).toHaveCount(0);                   // 自分の数字は隠れたまま
+    await expect(num(a, "はる")).toHaveText(bNum);
+    await expect(card(a, "はる")).not.toContainText("切断");
+    await expect(b.locator("#timer")).toHaveAttribute("data-status", "running");
+    await expect(b.locator("#notice")).toBeHidden();              // 古い接続と名前がかぶった警告は出ない
+  });
+
+  test("電波が戻ったら自動で入り直す", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+    await a.click("#dealBtn");
+    await Promise.all([b.waitForEvent("load"), b.evaluate(() => dispatchEvent(new Event("online")))]);
+    await expect(b.locator("#table")).toBeVisible();
+    await expect(b.locator("#peerCount")).toHaveText("2人");
+    await expect(b.locator("#roundLabel")).toHaveText("第1ラウンド");
+  });
+
+  test("15秒以上画面を離れて戻ると自動で入り直し、短いときは入り直さない", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(b.locator("#peerCount")).toHaveText("2人");
+    const away = ms => b.evaluate(ms => {
+      const now = Date.now.bind(Date);
+      Object.defineProperty(document, "hidden", {configurable: true, get: () => true});
+      document.dispatchEvent(new Event("visibilitychange"));
+      Date.now = () => now() + ms;                                   // 時間がたったことにする
+      Object.defineProperty(document, "hidden", {configurable: true, get: () => false});
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, ms);
+
+    await b.evaluate(() => { window.__stay = 1; });
+    await away(5000);
+    expect(await b.evaluate(() => window.__stay)).toBe(1);          // 読み直していない
+
+    await Promise.all([b.waitForEvent("load"), away(20000)]);
+    await expect(b.locator("#table")).toBeVisible();
+    await expect(b.locator("#peerCount")).toHaveText("2人");
+  });
+
+  test("黙ったままの相手は15秒ほどで切断とみなす", async ({context}) => {
+    test.setTimeout(60000);
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+    await a.click("#dealBtn");
+    await expect(a.locator("#peerCount")).toHaveText("2人");
+    await b.evaluate(() => { for(const bc of window.__fakeChannels) bc.close(); });   // 退室を知らせずに消える（スリープ）
+    await expect(a.locator("#peerCount")).toHaveText("1人", {timeout: 25000});
+    await expect(card(a, "はる")).toContainText("切断");
+  });
+});
