@@ -13,6 +13,7 @@ const FAKE_TRYSTERO = `
 export const selfId = Math.random().toString(36).slice(2, 12);
 export function joinRoom(config, roomId){
   const bc = new BroadcastChannel("fake:" + config.appId + ":" + config.password + ":" + roomId);
+  (window.__fakeChannels ||= []).push(bc);
   const known = new Set(), handlers = {};
   const post = m => bc.postMessage({...m, from: selfId});
   const room = {
@@ -22,7 +23,7 @@ export function joinRoom(config, roomId){
       handlers[ns] = a;
       return a;
     },
-    leave(){ post({t: "bye"}); bc.close(); return Promise.resolve(); }
+    leave(){ try{ post({t: "bye"}); bc.close(); }catch(_){} return Promise.resolve(); }
   };
   const meet = id => { if(!known.has(id)){ known.add(id); room.onPeerJoin && room.onPeerJoin(id); } };
   bc.onmessage = ({data: m}) => {
@@ -140,4 +141,46 @@ test("退室した人のカードは切断と表示され、1人では配れな�
   await b.click("#leaveBtn");
   await expect(card(a, "はる")).toContainText("切断");
   await expect(a.locator("#peerCount")).toHaveText("1人");
+});
+
+test("再接続すると、配られた数字はそのままでテーブルに戻る", async ({context}) => {
+  const a = await openPlayer(context, "あき");
+  const b = await openPlayer(context, "はる");
+  await expect(a.locator("#dealBtn")).toBeEnabled();
+  await a.click("#dealBtn");
+  const aNum = await num(b, "あき").textContent();
+
+  await b.click("#reconnectBtn");
+  await expect(b.locator("#peerCount")).toHaveText("2人");
+  await expect(card(a, "はる")).not.toContainText("切断");
+  await expect(b.locator("#roundLabel")).toHaveText("第1ラウンド");
+  await expect(num(b, "あき")).toHaveText(aNum);
+  await expect(num(b, "はる")).toHaveCount(0);
+
+  // 再接続後も答え合わせが全員に届く
+  await b.click("#revealBtn");
+  await b.click("#revealBtn");
+  await expect(num(a, "あき")).toHaveText(aNum);
+});
+
+test("切れている間に配り直されても、再接続すると新しいラウンドに追いつく", async ({context}) => {
+  const a = await openPlayer(context, "あき");
+  const b = await openPlayer(context, "はる");
+  const c = await openPlayer(context, "なつ");
+  await expect(a.locator("#dealBtn")).toBeEnabled();
+  await a.click("#dealBtn");
+  await expect(c.locator("#roundLabel")).toHaveText("第1ラウンド");
+
+  // なつの通信だけ黙って止める（相手には退室が届かない＝実機でスリープしたときに近い）
+  await c.evaluate(() => { for(const bc of window.__fakeChannels) bc.close(); });
+  await a.click("#revealBtn");
+  await a.click("#revealBtn");
+  await a.click("#dealBtn");
+  await expect(b.locator("#roundLabel")).toHaveText("第2ラウンド");
+  await expect(c.locator("#roundLabel")).toHaveText("第1ラウンド");
+
+  await c.click("#reconnectBtn");
+  await expect(c.locator("#roundLabel")).toHaveText("第2ラウンド");
+  await expect(num(c, "なつ")).toHaveCount(0);
+  await expect(num(c, "あき")).toHaveText(await num(b, "あき").textContent());
 });

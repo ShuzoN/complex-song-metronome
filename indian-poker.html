@@ -69,6 +69,8 @@
         <div id="roomName" class="truncate text-lg font-bold"></div>
       </div>
       <div id="peerCount" class="rounded-full bg-felt-3 px-3 py-1 text-sm" aria-live="polite"></div>
+      <button id="reconnectBtn" type="button" title="つながりが切れたときに入り直す"
+        class="rounded-full px-3 py-1 text-sm text-paper/90 ring-1 ring-white/20 active:bg-white/10 disabled:opacity-50">↻ 再接続</button>
       <button id="leaveBtn" type="button" class="rounded-full px-3 py-1 text-sm text-paper/70 ring-1 ring-white/20 active:bg-white/10">退室</button>
     </header>
 
@@ -123,7 +125,7 @@ const cleanName = s => String(s ?? "").normalize("NFKC").trim().slice(0, 12);
 const cleanKey = s => String(s ?? "").normalize("NFKC").trim();
 
 // ---- 状態 ----
-let room = null, act = null, selfId = null;
+let lib = null, room = null, act = null, selfId = null;
 let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
 let game = null;           // {round, dealer, max, hands:[{id, name, n}], revealed}
@@ -144,10 +146,10 @@ $("joinForm").addEventListener("submit", async e => {
   $("joinBtn").disabled = true;
   $("joinMsg").textContent = "";
   try{
-    const lib = await import(TRYSTERO_URL);
+    lib = await import(TRYSTERO_URL);
     myName = name; keyword = key;
     store.set("name", name); store.set("key", key);
-    enter(lib);
+    enter();
   }catch(err){
     console.error(err);
     $("joinMsg").textContent = "通信ライブラリを読み込めませんでした。ネットワークを確認してください。";
@@ -156,30 +158,64 @@ $("joinForm").addEventListener("submit", async e => {
   }
 });
 
-function enter(lib){
+function enter(){
   selfId = lib.selfId;
-  // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
-  room = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
-  act = {name: room.makeAction("name"), game: room.makeAction("game")};
-
-  room.onPeerJoin = id => {
-    peers.set(id, peers.get(id) || "");
-    act.name.send(myName, {target: id});
-    if(game) act.game.send(game, {target: id});
-    render();
-  };
-  room.onPeerLeave = id => { peers.delete(id); render(); };
-  act.name.onMessage = (name, {peerId}) => { peers.set(peerId, cleanName(name)); render(); };
-  act.game.onMessage = g => { if(validGame(g)) merge(g); };
-
+  connect();
   $("join").hidden = true;
   $("table").hidden = false;
   $("roomName").textContent = keyword;
+  render();
+}
+
+// ルームに入る。再接続でも使うので、古いルームから遅れて届いた知らせは無視する
+function connect(){
+  // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
+  const r = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
+  const a = {name: r.makeAction("name"), game: r.makeAction("game")};
+  const live = fn => (...args) => { if(r === room) fn(...args); };
+  room = r; act = a;
+
+  // 名前と手元の状態を渡し合う。相手が切断に気づかないまま入り直すと、相手側では「参加」が起きないので、
+  // ask で相手からも名前と状態を返してもらう
+  const greet = (id, ask) => {
+    a.name.send({name: myName, ask}, {target: id});
+    if(game) a.game.send(game, {target: id});
+  };
+  r.onPeerJoin = live(id => {
+    peers.set(id, peers.get(id) || "");
+    greet(id, true);
+    render();
+  });
+  r.onPeerLeave = live(id => { peers.delete(id); render(); });
+  a.name.onMessage = live((msg, {peerId}) => {
+    peers.set(peerId, cleanName(msg?.name));
+    if(msg?.ask) greet(peerId, false);
+    render();
+  });
+  a.game.onMessage = live(g => { if(validGame(g)) merge(g); });
+
   clearTimeout(noPeerTimer);
   joinedAt = Date.now();
   noPeerTimer = setTimeout(render, NO_PEER_HINT_MS);
-  render();
 }
+
+// 画面を閉じたりスリープしたりすると WebRTC が切れることがある。いったん抜けて同じ合言葉で入り直す。
+// 配られた数字（game）は手元に残し、つながった相手と突き合わせる（新しいラウンドの方が採られる）
+async function reconnect(){
+  if(!room) return;
+  const btn = $("reconnectBtn");
+  btn.disabled = true;
+  btn.textContent = "接続中…";
+  const old = room;
+  room = act = null;
+  peers.clear();
+  try{ await old.leave(); }catch(err){ console.warn(err); }
+  if($("table").hidden){ btn.disabled = false; btn.textContent = "↻ 再接続"; return; }   // 待つ間に退室した
+  connect();
+  render();
+  setTimeout(() => { btn.disabled = false; btn.textContent = "↻ 再接続"; }, 1500);
+}
+$("reconnectBtn").addEventListener("click", reconnect);
 
 function leave(){
   if(room) room.leave();
@@ -261,7 +297,7 @@ function render(){
   if(peers.size === 0){
     notes.push("ほかの人を待っています… 同じ合言葉で入室してもらってください。");
     if(Date.now() - joinedAt >= NO_PEER_HINT_MS)
-      notes.push("しばらくつながらない場合は、合言葉が一致しているか、同じ Wi‑Fi につなぐと改善するか確かめてください。");
+      notes.push("しばらくつながらない場合は「↻ 再接続」を押してください。それでもだめなら、合言葉が一致しているか、同じ Wi‑Fi につなぐと改善するか確かめてください。");
   }
   if(named.includes(myName)) notes.push(`「${myName}」という名前の人がほかにもいます。名前を変えて入り直してください。`);
   $("notice").hidden = !notes.length;
