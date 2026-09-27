@@ -156,6 +156,16 @@
 const TRYSTERO_URL = "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm";
 const APP_ID = "shuzon-complex-song-metronome/indian-poker/v1";
 const NO_PEER_HINT_MS = 20000;
+// 顔合わせに使う Nostr リレー。よく使われているリレーと、Trystero がこのアプリ用に選ぶ既定のリレーを両方使い、
+// どれかが落ちていても顔合わせできるようにする
+const RELAYS = [
+  "relay.damus.io", "nos.lol", "relay.primal.net", "nostr.mom", "relay.snort.social",
+  "nostr-relay.corb.net", "basspistol.org", "koru.bitcointxoko.org", "social.amanah.eblessing.co", "relay.mostr.pub"
+].map(h => "wss://" + h);
+const PING_MS = 4000;               // 生きていることを知らせる間隔
+const PEER_TIMEOUT_MS = 15000;      // これだけ何も届かない相手は切断とみなす
+const HIDDEN_RECONNECT_MS = 15000;  // これ以上画面を離れていたら、戻ったときに入り直す
+const RESUME_KEY = "ip:resume";     // 入り直し（ページの読み直し）をまたいで状態を持ち越す
 const MAX = 100;   // 数字は 1〜100
 // お題モードで配る名詞（300個）
 const WORDS = [
@@ -212,6 +222,8 @@ const cleanKey = s => String(s ?? "").normalize("NFKC").trim();
 let lib = null, room = null, act = null, selfId = null;
 let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
+const lastSeen = new Map();   // 相手から最後に何か届いた時刻
+let loadedAt = Date.now(), hiddenAt = 0, relayDownChecks = 0;
 let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
 let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
 // 見え方。others＝自分以外が見える（インディアンポーカー）、self＝自分だけ見える
@@ -229,8 +241,8 @@ const isOnline = h => isMe(h) || peers.has(h.id) || [...peers.values()].includes
 $("nameInput").value = store.get("name") || "";
 $("keyInput").value = new URLSearchParams(location.search).get("room") || store.get("key") || "";
 
-$("joinForm").addEventListener("submit", async e => {
-  e.preventDefault();
+$("joinForm").addEventListener("submit", e => { e.preventDefault(); join(); });
+async function join(){
   const name = cleanName($("nameInput").value), key = cleanKey($("keyInput").value);
   if(!name || !key) return;
   $("joinBtn").disabled = true;
@@ -247,7 +259,7 @@ $("joinForm").addEventListener("submit", async e => {
   }finally{
     $("joinBtn").disabled = false;
   }
-});
+}
 
 function enter(){
   selfId = lib.selfId;
@@ -263,9 +275,16 @@ function enter(){
 // ルームに入る。再接続でも使うので、古いルームから遅れて届いた知らせは無視する
 function connect(){
   // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
-  const r = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
-  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free"), timer: r.makeAction("timer")};
-  const live = fn => (...args) => { if(r === room) fn(...args); };
+  const r = lib.joinRoom({appId: APP_ID, password: keyword, relayConfig: {urls: RELAYS}}, keyword);
+  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free"), timer: r.makeAction("timer"),
+    ping: r.makeAction("ping")};
+  // 古いルームから遅れて届いた知らせは無視する。届いたものはすべて「生きている」印として数える
+  const live = fn => (...args) => {
+    if(r !== room) return;
+    const id = typeof args[0] === "string" && args.length === 1 ? args[0] : args[1]?.peerId;
+    if(id) heard(id);
+    fn(...args);
+  };
   room = r; act = a;
 
   // 名前と手元の状態を渡し合う。相手が切断に気づかないまま入り直すと、相手側では「参加」が起きないので、
@@ -281,9 +300,14 @@ function connect(){
     greet(id, true);
     render();
   });
-  r.onPeerLeave = live(id => { peers.delete(id); render(); });
+  r.onPeerLeave = id => { if(r === room){ peers.delete(id); lastSeen.delete(id); render(); } };
+  a.ping.onMessage = live(() => {});
   a.name.onMessage = live((msg, {peerId}) => {
-    peers.set(peerId, cleanName(msg?.name));
+    const name = cleanName(msg?.name);
+    peers.set(peerId, name);
+    // 同じ人が入り直すと別の peerId で来る。同じ名前の古い相手がしばらく黙っていれば、抜け殻として外す
+    for(const [id, n] of peers)
+      if(id !== peerId && n === name && Date.now() - (lastSeen.get(id) || 0) > 2 * PING_MS) { peers.delete(id); lastSeen.delete(id); }
     if(msg?.ask) greet(peerId, false);
     render();
   });
@@ -296,23 +320,60 @@ function connect(){
   noPeerTimer = setTimeout(render, NO_PEER_HINT_MS);
 }
 
-// 画面を閉じたりスリープしたりすると WebRTC が切れることがある。いったん抜けて同じ合言葉で入り直す。
-// 配られた数字（game）は手元に残し、つながった相手と突き合わせる（新しいラウンドの方が採られる）
-async function reconnect(){
+// 相手から何か届いたら生きている。切断とみなして外していた相手なら戻す
+function heard(id){
+  lastSeen.set(id, Date.now());
+  if(!peers.has(id)){ peers.set(id, ""); act?.name.send({name: myName, ask: true}, {target: id}); render(); }
+}
+// 生きている印を送り、黙ったままの相手を外す（スリープした端末は切断を知らせてこないため）
+setInterval(() => {
   if(!room) return;
-  const btn = $("reconnectBtn");
-  btn.disabled = true;
-  btn.textContent = "接続中…";
-  const old = room;
-  room = act = null;
-  peers.clear();
-  try{ await old.leave(); }catch(err){ console.warn(err); }
-  if($("table").hidden){ btn.disabled = false; btn.textContent = "↻ 再接続"; return; }   // 待つ間に退室した
-  connect();
-  render();
-  setTimeout(() => { btn.disabled = false; btn.textContent = "↻ 再接続"; }, 1500);
+  act.ping.send(0);
+  let changed = false;
+  for(const id of [...peers.keys()])
+    if(Date.now() - (lastSeen.get(id) || 0) > PEER_TIMEOUT_MS){ peers.delete(id); lastSeen.delete(id); changed = true; }
+  if(changed) render();
+  checkRelays();
+}, PING_MS);
+
+// 入り直しはページを読み直して行う。Trystero は
+//  ・同じページでは自分の peerId が変わらず、相手がまだ古い接続を生きていると思っている間は、入り直しの呼びかけを無視する
+//  ・リレーとの WebSocket が何度か切れると再接続をあきらめ、その後はルームに入り直しても同じ（切れた）接続を使い回す
+// ため、同じページのままでは戻れないことがある。読み直せば peerId もリレーとの接続も新しくなる。
+// 配られた数字・ワード一覧・タイマーは持ち越し、つながった相手と突き合わせる（新しい方が採られる）
+function saveResume(){
+  try{
+    sessionStorage.setItem(RESUME_KEY, JSON.stringify({name: myName, key: keyword, game, free,
+      timer: timer.v ? timerWire() : null, at: Date.now()}));
+  }catch(_){}
+}
+function reconnect(){
+  if(!room) return;
+  $("reconnectBtn").disabled = true;
+  $("reconnectBtn").textContent = "接続中…";
+  saveResume();
+  location.reload();
 }
 $("reconnectBtn").addEventListener("click", reconnect);
+// 読み直しの直後に何度も入り直さないよう、自動の入り直しは読み込みから30秒たってから
+const autoReconnect = () => { if(room && Date.now() - loadedAt > 30000) reconnect(); };
+// しばらく画面を離れて（スリープ・別のアプリ）戻ってきたら入り直す
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){ hiddenAt = Date.now(); return; }
+  if(hiddenAt && Date.now() - hiddenAt >= HIDDEN_RECONNECT_MS && room) reconnect();
+  hiddenAt = 0;
+});
+// 電波が戻ったら入り直す
+addEventListener("online", () => { if(room) reconnect(); });
+// つながっていたリレーがすべて切れたまま 15 秒たったら入り直す。
+// 最初から1つもつながらない（リレーが塞がれている）ときや、電波がないときは、読み直しても変わらないので何もしない
+let relayEverUp = false;
+function checkRelays(){
+  const socks = Object.values(lib?.getRelaySockets?.() || {});
+  if(socks.some(ws => ws?.readyState === 1)){ relayEverUp = true; relayDownChecks = 0; return; }
+  relayDownChecks = relayEverUp && socks.length && navigator.onLine !== false ? relayDownChecks + 1 : 0;
+  if(relayDownChecks * PING_MS >= 15000) autoReconnect();
+}
 
 function leave(){
   if(room) room.leave();
@@ -326,7 +387,10 @@ function leave(){
   $("join").hidden = false;
 }
 $("leaveBtn").addEventListener("click", leave);
-addEventListener("pagehide", () => { if(room) room.leave(); });
+// ページを離れるときは状態を残してから抜ける（読み直したら同じテーブルに戻る）
+addEventListener("pagehide", () => { if(room){ saveResume(); room.leave(); } });
+// 戻る・進むでページがそのまま戻ってきたときは、抜けたルームに入り直す
+addEventListener("pageshow", e => { if(e.persisted && room) reconnect(); });
 
 // ---- ゲームの同期 ----
 // 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
@@ -626,6 +690,24 @@ function renderBoard(){
   $("waitingList").innerHTML = waiting.map(p =>
     `<li class="rounded-full bg-felt-2 px-3 py-1 text-sm ring-1 ring-white/10">${esc(p.name)}</li>`).join("");
 }
+
+// ---- 入り直し（読み直し）からの復帰 ----
+document.addEventListener("pointerdown", unlockAudio);   // 読み直し後も、最初に触れたときに音を使えるようにする
+(function resume(){
+  let r = null;
+  try{ r = JSON.parse(sessionStorage.getItem(RESUME_KEY) || "null"); sessionStorage.removeItem(RESUME_KEY); }catch(_){}
+  if(!r || typeof r.name !== "string" || typeof r.key !== "string" || Date.now() - r.at > 30 * 60000) return;
+  $("nameInput").value = r.name;
+  $("keyInput").value = r.key;
+  if(validGame(r.game)) merge(r.game);
+  if(validFree(r.free)) free = {list: parseFree(r.free.list.join("\n")).list, v: r.free.v, by: r.free.by};
+  if(r.timer && validTimer(r.timer)){
+    const t = {...r.timer};
+    if(t.status === "running") t.left = Math.max(0, t.left - (Date.now() - r.at));
+    applyTimer(t);
+  }
+  join();
+})();
 </script>
 </body>
 </html>
