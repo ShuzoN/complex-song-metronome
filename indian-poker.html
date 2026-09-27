@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b2a1f">
+<title>インディアンポーカー</title>
+<!-- 見た目は Tailwind CSS（ブラウザ版）。端末どうしの通信は Trystero（WebRTC）で、自前のサーバは持たない。
+     顔合わせ（シグナリング）だけ公開の Nostr リレーを借り、つながったあとは端末どうしで直接やりとりする。 -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-felt: #0b2a1f;
+    --color-felt-2: #123a2b;
+    --color-felt-3: #1b4d3a;
+    --color-paper: #f7f3e8;
+    --color-ink: #1d1b16;
+    --color-gold: #d9b45a;
+    --color-card-red: #b3261e;
+    --font-num: "Georgia", "Times New Roman", serif;
+  }
+  @layer base {
+    body { @apply bg-felt text-paper antialiased; }
+  }
+  .card-back {
+    background:
+      repeating-linear-gradient(45deg, rgb(255 255 255 / .10) 0 6px, transparent 6px 12px),
+      var(--color-card-red);
+  }
+</style>
+<style>
+  /* Tailwind が読めなかったときでも最低限は使えるように */
+  [hidden]{display:none !important}
+  body{margin:0;background:#0b2a1f;color:#f7f3e8;font-family:system-ui,sans-serif}
+</style>
+</head>
+<body class="min-h-dvh">
+<main class="mx-auto max-w-xl px-4 pb-16 pt-[max(1rem,env(safe-area-inset-top))]">
+
+  <!-- 入室 -->
+  <section id="join" class="pt-10">
+    <h1 class="text-center text-3xl font-bold tracking-wide">インディアンポーカー</h1>
+    <p class="mt-3 text-center text-sm text-paper/70">同じ合言葉の人どうしで、同じテーブルに着きます。<br>自分の数字（お題）だけが見えません。</p>
+    <form id="joinForm" class="mt-8 space-y-4 rounded-2xl bg-felt-2 p-5 shadow-lg ring-1 ring-white/10">
+      <label class="block">
+        <span class="text-sm text-paper/80">名前</span>
+        <input id="nameInput" name="name" required maxlength="12" autocomplete="nickname"
+          class="mt-1 block w-full rounded-lg border-0 bg-paper px-3 py-3 text-lg text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+          placeholder="たろう">
+      </label>
+      <label class="block">
+        <span class="text-sm text-paper/80">合言葉</span>
+        <input id="keyInput" name="key" required maxlength="40" autocomplete="off" autocapitalize="off"
+          class="mt-1 block w-full rounded-lg border-0 bg-paper px-3 py-3 text-lg text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+          placeholder="例：さくら2026">
+        <span class="mt-1 block text-xs text-paper/50">他の人と被りにくい言葉にしてください。</span>
+      </label>
+      <button id="joinBtn" type="submit"
+        class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-50">入室</button>
+      <p id="joinMsg" class="min-h-5 text-center text-sm text-red-300" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- テーブル -->
+  <section id="table" hidden>
+    <header class="flex items-center gap-2">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-xs text-paper/60">合言葉</div>
+        <div id="roomName" class="truncate text-lg font-bold"></div>
+      </div>
+      <div id="peerCount" class="rounded-full bg-felt-3 px-3 py-1 text-sm" aria-live="polite"></div>
+      <button id="reconnectBtn" type="button" title="つながりが切れたときに入り直す"
+        class="rounded-full px-3 py-1 text-sm text-paper/90 ring-1 ring-white/20 active:bg-white/10 disabled:opacity-50">↻ 再接続</button>
+      <button id="leaveBtn" type="button" class="rounded-full px-3 py-1 text-sm text-paper/70 ring-1 ring-white/20 active:bg-white/10">退室</button>
+    </header>
+
+    <!-- タイマー（全員で同期） -->
+    <div id="timer" class="mt-4 flex items-center gap-2 rounded-xl bg-felt-2 px-3 py-2 ring-1 ring-white/10">
+      <div id="timerDisplay" class="min-w-[4.5ch] font-num text-3xl font-bold tabular-nums" aria-live="off">00:00</div>
+      <div id="timerIdle" class="ml-auto flex items-center gap-2">
+        <label class="flex items-center gap-1 text-sm text-paper/80">
+          <input id="timerMin" type="number" inputmode="decimal" min="0" max="180" step="any" value="3"
+            class="w-16 rounded-lg border-0 bg-paper px-2 py-2 text-right text-base text-ink focus:outline-none focus:ring-2 focus:ring-gold">
+          分
+        </label>
+        <button id="timerStart" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] bg-gold text-ink disabled:opacity-40">スタート</button>
+      </div>
+      <div id="timerRun" class="ml-auto flex items-center gap-2" hidden>
+        <button id="timerPause" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] bg-paper text-ink">一時停止</button>
+        <button id="timerReset" type="button" class="rounded-lg px-3 py-2 text-sm font-bold active:scale-[.98] text-paper/80 ring-1 ring-white/20">リセット</button>
+      </div>
+    </div>
+
+    <p id="notice" class="mt-4 rounded-xl bg-felt-2 px-4 py-3 text-sm text-paper/80 ring-1 ring-white/10" hidden></p>
+
+    <!-- 配る前 -->
+    <div id="lobby" class="mt-5" hidden>
+      <h2 class="text-sm font-bold text-paper/70">テーブルにいる人</h2>
+      <ul id="members" class="mt-2 grid grid-cols-2 gap-2"></ul>
+    </div>
+
+    <!-- 配ったあと -->
+    <div id="board" class="mt-5" hidden>
+      <div class="flex items-baseline justify-between">
+        <h2 id="roundLabel" class="text-sm font-bold text-paper/70"></h2>
+        <span id="rangeLabel" class="text-xs text-paper/50"></span>
+      </div>
+      <p id="spectator" class="mt-2 rounded-lg bg-gold/15 px-3 py-2 text-sm text-gold" hidden>このラウンドは観戦中です。次に配るときから参加できます。</p>
+      <ul id="cards" class="mt-3 grid grid-cols-3 gap-3"></ul>
+      <div id="poolBox" class="mt-4" hidden>
+        <h3 class="text-xs font-bold text-paper/60">このラウンドの候補</h3>
+        <ul id="poolList" class="mt-1 flex flex-wrap gap-1.5"></ul>
+      </div>
+      <div id="waiting" class="mt-4" hidden>
+        <h3 class="text-xs font-bold text-paper/60">次のラウンドから参加</h3>
+        <ul id="waitingList" class="mt-1 flex flex-wrap gap-2"></ul>
+      </div>
+    </div>
+
+    <!-- 操作 -->
+    <div class="mt-6 space-y-3">
+      <button id="revealBtn" type="button" hidden
+        class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
+      <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
+        <div class="mb-2 text-xs font-bold text-paper/60">見え方</div>
+        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="見え方">
+          <button type="button" role="radio" data-view="others" class="rounded-lg py-2">自分以外が見える</button>
+          <button type="button" role="radio" data-view="self" class="rounded-lg py-2">自分だけ見える</button>
+        </div>
+        <div class="mb-2 text-xs font-bold text-paper/60">配るもの</div>
+        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
+          <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字</button>
+          <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題</button>
+          <button type="button" role="radio" data-mode="chain" class="rounded-lg py-2">チェーン店</button>
+          <button type="button" role="radio" data-mode="free" class="rounded-lg py-2">フリーワード</button>
+        </div>
+        <div id="freeBox" class="mb-3" hidden>
+          <label for="freeInput" class="flex items-baseline justify-between text-sm">
+            <span class="text-paper/80">ワード（1行に1つ）</span>
+            <span id="freeCount" class="text-xs text-paper/60"></span>
+          </label>
+          <textarea id="freeInput" rows="6" autocomplete="off"
+            class="mt-1 block w-full resize-y rounded-lg border-0 bg-paper px-3 py-2 text-base text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+            placeholder="例：&#10;カレー&#10;ラーメン&#10;すし"></textarea>
+          <p class="mt-1 text-xs text-paper/50">入れたワードはテーブルの全員に共有され、配るときにこの中から1人1つずつ重ならないように振られます。</p>
+        </div>
+        <button id="dealBtn" type="button"
+          class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
+        <p id="dealMsg" class="mt-2 min-h-4 text-center text-xs text-paper/60"></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const TRYSTERO_URL = "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm";
+const APP_ID = "shuzon-complex-song-metronome/indian-poker/v1";
+const NO_PEER_HINT_MS = 20000;
+// 顔合わせに使う Nostr リレー。よく使われているリレーと、Trystero がこのアプリ用に選ぶ既定のリレーを両方使い、
+// どれかが落ちていても顔合わせできるようにする
+const RELAYS = [
+  "relay.damus.io", "nos.lol", "relay.primal.net", "nostr.mom", "relay.snort.social",
+  "nostr-relay.corb.net", "basspistol.org", "koru.bitcointxoko.org", "social.amanah.eblessing.co", "relay.mostr.pub"
+].map(h => "wss://" + h);
+const PING_MS = 15000;              // 生きていることを知らせる間隔（ライフチェック）
+const PEER_TIMEOUT_MS = 3 * PING_MS; // 3回続けて何も届かない相手は切断とみなす
+const PROBE_MS = 3000;              // 問い合わせてから返事を待つ時間
+const HIDDEN_RECONNECT_MS = 15000;  // これ以上画面を離れていたら、戻ったときに入り直す
+const RESUME_KEY = "ip:resume";     // 入り直し（ページの読み直し）をまたいで状態を持ち越す
+const MAX = 100;   // 数字は 1〜100
+// お題モードで配る名詞（300個）
+const WORDS = [
+  "うさぎ","ねこ","いぬ","ぞう","きりん","ライオン","とら","くま","パンダ","さる","ぶた","うし","うま","ひつじ","やぎ","にわとり","ペンギン",
+  "いるか","くじら","さめ","かめ","かえる","へび","ワニ","カンガルー","コアラ","ゴリラ","きつね","たぬき","りす","ハムスター","ふくろう","からす",
+  "はと","すずめ","つばめ","わし","フラミンゴ","かに","たこ","いか","飛行機","電車","新幹線","自転車","バス","タクシー","船","ヘリコプター","ロケット",
+  "救急車","消防車","パトカー","トラック","バイク","ヨット","潜水艦","気球","ショベルカー","一輪車","観覧車","エレベーター","エスカレーター","スケートボード",
+  "工具","ハンマー","ドライバー","のこぎり","ペンチ","スパナ","はしご","ドリル","スコップ","ほうき","バケツ","ロープ","くぎ","ねじ","懐中電灯","りんご",
+  "バナナ","みかん","ぶどう","いちご","すいか","メロン","もも","さくらんぼ","パイナップル","レモン","かき","トマト","きゅうり","にんじん","たまねぎ",
+  "じゃがいも","キャベツ","なす","かぼちゃ","とうもろこし","おにぎり","ラーメン","カレーライス","すし","うどん","そば","天ぷら","ハンバーガー","ピザ",
+  "サンドイッチ","パン","ケーキ","ドーナツ","アイスクリーム","チョコレート","クッキー","プリン","団子","ぎょうざ","たこ焼き","お好み焼き","オムライス",
+  "スパゲッティ","ホットドッグ","牛乳","コーヒー","お茶","ジュース","テレビ","冷蔵庫","電子レンジ","洗濯機","掃除機","エアコン","せんぷう機","ドライヤー",
+  "時計","カメラ","スマートフォン","パソコン","電話","ラジオ","電球","こたつ","フライパン","なべ","包丁","おはし","スプーン","フォーク","コップ","お皿",
+  "茶わん","いす","つくえ","ベッド","ソファ","まくら","ふとん","カーテン","かがみ","本棚","ゴミ箱","傘","かばん","財布","かぎ","めがね","腕時計",
+  "帽子","くつ","長ぐつ","手ぶくろ","マフラー","Tシャツ","セーター","コート","ズボン","水着","指輪","えんぴつ","消しゴム","ボールペン","ノート","はさみ",
+  "クレヨン","絵の具","筆","地球儀","黒板","ランドセル","教科書","カレンダー","地図","新聞","絵本","まんが","ピアノ","ギター","バイオリン","たいこ",
+  "トランペット","フルート","ハーモニカ","マイク","サッカーボール","バット","グローブ","ラケット","なわとび","ブランコ","すべり台","けん玉","こま","風船",
+  "たこあげ","シャボン玉","ぬいぐるみ","人形","トランプ","サイコロ","パズル","太陽","月","星","雲","雨","雪","虹","かみなり","風","山","川","海",
+  "島","湖","滝","森","砂漠","火山","花火","ひまわり","チューリップ","さくら","バラ","たんぽぽ","あさがお","もみじ","きのこ","サボテン","学校",
+  "病院","公園","駅","空港","図書館","動物園","水族館","遊園地","映画館","美術館","郵便局","神社","お寺","お城","灯台","橋","トンネル","ポスト",
+  "自動販売機","コンビニ","スーパー","温泉","キャンプ","テント","医者","看護師","先生","警察官","消防士","パイロット","運転手","コック","大工","歌手",
+  "忍者","侍","王様","お姫様","宇宙飛行士","サンタクロース","雪だるま","ロボット","恐竜","おばけ","鬼","かっぱ","魔法使い","海賊","宝箱"
+];
+// チェーン店モードで配る全国チェーン（60個）。グループ会社でもブランドごとに分ける。ローカルチェーンは入れない
+const CHAINS = [
+  "ガスト","バーミヤン","ジョナサン","しゃぶ葉","サイゼリヤ","デニーズ","ロイヤルホスト","びっくりドンキー","吉野家","すき家","松屋","なか卯","マクドナルド",
+  "モスバーガー","ケンタッキー","バーガーキング","スシロー","くら寿司","はま寿司","かっぱ寿司","丸亀製麺","はなまるうどん","天下一品","一蘭","餃子の王将",
+  "リンガーハット","CoCo壱番屋","大戸屋","やよい軒","スターバックス","ドトール","タリーズ","コメダ珈琲","ミスタードーナツ","サーティワン","セブンイレブン",
+  "ローソン","ファミリーマート","ダイソー","セリア","業務スーパー","コストコ","イオン","ドン・キホーテ","ユニクロ","GU","しまむら","無印良品","ニトリ",
+  "ABCマート","GEO","ブックオフ","ヨドバシカメラ","ビックカメラ","ヤマダデンキ","ケーズデンキ","マツモトキヨシ","オートバックス","カラオケまねきねこ",
+  "ビッグエコー"
+];
+const MODES = {num: "数字", word: "お題", chain: "チェーン店", free: "ワード"};
+const LISTS = {word: WORDS, chain: CHAINS};   // 用意した言葉を配るモード
+const LABELS = {num: `1〜${MAX}`, word: "お題（名詞）", chain: "全国チェーン店", free: "フリーワード"};
+const FREE_MAX = 20;   // フリーワードは最大20個
+const isWordy = m => m in LISTS || m === "free";   // 数字以外は言葉を配る
+// フリーワードの入力を1行1つ（読点・カンマ区切りも可）で読む。空行と重なりは除く
+function parseFree(text){
+  const all = [...new Set(String(text).split(/[\n,、，]+/).map(w => w.normalize("NFKC").trim().slice(0, 20)).filter(Boolean))];
+  return {list: all.slice(0, FREE_MAX), over: all.length > FREE_MAX};
+}
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try{ return localStorage.getItem("ip:" + k) }catch(_){ return null } },
+  set(k, v){ try{ localStorage.setItem("ip:" + k, v) }catch(_){} }
+};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cleanName = s => String(s ?? "").normalize("NFKC").trim().slice(0, 12);
+const cleanKey = s => String(s ?? "").normalize("NFKC").trim();
+
+// ---- 状態 ----
+let lib = null, room = null, act = null, selfId = null;
+let myName = "", keyword = "";
+const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
+const lastSeen = new Map();   // 相手から最後に何か届いた時刻
+const probing = new Set();    // 生きているか問い合わせ中の相手（抜け殻かもしれないので、人数や名前の重なりに数えない）
+let loadedAt = Date.now(), hiddenAt = 0, relayDownChecks = 0;
+let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
+let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
+// 見え方。others＝自分以外が見える（インディアンポーカー）、self＝自分だけ見える
+let view = store.get("view") === "self" ? "self" : "others";
+// フリーワードの一覧。テーブルで共有し、v が大きい方（同じなら by が大きい方）を採る
+let free = {list: parseFree(store.get("free") || "").list, v: 0, by: ""};
+let freeSendTimer = 0;
+let noPeerTimer = 0, joinedAt = 0, revealArmTimer = 0;
+
+// 自分の手札か。再読み込みすると peerId が変わるので、名前でも自分とみなす（自分の数字を見せないため）
+const isMe = h => h.id === selfId || h.name === myName;
+const isOnline = h => isMe(h) || peers.has(h.id) || [...peers.values()].includes(h.name);
+
+// ---- 入室・退室 ----
+$("nameInput").value = store.get("name") || "";
+$("keyInput").value = new URLSearchParams(location.search).get("room") || store.get("key") || "";
+
+$("joinForm").addEventListener("submit", e => { e.preventDefault(); join(); });
+async function join(){
+  const name = cleanName($("nameInput").value), key = cleanKey($("keyInput").value);
+  if(!name || !key) return;
+  $("joinBtn").disabled = true;
+  $("joinMsg").textContent = "";
+  try{
+    unlockAudio();   // 時間切れの音を鳴らせるよう、入室の操作のうちに音を使えるようにしておく
+    lib = await import(TRYSTERO_URL);
+    myName = name; keyword = key;
+    store.set("name", name); store.set("key", key);
+    enter();
+  }catch(err){
+    console.error(err);
+    $("joinMsg").textContent = "通信ライブラリを読み込めませんでした。ネットワークを確認してください。";
+  }finally{
+    $("joinBtn").disabled = false;
+  }
+}
+
+function enter(){
+  selfId = lib.selfId;
+  // 前回から持ち越したワード一覧どうしが同じ v でも、全員が同じ一覧に揃うように自分の印を付ける
+  if(free.list.length && !free.by) free.by = selfId;
+  connect();
+  $("join").hidden = true;
+  $("table").hidden = false;
+  $("roomName").textContent = keyword;
+  render();
+}
+
+// ルームに入る。再接続でも使うので、古いルームから遅れて届いた知らせは無視する
+function connect(){
+  // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
+  const r = lib.joinRoom({appId: APP_ID, password: keyword, relayConfig: {urls: RELAYS}}, keyword);
+  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free"), timer: r.makeAction("timer"),
+    ping: r.makeAction("ping")};
+  // 古いルームから遅れて届いた知らせは無視する。届いたものはすべて「生きている」印として数える
+  const live = fn => (...args) => {
+    if(r !== room) return;
+    const id = typeof args[0] === "string" && args.length === 1 ? args[0] : args[1]?.peerId;
+    if(id) heard(id);
+    fn(...args);
+  };
+  room = r; act = a;
+
+  // 名前と手元の状態を渡し合う。相手が切断に気づかないまま入り直すと、相手側では「参加」が起きないので、
+  // ask で相手からも名前と状態を返してもらう
+  const greet = (id, ask) => {
+    a.name.send({name: myName, ask}, {target: id});
+    if(game) a.game.send(game, {target: id});
+    if(free.list.length) a.free.send(free, {target: id});
+    if(timer.v) a.timer.send(timerWire(), {target: id});
+  };
+  r.onPeerJoin = live(id => {
+    peers.set(id, peers.get(id) || "");
+    greet(id, true);
+    render();
+  });
+  r.onPeerLeave = id => { if(r === room){ peers.delete(id); lastSeen.delete(id); render(); } };
+  // ping：{q: 1} は「生きていたら返事して」の問い合わせ
+  a.ping.onMessage = live((msg, {peerId}) => { if(msg?.q) a.ping.send({q: 0}, {target: peerId}); });
+  a.name.onMessage = live((msg, {peerId}) => {
+    const name = cleanName(msg?.name);
+    peers.set(peerId, name);
+    // 同じ人が入り直すと別の peerId で来る。同じ名前の古い相手に問い合わせ、返事がなければ抜け殻として外す
+    for(const [id, n] of peers) if(id !== peerId && n === name) probe(id);
+    if(msg?.ask) greet(peerId, false);
+    render();
+  });
+  a.game.onMessage = live(g => { if(validGame(g)) merge(g); });
+  a.free.onMessage = live(f => { if(validFree(f)) mergeFree(f); });
+  a.timer.onMessage = live(t => { if(validTimer(t)) mergeTimer(t); });
+
+  clearTimeout(noPeerTimer);
+  joinedAt = Date.now();
+  noPeerTimer = setTimeout(render, NO_PEER_HINT_MS);
+}
+
+// 相手から何か届いたら生きている。切断とみなして外していた相手なら戻す
+function heard(id){
+  lastSeen.set(id, Date.now());
+  if(!peers.has(id)){ peers.set(id, ""); act?.name.send({name: myName, ask: true}, {target: id}); render(); }
+}
+// 相手が生きているか問い合わせ、PROBE_MS のうちに何も届かなければ外す
+function probe(id){
+  if(probing.has(id) || !act) return;
+  const askedAt = Date.now();
+  probing.add(id);
+  act.ping.send({q: 1}, {target: id});
+  setTimeout(() => {
+    probing.delete(id);
+    if(peers.has(id) && (lastSeen.get(id) || 0) < askedAt){ peers.delete(id); lastSeen.delete(id); }
+    render();
+  }, PROBE_MS);
+  render();
+}
+// 生きている印を送り、黙ったままの相手を外す（スリープした端末は切断を知らせてこないため）
+setInterval(() => {
+  if(!room) return;
+  act.ping.send({q: 0});
+  let changed = false;
+  for(const id of [...peers.keys()])
+    if(Date.now() - (lastSeen.get(id) || 0) > PEER_TIMEOUT_MS){ peers.delete(id); lastSeen.delete(id); changed = true; }
+  if(changed) render();
+  checkRelays();
+}, PING_MS);
+
+// 入り直しはページを読み直して行う。Trystero は
+//  ・同じページでは自分の peerId が変わらず、相手がまだ古い接続を生きていると思っている間は、入り直しの呼びかけを無視する
+//  ・リレーとの WebSocket が何度か切れると再接続をあきらめ、その後はルームに入り直しても同じ（切れた）接続を使い回す
+// ため、同じページのままでは戻れないことがある。読み直せば peerId もリレーとの接続も新しくなる。
+// 配られた数字・ワード一覧・タイマーは持ち越し、つながった相手と突き合わせる（新しい方が採られる）
+function saveResume(){
+  try{
+    sessionStorage.setItem(RESUME_KEY, JSON.stringify({name: myName, key: keyword, game, free,
+      timer: timer.v ? timerWire() : null, at: Date.now()}));
+  }catch(_){}
+}
+function reconnect(){
+  if(!room) return;
+  $("reconnectBtn").disabled = true;
+  $("reconnectBtn").textContent = "接続中…";
+  saveResume();
+  location.reload();
+}
+$("reconnectBtn").addEventListener("click", reconnect);
+// 読み直しの直後に何度も入り直さないよう、自動の入り直しは読み込みから30秒たってから
+const autoReconnect = () => { if(room && Date.now() - loadedAt > 30000) reconnect(); };
+// しばらく画面を離れて（スリープ・別のアプリ）戻ってきたら入り直す
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){ hiddenAt = Date.now(); return; }
+  if(hiddenAt && Date.now() - hiddenAt >= HIDDEN_RECONNECT_MS && room) reconnect();
+  hiddenAt = 0;
+});
+// 電波が戻ったら入り直す
+addEventListener("online", () => { if(room) reconnect(); });
+// つながっていたリレーがすべて切れたまま、ライフチェック2回ぶん（15秒以上）たったら入り直す。
+// 最初から1つもつながらない（リレーが塞がれている）ときや、電波がないときは、読み直しても変わらないので何もしない
+let relayEverUp = false;
+function checkRelays(){
+  const socks = Object.values(lib?.getRelaySockets?.() || {});
+  if(socks.some(ws => ws?.readyState === 1)){ relayEverUp = true; relayDownChecks = 0; return; }
+  relayDownChecks = relayEverUp && socks.length && navigator.onLine !== false ? relayDownChecks + 1 : 0;
+  if(relayDownChecks >= 2) autoReconnect();   // 2回続けて（15秒以上）全部切れていたら
+}
+
+function leave(){
+  if(room) room.leave();
+  room = act = null;
+  peers.clear();
+  game = null;
+  timer = {v: 0, by: "", status: "idle", total: 0, left: 0, endAt: 0};
+  renderTimer();
+  clearTimeout(noPeerTimer);
+  $("table").hidden = true;
+  $("join").hidden = false;
+}
+$("leaveBtn").addEventListener("click", leave);
+// ページを離れるときは状態を残してから抜ける（読み直したら同じテーブルに戻る）
+addEventListener("pagehide", () => { if(room){ saveResume(); room.leave(); } });
+// 戻る・進むでページがそのまま戻ってきたときは、抜けたルームに入り直す
+addEventListener("pageshow", e => { if(e.persisted && room) reconnect(); });
+
+// ---- ゲームの同期 ----
+// 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
+function validGame(g){
+  if(!g || !Number.isInteger(g.round) || typeof g.dealer !== "string" || !Array.isArray(g.hands)) return false;
+  const word = isWordy(g.mode);
+  return g.hands.every(h => h && typeof h.id === "string" && (word ? typeof h.w === "string" : Number.isInteger(h.n)));
+}
+function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
+function merge(g){
+  const word = isWordy(g.mode);
+  g = {...g, mode: word ? g.mode : "num", view: g.view === "self" ? "self" : "others", revealed: !!g.revealed,
+    pool: g.mode === "free" && Array.isArray(g.pool) ? g.pool.map(w => String(w).slice(0, 20)).slice(0, FREE_MAX) : undefined,
+    hands: g.hands.map(h => word ? {id: h.id, name: cleanName(h.name), w: String(h.w).slice(0, 20)} : {id: h.id, name: cleanName(h.name), n: h.n})};
+  if(!game || order(g, game) > 0) game = g;
+  else if(order(g, game) === 0 && g.revealed && !game.revealed) game.revealed = true;
+  else return;
+  disarmReveal();
+  render();
+}
+function broadcast(){ if(act && game) act.game.send(game); }
+
+function players(){
+  const list = [{id: selfId, name: myName}];
+  for(const [id, name] of peers) if(name && !probing.has(id)) list.push({id, name});
+  return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+}
+
+const listFor = m => m === "free" ? free.list : LISTS[m];
+const maxPlayers = m => isWordy(m) ? listFor(m).length : MAX;
+function poolFor(m){
+  if(m === "num") return Array.from({length: MAX}, (_, i) => i + 1);
+  // 言葉は直前のラウンドと同じものが続かないようにする
+  const list = listFor(m);
+  const last = new Set(game?.mode === m ? game.hands.map(h => h.w) : []);
+  const fresh = list.filter(w => !last.has(w));
+  return fresh.length >= players().length ? fresh : [...list];
+}
+function deal(){
+  const ps = players(), m = mode;
+  if(ps.length < 2 || ps.length > maxPlayers(m)) return;
+  // 重ならないように人数ぶん引く
+  const pool = poolFor(m);
+  const rnd = new Uint32Array(ps.length);
+  crypto.getRandomValues(rnd);
+  const hands = ps.map((p, i) => {
+    const j = i + rnd[i] % (pool.length - i);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+    return isWordy(m) ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
+  });
+  game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, view, max: MAX, hands, revealed: false};
+  if(m === "free") game.pool = [...free.list];
+  disarmReveal();
+  broadcast();
+  render();
+}
+$("dealBtn").addEventListener("click", deal);
+for(const b of document.querySelectorAll("[data-view]"))
+  b.addEventListener("click", () => { view = b.dataset.view; store.set("view", view); render(); });
+for(const b of document.querySelectorAll("[data-mode]"))
+  b.addEventListener("click", () => { mode = b.dataset.mode; store.set("mode", mode); render(); });
+
+// ---- タイマー ----
+// 端末ごとの時計はずれていることがあるので、終了時刻ではなく「送った時点の残り時間」を送り、受け取った側が自分の時計で終了時刻を決める。
+// 操作は誰がしてもよく、v が大きい方（同じなら by が大きい方）を採る。時間切れは各端末がそれぞれ判断する
+const TIMER_MAX_MIN = 180;
+let timer = {v: 0, by: "", status: "idle", total: 0, left: 0, endAt: 0};   // status: idle / running / paused / done
+let timerTick = 0, audioCtx = null;
+
+const timerLeft = () => timer.status === "running" ? Math.max(0, timer.endAt - Date.now()) : timer.status === "done" ? 0 : timer.left;
+const timerWire = () => ({v: timer.v, by: timer.by, status: timer.status, total: timer.total, left: timerLeft()});
+function validTimer(t){
+  return t && Number.isInteger(t.v) && typeof t.by === "string" && ["idle", "running", "paused", "done"].includes(t.status)
+    && Number.isFinite(t.total) && Number.isFinite(t.left) && t.left >= 0 && t.total <= TIMER_MAX_MIN * 60000;
+}
+function applyTimer(t){
+  timer = {v: t.v, by: t.by, status: t.status, total: t.total, left: t.left, endAt: Date.now() + t.left};
+  if(timer.status === "running" && t.left <= 0) timer.status = "done";
+  renderTimer();
+}
+function mergeTimer(t){
+  if(t.v < timer.v || (t.v === timer.v && t.by <= timer.by)) return;
+  applyTimer(t);
+}
+function setTimer(status, total, left){
+  unlockAudio();
+  applyTimer({v: timer.v + 1, by: selfId || "", status, total, left});
+  if(act) act.timer.send(timerWire());
+}
+$("timerStart").addEventListener("click", () => {
+  const min = Number($("timerMin").value);
+  if(!(min > 0 && min <= TIMER_MAX_MIN)) return;
+  store.set("timerMin", String(min));
+  const ms = Math.round(min * 60000);
+  setTimer("running", ms, ms);
+});
+$("timerPause").addEventListener("click", () => {
+  if(timer.status === "running") setTimer("paused", timer.total, timerLeft());
+  else if(timer.status === "paused") setTimer("running", timer.total, timer.left);
+});
+$("timerReset").addEventListener("click", () => setTimer("idle", 0, 0));
+$("timerMin").value = store.get("timerMin") || "3";
+$("timerMin").addEventListener("input", renderTimer);
+
+function fmt(ms){
+  const sec = Math.ceil(ms / 1000), m = Math.floor(sec / 60), s = sec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+function renderTimer(){
+  clearInterval(timerTick);
+  if(timer.status === "running"){
+    if(timerLeft() <= 0){ timer.status = "done"; timeUp(); }
+    else timerTick = setInterval(renderTimer, 250);
+  }
+  const st = timer.status, min = Number($("timerMin").value);
+  const d = $("timerDisplay");
+  d.textContent = st === "idle" ? fmt(min > 0 && min <= TIMER_MAX_MIN ? min * 60000 : 0) : fmt(timerLeft());
+  d.classList.toggle("text-paper/40", st === "idle");
+  d.classList.toggle("text-red-400", st === "done");
+  d.classList.toggle("animate-pulse", st === "done" || st === "paused");
+  $("timerIdle").hidden = st !== "idle";
+  $("timerRun").hidden = st === "idle";
+  $("timerStart").disabled = !(min > 0 && min <= TIMER_MAX_MIN);
+  $("timerPause").hidden = st === "done";
+  $("timerPause").textContent = st === "paused" ? "再開" : "一時停止";
+  $("timerReset").textContent = st === "done" ? "閉じる" : "リセット";
+  $("timer").classList.toggle("ring-red-400", st === "done");
+  $("timer").dataset.status = st;
+}
+// 時間切れ：画面を赤くし、音と振動で知らせる
+function timeUp(){
+  try{ navigator.vibrate?.([300, 150, 300, 150, 300]); }catch(_){}
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  for(let i = 0; i < 3; i++){
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, t0 + i * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.3, t0 + i * 0.4 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.4 + 0.3);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t0 + i * 0.4);
+    o.stop(t0 + i * 0.4 + 0.32);
+  }
+}
+function unlockAudio(){
+  try{
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
+  }catch(_){}
+}
+renderTimer();
+
+// ---- フリーワード ----
+function validFree(f){
+  return f && Number.isInteger(f.v) && typeof f.by === "string" && Array.isArray(f.list) && f.list.every(w => typeof w === "string");
+}
+function mergeFree(f){
+  if(f.v < free.v || (f.v === free.v && f.by <= free.by)) return;
+  free = {list: parseFree(f.list.join("\n")).list, v: f.v, by: f.by};
+  store.set("free", free.list.join("\n"));
+  render();
+}
+$("freeInput").addEventListener("input", () => {
+  free = {list: parseFree($("freeInput").value).list, v: free.v + 1, by: selfId || ""};
+  store.set("free", $("freeInput").value);
+  clearTimeout(freeSendTimer);
+  freeSendTimer = setTimeout(() => { if(act) act.free.send(free); }, 300);
+  render();
+});
+// 入力中はほかの人の変更で書き換えない。入力を終えたら共有されている一覧に揃える
+$("freeInput").addEventListener("blur", () => render());
+function renderFree(){
+  $("freeBox").hidden = mode !== "free";
+  const input = $("freeInput");
+  if(document.activeElement !== input && parseFree(input.value).list.join("\n") !== free.list.join("\n"))
+    input.value = free.list.join("\n");
+  const over = parseFree(input.value).over;
+  $("freeCount").textContent = `${free.list.length} / ${FREE_MAX}${over ? "（21個目から先は使いません）" : ""}`;
+  $("freeCount").classList.toggle("text-red-300", over);
+}
+
+// 誤タップで全員の数字が開かないよう、2回押しで開く
+function disarmReveal(){ clearTimeout(revealArmTimer); revealArmTimer = 0; }
+$("revealBtn").addEventListener("click", () => {
+  if(!game || game.revealed) return;
+  if(!revealArmTimer){
+    revealArmTimer = setTimeout(() => { disarmReveal(); render(); }, 3000);
+    render();
+    return;
+  }
+  disarmReveal();
+  game.revealed = true;
+  broadcast();
+  render();
+});
+
+// ---- 描画 ----
+function render(){
+  if(!room) return;
+  const named = [...peers].filter(([id, n]) => n && !probing.has(id)).map(([, n]) => n);
+  $("peerCount").textContent = `${named.length + 1}人`;
+
+  // お知らせ
+  const notes = [];
+  if(peers.size === 0){
+    notes.push("ほかの人を待っています… 同じ合言葉で入室してもらってください。");
+    if(Date.now() - joinedAt >= NO_PEER_HINT_MS)
+      notes.push("しばらくつながらない場合は「↻ 再接続」を押してください。それでもだめなら、合言葉が一致しているか、同じ Wi‑Fi につなぐと改善するか確かめてください。");
+  }
+  if(named.includes(myName)) notes.push(`「${myName}」という名前の人がほかにもいます。名前を変えて入り直してください。`);
+  $("notice").hidden = !notes.length;
+  $("notice").innerHTML = notes.map(esc).join("<br>");
+
+  $("lobby").hidden = !!game;
+  $("board").hidden = !game;
+  if(!game) renderLobby(); else renderBoard();
+
+  // 配るボタン
+  const ps = players();
+  $("dealBox").hidden = !!game && !game.revealed;
+  $("dealBtn").textContent = game ? "次のラウンドを配る" : `${MODES[mode]}を配る`;
+  for(const b of document.querySelectorAll("[data-mode], [data-view]")){
+    const on = b.dataset.mode ? b.dataset.mode === mode : b.dataset.view === view;
+    b.setAttribute("aria-checked", on);
+    b.className = `rounded-lg py-2 ${on ? "bg-paper text-ink shadow" : "text-paper/70"}`;
+  }
+  $("dealBtn").disabled = ps.length < 2 || ps.length > maxPlayers(mode);
+  renderFree();
+  $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
+    : mode === "free" && ps.length > free.list.length ? `ワードを人数ぶん（${ps.length}個）以上入れてください`
+    : ps.length > maxPlayers(mode) ? `${maxPlayers(mode)}人までしか配れません`
+    : `${ps.length}人に配ります（誰が押しても全員に配られます）`;
+
+  // 答え合わせボタン
+  const rb = $("revealBtn");
+  rb.hidden = !game || game.revealed;
+  rb.textContent = revealArmTimer ? `もう一度押すと全員の${MODES[game?.mode] || "数字"}を開きます` : "答え合わせ";
+  rb.classList.toggle("ring-4", !!revealArmTimer);
+  rb.classList.toggle("ring-gold", !!revealArmTimer);
+}
+
+function renderLobby(){
+  $("members").innerHTML = players().map(p => `
+    <li class="flex items-center gap-2 rounded-xl bg-felt-2 px-3 py-3 ring-1 ring-white/10">
+      <span class="size-2 shrink-0 rounded-full bg-emerald-400"></span>
+      <span class="truncate">${esc(p.name)}</span>
+      ${p.id === selfId ? '<span class="ml-auto shrink-0 text-xs text-gold">あなた</span>' : ""}
+    </li>`).join("");
+}
+
+function renderBoard(){
+  const g = game;
+  $("roundLabel").textContent = `第${g.round}ラウンド${g.revealed ? "（答え合わせ）" : ""}`;
+  const word = isWordy(g.mode);
+  $("poolBox").hidden = !g.pool;
+  $("poolList").innerHTML = (g.pool || []).map(w =>
+    `<li class="rounded-full bg-felt-2 px-2.5 py-0.5 text-xs text-paper/80 ring-1 ring-white/10">${esc(w)}</li>`).join("");
+  const selfView = g.view === "self";
+  $("rangeLabel").textContent = (LABELS[g.mode] || LABELS.num) + (selfView ? "・自分だけ見える" : "");
+  $("spectator").hidden = g.hands.some(isMe);
+
+  // 数字は答え合わせ後に大きい順に並べて順位を付ける。お題は順位なし
+  const ranked = word ? [] : [...g.hands].sort((a, b) => b.n - a.n);
+  const hands = g.revealed && !word ? ranked : g.hands;
+  const hi = ranked[0]?.n, lo = ranked[ranked.length - 1]?.n;
+
+  $("cards").innerHTML = hands.map(h => {
+    // 答え合わせまでは、ふだんは自分のカードだけ、「自分だけ見える」では自分以外のカードを伏せる
+    const me = isMe(h), hidden = !g.revealed && (selfView ? !me : me), online = isOnline(h);
+    const rank = ranked.findIndex(r => r.n === h.n) + 1;
+    const face = hidden
+      ? `<div class="card-back flex aspect-[5/7] items-center justify-center rounded-xl text-4xl font-bold text-white/90 shadow-lg ring-2 ring-white/70">?</div>`
+      : word
+      // 文字数に合わせてカードの幅に収まる大きさにし、1行で見せる
+      ? `<div class="@container flex aspect-[5/7] items-center justify-center rounded-xl bg-paper text-ink shadow-lg ring-2 ring-white/70">
+           <span class="whitespace-nowrap font-bold" style="font-size:min(2rem, calc(86cqw / ${[...h.w].length}))" data-word>${esc(h.w)}</span>
+         </div>`
+      : `<div class="flex aspect-[5/7] flex-col items-center justify-center rounded-xl bg-paper text-ink shadow-lg ring-2 ${
+            g.revealed && h.n === hi ? "ring-gold" : g.revealed && h.n === lo ? "ring-sky-400" : "ring-white/70"}">
+           <span class="font-num text-5xl font-bold tabular-nums" data-num>${h.n}</span>
+           ${g.revealed ? `<span class="mt-1 text-xs text-ink/60">${rank}位</span>` : ""}
+         </div>`;
+    return `<li class="${online ? "" : "opacity-50"}" data-player="${esc(h.name)}">
+      ${face}
+      <div class="mt-2 flex items-center justify-center gap-1 text-sm">
+        <span class="truncate font-bold">${esc(h.name)}</span>
+        ${me ? '<span class="shrink-0 text-xs text-gold">（あなた）</span>' : ""}
+        ${online ? "" : '<span class="shrink-0 text-xs text-paper/60">切断</span>'}
+      </div>
+    </li>`;
+  }).join("");
+
+  const inHand = new Set(g.hands.map(h => h.name));
+  const waiting = players().filter(p => !inHand.has(p.name));
+  $("waiting").hidden = !waiting.length;
+  $("waitingList").innerHTML = waiting.map(p =>
+    `<li class="rounded-full bg-felt-2 px-3 py-1 text-sm ring-1 ring-white/10">${esc(p.name)}</li>`).join("");
+}
+
+// ---- 入り直し（読み直し）からの復帰 ----
+document.addEventListener("pointerdown", unlockAudio);   // 読み直し後も、最初に触れたときに音を使えるようにする
+(function resume(){
+  let r = null;
+  try{ r = JSON.parse(sessionStorage.getItem(RESUME_KEY) || "null"); sessionStorage.removeItem(RESUME_KEY); }catch(_){}
+  if(!r || typeof r.name !== "string" || typeof r.key !== "string" || Date.now() - r.at > 30 * 60000) return;
+  $("nameInput").value = r.name;
+  $("keyInput").value = r.key;
+  if(validGame(r.game)) merge(r.game);
+  if(validFree(r.free)) free = {list: parseFree(r.free.list.join("\n")).list, v: r.free.v, by: r.free.by};
+  if(r.timer && validTimer(r.timer)){
+    const t = {...r.timer};
+    if(t.status === "running") t.left = Math.max(0, t.left - (Date.now() - r.at));
+    applyTimer(t);
+  }
+  join();
+})();
+</script>
+</body>
+</html>
