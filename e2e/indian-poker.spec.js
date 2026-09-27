@@ -273,3 +273,68 @@ test.describe("チェーン店モード", () => {
     await expect(a.locator("#dealBtn")).toHaveText("次のラウンドを配る");
   });
 });
+
+test.describe("フリーワードモード", () => {
+  const word = (page, name) => card(page, name).locator("[data-word]");
+
+  test("入れたワードは全員に共有され、配るとその中から重ならずに振られる", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    const c = await openPlayer(context, "なつ");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+
+    await a.click('[data-mode="free"]');
+    await expect(a.locator("#freeBox")).toBeVisible();
+    await a.fill("#freeInput", "カレー\nラーメン");
+    await expect(a.locator("#freeCount")).toHaveText("2 / 20");
+    await expect(a.locator("#dealBtn")).toBeDisabled();                      // 3人に2個では足りない
+    await expect(a.locator("#dealMsg")).toContainText("3個");
+    await a.fill("#freeInput", "カレー\nラーメン\nすし、うどん\nカレー");  // 読点区切りも可・重なりは除く
+    await expect(a.locator("#freeCount")).toHaveText("4 / 20");
+
+    // ほかの人の画面にも同じ一覧が届く
+    await b.click('[data-mode="free"]');
+    await expect(b.locator("#freeInput")).toHaveValue("カレー\nラーメン\nすし\nうどん");
+    await expect(b.locator("#freeCount")).toHaveText("4 / 20");
+
+    await b.click("#dealBtn");
+    const pool = ["カレー", "ラーメン", "すし", "うどん"];
+    const seen = {};
+    for(const [p, me] of [[a, "あき"], [b, "はる"], [c, "なつ"]]){
+      await expect(p.locator("#rangeLabel")).toHaveText("フリーワード");
+      await expect(p.locator("#poolList > li")).toHaveText(pool);
+      await expect(word(p, me)).toHaveCount(0);
+      for(const other of ["あき", "はる", "なつ"].filter(n => n !== me)){
+        const w = await word(p, other).textContent();
+        expect(pool).toContain(w);
+        if(other in seen) expect(w).toBe(seen[other]);
+        seen[other] = w;
+      }
+    }
+    expect(new Set(Object.values(seen)).size).toBe(3);
+
+    await c.click("#revealBtn");
+    await c.click("#revealBtn");
+    for(const n of ["あき", "はる", "なつ"]) await expect(word(a, n)).toHaveText(seen[n]);
+  });
+
+  test("20個を超えた分は使わない", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    await a.click('[data-mode="free"]');
+    await a.fill("#freeInput", Array.from({length: 23}, (_, i) => `ワード${i + 1}`).join("\n"));
+    await expect(a.locator("#freeCount")).toContainText("20 / 20");
+    await expect(a.locator("#freeCount")).toContainText("21個目から先は使いません");
+  });
+
+  test("あとから来た人にもワード一覧が届く", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    await a.click('[data-mode="free"]');
+    await a.fill("#freeInput", "ねこ\nいぬ");
+    await a.waitForTimeout(600);   // 入力の送信（少し待ってから送る）を済ませ、はるが来る前に終わらせる
+    // 同じブラウザでは保存領域を共有しているので、あとから開くタブは保存分を消してから始める（通信で届くことを確かめる）
+    await context.addInitScript(() => localStorage.removeItem("ip:free"));
+    const b = await openPlayer(context, "はる");
+    await b.click('[data-mode="free"]');
+    await expect(b.locator("#freeInput")).toHaveValue("ねこ\nいぬ");
+  });
+});

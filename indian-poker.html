@@ -90,6 +90,10 @@
       </div>
       <p id="spectator" class="mt-2 rounded-lg bg-gold/15 px-3 py-2 text-sm text-gold" hidden>このラウンドは観戦中です。次に配るときから参加できます。</p>
       <ul id="cards" class="mt-3 grid grid-cols-3 gap-3"></ul>
+      <div id="poolBox" class="mt-4" hidden>
+        <h3 class="text-xs font-bold text-paper/60">このラウンドの候補</h3>
+        <ul id="poolList" class="mt-1 flex flex-wrap gap-1.5"></ul>
+      </div>
       <div id="waiting" class="mt-4" hidden>
         <h3 class="text-xs font-bold text-paper/60">次のラウンドから参加</h3>
         <ul id="waitingList" class="mt-1 flex flex-wrap gap-2"></ul>
@@ -101,10 +105,21 @@
       <button id="revealBtn" type="button" hidden
         class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
       <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
-        <div class="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
+        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
           <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字</button>
           <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題</button>
           <button type="button" role="radio" data-mode="chain" class="rounded-lg py-2">チェーン店</button>
+          <button type="button" role="radio" data-mode="free" class="rounded-lg py-2">フリーワード</button>
+        </div>
+        <div id="freeBox" class="mb-3" hidden>
+          <label for="freeInput" class="flex items-baseline justify-between text-sm">
+            <span class="text-paper/80">ワード（1行に1つ）</span>
+            <span id="freeCount" class="text-xs text-paper/60"></span>
+          </label>
+          <textarea id="freeInput" rows="6" autocomplete="off"
+            class="mt-1 block w-full resize-y rounded-lg border-0 bg-paper px-3 py-2 text-base text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+            placeholder="例：&#10;カレー&#10;ラーメン&#10;すし"></textarea>
+          <p class="mt-1 text-xs text-paper/50">入れたワードはテーブルの全員に共有され、配るときにこの中から1人1つずつ重ならないように振られます。</p>
         </div>
         <button id="dealBtn" type="button"
           class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
@@ -150,9 +165,16 @@ const CHAINS = [
   "ABCマート","GEO","ブックオフ","ヨドバシカメラ","ビックカメラ","ヤマダデンキ","ケーズデンキ","マツモトキヨシ","オートバックス","カラオケまねきねこ",
   "ビッグエコー"
 ];
-const MODES = {num: "数字", word: "お題", chain: "チェーン店"};
-const LISTS = {word: WORDS, chain: CHAINS};   // 数字以外は言葉を配る
-const LABELS = {num: `1〜${MAX}`, word: "お題（名詞）", chain: "全国チェーン店"};
+const MODES = {num: "数字", word: "お題", chain: "チェーン店", free: "ワード"};
+const LISTS = {word: WORDS, chain: CHAINS};   // 用意した言葉を配るモード
+const LABELS = {num: `1〜${MAX}`, word: "お題（名詞）", chain: "全国チェーン店", free: "フリーワード"};
+const FREE_MAX = 20;   // フリーワードは最大20個
+const isWordy = m => m in LISTS || m === "free";   // 数字以外は言葉を配る
+// フリーワードの入力を1行1つ（読点・カンマ区切りも可）で読む。空行と重なりは除く
+function parseFree(text){
+  const all = [...new Set(String(text).split(/[\n,、，]+/).map(w => w.normalize("NFKC").trim().slice(0, 20)).filter(Boolean))];
+  return {list: all.slice(0, FREE_MAX), over: all.length > FREE_MAX};
+}
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -169,6 +191,9 @@ let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
 let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
 let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
+// フリーワードの一覧。テーブルで共有し、v が大きい方（同じなら by が大きい方）を採る
+let free = {list: parseFree(store.get("free") || "").list, v: 0, by: ""};
+let freeSendTimer = 0;
 let noPeerTimer = 0, joinedAt = 0, revealArmTimer = 0;
 
 // 自分の手札か。再読み込みすると peerId が変わるので、名前でも自分とみなす（自分の数字を見せないため）
@@ -200,6 +225,8 @@ $("joinForm").addEventListener("submit", async e => {
 
 function enter(){
   selfId = lib.selfId;
+  // 前回から持ち越したワード一覧どうしが同じ v でも、全員が同じ一覧に揃うように自分の印を付ける
+  if(free.list.length && !free.by) free.by = selfId;
   connect();
   $("join").hidden = true;
   $("table").hidden = false;
@@ -211,7 +238,7 @@ function enter(){
 function connect(){
   // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
   const r = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
-  const a = {name: r.makeAction("name"), game: r.makeAction("game")};
+  const a = {name: r.makeAction("name"), game: r.makeAction("game"), free: r.makeAction("free")};
   const live = fn => (...args) => { if(r === room) fn(...args); };
   room = r; act = a;
 
@@ -220,6 +247,7 @@ function connect(){
   const greet = (id, ask) => {
     a.name.send({name: myName, ask}, {target: id});
     if(game) a.game.send(game, {target: id});
+    if(free.list.length) a.free.send(free, {target: id});
   };
   r.onPeerJoin = live(id => {
     peers.set(id, peers.get(id) || "");
@@ -233,6 +261,7 @@ function connect(){
     render();
   });
   a.game.onMessage = live(g => { if(validGame(g)) merge(g); });
+  a.free.onMessage = live(f => { if(validFree(f)) mergeFree(f); });
 
   clearTimeout(noPeerTimer);
   joinedAt = Date.now();
@@ -273,13 +302,14 @@ addEventListener("pagehide", () => { if(room) room.leave(); });
 // 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
 function validGame(g){
   if(!g || !Number.isInteger(g.round) || typeof g.dealer !== "string" || !Array.isArray(g.hands)) return false;
-  const word = g.mode in LISTS;
+  const word = isWordy(g.mode);
   return g.hands.every(h => h && typeof h.id === "string" && (word ? typeof h.w === "string" : Number.isInteger(h.n)));
 }
 function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
 function merge(g){
-  const word = g.mode in LISTS;
+  const word = isWordy(g.mode);
   g = {...g, mode: word ? g.mode : "num", revealed: !!g.revealed,
+    pool: g.mode === "free" && Array.isArray(g.pool) ? g.pool.map(w => String(w).slice(0, 20)).slice(0, FREE_MAX) : undefined,
     hands: g.hands.map(h => word ? {id: h.id, name: cleanName(h.name), w: String(h.w).slice(0, 20)} : {id: h.id, name: cleanName(h.name), n: h.n})};
   if(!game || order(g, game) > 0) game = g;
   else if(order(g, game) === 0 && g.revealed && !game.revealed) game.revealed = true;
@@ -295,11 +325,12 @@ function players(){
   return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 }
 
-const maxPlayers = m => m in LISTS ? LISTS[m].length : MAX;
+const listFor = m => m === "free" ? free.list : LISTS[m];
+const maxPlayers = m => isWordy(m) ? listFor(m).length : MAX;
 function poolFor(m){
   if(m === "num") return Array.from({length: MAX}, (_, i) => i + 1);
   // 言葉は直前のラウンドと同じものが続かないようにする
-  const list = LISTS[m];
+  const list = listFor(m);
   const last = new Set(game?.mode === m ? game.hands.map(h => h.w) : []);
   const fresh = list.filter(w => !last.has(w));
   return fresh.length >= players().length ? fresh : [...list];
@@ -314,9 +345,10 @@ function deal(){
   const hands = ps.map((p, i) => {
     const j = i + rnd[i] % (pool.length - i);
     [pool[i], pool[j]] = [pool[j], pool[i]];
-    return m in LISTS ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
+    return isWordy(m) ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
   });
   game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, max: MAX, hands, revealed: false};
+  if(m === "free") game.pool = [...free.list];
   disarmReveal();
   broadcast();
   render();
@@ -324,6 +356,35 @@ function deal(){
 $("dealBtn").addEventListener("click", deal);
 for(const b of document.querySelectorAll("[data-mode]"))
   b.addEventListener("click", () => { mode = b.dataset.mode; store.set("mode", mode); render(); });
+
+// ---- フリーワード ----
+function validFree(f){
+  return f && Number.isInteger(f.v) && typeof f.by === "string" && Array.isArray(f.list) && f.list.every(w => typeof w === "string");
+}
+function mergeFree(f){
+  if(f.v < free.v || (f.v === free.v && f.by <= free.by)) return;
+  free = {list: parseFree(f.list.join("\n")).list, v: f.v, by: f.by};
+  store.set("free", free.list.join("\n"));
+  render();
+}
+$("freeInput").addEventListener("input", () => {
+  free = {list: parseFree($("freeInput").value).list, v: free.v + 1, by: selfId || ""};
+  store.set("free", $("freeInput").value);
+  clearTimeout(freeSendTimer);
+  freeSendTimer = setTimeout(() => { if(act) act.free.send(free); }, 300);
+  render();
+});
+// 入力中はほかの人の変更で書き換えない。入力を終えたら共有されている一覧に揃える
+$("freeInput").addEventListener("blur", () => render());
+function renderFree(){
+  $("freeBox").hidden = mode !== "free";
+  const input = $("freeInput");
+  if(document.activeElement !== input && parseFree(input.value).list.join("\n") !== free.list.join("\n"))
+    input.value = free.list.join("\n");
+  const over = parseFree(input.value).over;
+  $("freeCount").textContent = `${free.list.length} / ${FREE_MAX}${over ? "（21個目から先は使いません）" : ""}`;
+  $("freeCount").classList.toggle("text-red-300", over);
+}
 
 // 誤タップで全員の数字が開かないよう、2回押しで開く
 function disarmReveal(){ clearTimeout(revealArmTimer); revealArmTimer = 0; }
@@ -371,7 +432,9 @@ function render(){
     b.className = `rounded-lg py-2 ${on ? "bg-paper text-ink shadow" : "text-paper/70"}`;
   }
   $("dealBtn").disabled = ps.length < 2 || ps.length > maxPlayers(mode);
+  renderFree();
   $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
+    : mode === "free" && ps.length > free.list.length ? `ワードを人数ぶん（${ps.length}個）以上入れてください`
     : ps.length > maxPlayers(mode) ? `${maxPlayers(mode)}人までしか配れません`
     : `${ps.length}人に配ります（誰が押しても全員に配られます）`;
 
@@ -395,7 +458,10 @@ function renderLobby(){
 function renderBoard(){
   const g = game;
   $("roundLabel").textContent = `第${g.round}ラウンド${g.revealed ? "（答え合わせ）" : ""}`;
-  const word = g.mode in LISTS;
+  const word = isWordy(g.mode);
+  $("poolBox").hidden = !g.pool;
+  $("poolList").innerHTML = (g.pool || []).map(w =>
+    `<li class="rounded-full bg-felt-2 px-2.5 py-0.5 text-xs text-paper/80 ring-1 ring-white/10">${esc(w)}</li>`).join("");
   $("rangeLabel").textContent = LABELS[g.mode] || LABELS.num;
   $("spectator").hidden = g.hands.some(isMe);
 
