@@ -26,6 +26,7 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html _site/index.html
+          cp indian-poker.html _site/indian-poker.html
           cp .nojekyll _site/.nojekyll
 
       - name: Deploy to gh-pages (root)

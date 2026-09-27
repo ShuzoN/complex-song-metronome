@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b2a1f">
+<title>インディアンポーカー</title>
+<!-- 見た目は Tailwind CSS（ブラウザ版）。端末どうしの通信は Trystero（WebRTC）で、自前のサーバは持たない。
+     顔合わせ（シグナリング）だけ公開の Nostr リレーを借り、つながったあとは端末どうしで直接やりとりする。 -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style type="text/tailwindcss">
+  @theme {
+    --color-felt: #0b2a1f;
+    --color-felt-2: #123a2b;
+    --color-felt-3: #1b4d3a;
+    --color-paper: #f7f3e8;
+    --color-ink: #1d1b16;
+    --color-gold: #d9b45a;
+    --color-card-red: #b3261e;
+    --font-num: "Georgia", "Times New Roman", serif;
+  }
+  @layer base {
+    body { @apply bg-felt text-paper antialiased; }
+  }
+  .card-back {
+    background:
+      repeating-linear-gradient(45deg, rgb(255 255 255 / .10) 0 6px, transparent 6px 12px),
+      var(--color-card-red);
+  }
+</style>
+<style>
+  /* Tailwind が読めなかったときでも最低限は使えるように */
+  [hidden]{display:none !important}
+  body{margin:0;background:#0b2a1f;color:#f7f3e8;font-family:system-ui,sans-serif}
+</style>
+</head>
+<body class="min-h-dvh">
+<main class="mx-auto max-w-xl px-4 pb-16 pt-[max(1rem,env(safe-area-inset-top))]">
+
+  <!-- 入室 -->
+  <section id="join" class="pt-10">
+    <h1 class="text-center text-3xl font-bold tracking-wide">インディアンポーカー</h1>
+    <p class="mt-3 text-center text-sm text-paper/70">同じ合言葉の人どうしで、同じテーブルに着きます。<br>自分の数字だけが見えません。</p>
+    <form id="joinForm" class="mt-8 space-y-4 rounded-2xl bg-felt-2 p-5 shadow-lg ring-1 ring-white/10">
+      <label class="block">
+        <span class="text-sm text-paper/80">名前</span>
+        <input id="nameInput" name="name" required maxlength="12" autocomplete="nickname"
+          class="mt-1 block w-full rounded-lg border-0 bg-paper px-3 py-3 text-lg text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+          placeholder="たろう">
+      </label>
+      <label class="block">
+        <span class="text-sm text-paper/80">合言葉</span>
+        <input id="keyInput" name="key" required maxlength="40" autocomplete="off" autocapitalize="off"
+          class="mt-1 block w-full rounded-lg border-0 bg-paper px-3 py-3 text-lg text-ink placeholder:text-ink/40 focus:outline-none focus:ring-2 focus:ring-gold"
+          placeholder="例：さくら2026">
+        <span class="mt-1 block text-xs text-paper/50">他の人と被りにくい言葉にしてください。</span>
+      </label>
+      <button id="joinBtn" type="submit"
+        class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-50">入室</button>
+      <p id="joinMsg" class="min-h-5 text-center text-sm text-red-300" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- テーブル -->
+  <section id="table" hidden>
+    <header class="flex items-center gap-2">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-xs text-paper/60">合言葉</div>
+        <div id="roomName" class="truncate text-lg font-bold"></div>
+      </div>
+      <div id="peerCount" class="rounded-full bg-felt-3 px-3 py-1 text-sm" aria-live="polite"></div>
+      <button id="leaveBtn" type="button" class="rounded-full px-3 py-1 text-sm text-paper/70 ring-1 ring-white/20 active:bg-white/10">退室</button>
+    </header>
+
+    <p id="notice" class="mt-4 rounded-xl bg-felt-2 px-4 py-3 text-sm text-paper/80 ring-1 ring-white/10" hidden></p>
+
+    <!-- 配る前 -->
+    <div id="lobby" class="mt-5" hidden>
+      <h2 class="text-sm font-bold text-paper/70">テーブルにいる人</h2>
+      <ul id="members" class="mt-2 grid grid-cols-2 gap-2"></ul>
+    </div>
+
+    <!-- 配ったあと -->
+    <div id="board" class="mt-5" hidden>
+      <div class="flex items-baseline justify-between">
+        <h2 id="roundLabel" class="text-sm font-bold text-paper/70"></h2>
+        <span id="rangeLabel" class="text-xs text-paper/50"></span>
+      </div>
+      <p id="spectator" class="mt-2 rounded-lg bg-gold/15 px-3 py-2 text-sm text-gold" hidden>このラウンドは観戦中です。次に配るときから参加できます。</p>
+      <ul id="cards" class="mt-3 grid grid-cols-3 gap-3"></ul>
+      <div id="waiting" class="mt-4" hidden>
+        <h3 class="text-xs font-bold text-paper/60">次のラウンドから参加</h3>
+        <ul id="waitingList" class="mt-1 flex flex-wrap gap-2"></ul>
+      </div>
+    </div>
+
+    <!-- 操作 -->
+    <div class="mt-6 space-y-3">
+      <button id="revealBtn" type="button" hidden
+        class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
+      <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
+        <label class="flex items-center justify-between gap-3 text-sm">
+          <span class="text-paper/80">数字の範囲</span>
+          <span class="flex items-center gap-2">
+            1 〜
+            <select id="maxSelect" class="rounded-lg border-0 bg-paper px-2 py-2 text-ink focus:outline-none focus:ring-2 focus:ring-gold">
+              <option value="13">13</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </span>
+        </label>
+        <button id="dealBtn" type="button"
+          class="mt-3 w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
+        <p id="dealMsg" class="mt-2 min-h-4 text-center text-xs text-paper/60"></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+const TRYSTERO_URL = "https://cdn.jsdelivr.net/npm/trystero@0.25.4/+esm";
+const APP_ID = "shuzon-complex-song-metronome/indian-poker/v1";
+const NO_PEER_HINT_MS = 20000;
+
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try{ return localStorage.getItem("ip:" + k) }catch(_){ return null } },
+  set(k, v){ try{ localStorage.setItem("ip:" + k, v) }catch(_){} }
+};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cleanName = s => String(s ?? "").normalize("NFKC").trim().slice(0, 12);
+const cleanKey = s => String(s ?? "").normalize("NFKC").trim();
+
+// ---- 状態 ----
+let room = null, act = null, selfId = null;
+let myName = "", keyword = "";
+const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
+let game = null;           // {round, dealer, max, hands:[{id, name, n}], revealed}
+let noPeerTimer = 0, joinedAt = 0, revealArmTimer = 0;
+
+// 自分の手札か。再読み込みすると peerId が変わるので、名前でも自分とみなす（自分の数字を見せないため）
+const isMe = h => h.id === selfId || h.name === myName;
+const isOnline = h => isMe(h) || peers.has(h.id) || [...peers.values()].includes(h.name);
+
+// ---- 入室・退室 ----
+$("nameInput").value = store.get("name") || "";
+$("keyInput").value = new URLSearchParams(location.search).get("room") || store.get("key") || "";
+$("maxSelect").value = store.get("max") || "100";
+
+$("joinForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const name = cleanName($("nameInput").value), key = cleanKey($("keyInput").value);
+  if(!name || !key) return;
+  $("joinBtn").disabled = true;
+  $("joinMsg").textContent = "";
+  try{
+    const lib = await import(TRYSTERO_URL);
+    myName = name; keyword = key;
+    store.set("name", name); store.set("key", key);
+    enter(lib);
+  }catch(err){
+    console.error(err);
+    $("joinMsg").textContent = "通信ライブラリを読み込めませんでした。ネットワークを確認してください。";
+  }finally{
+    $("joinBtn").disabled = false;
+  }
+});
+
+function enter(lib){
+  selfId = lib.selfId;
+  // 合言葉はルーム名にも、シグナリングの暗号化の鍵にも使う
+  room = lib.joinRoom({appId: APP_ID, password: keyword}, keyword);
+  act = {name: room.makeAction("name"), game: room.makeAction("game")};
+
+  room.onPeerJoin = id => {
+    peers.set(id, peers.get(id) || "");
+    act.name.send(myName, {target: id});
+    if(game) act.game.send(game, {target: id});
+    render();
+  };
+  room.onPeerLeave = id => { peers.delete(id); render(); };
+  act.name.onMessage = (name, {peerId}) => { peers.set(peerId, cleanName(name)); render(); };
+  act.game.onMessage = g => { if(validGame(g)) merge(g); };
+
+  $("join").hidden = true;
+  $("table").hidden = false;
+  $("roomName").textContent = keyword;
+  clearTimeout(noPeerTimer);
+  joinedAt = Date.now();
+  noPeerTimer = setTimeout(render, NO_PEER_HINT_MS);
+  render();
+}
+
+function leave(){
+  if(room) room.leave();
+  room = act = null;
+  peers.clear();
+  game = null;
+  clearTimeout(noPeerTimer);
+  $("table").hidden = true;
+  $("join").hidden = false;
+}
+$("leaveBtn").addEventListener("click", leave);
+addEventListener("pagehide", () => { if(room) room.leave(); });
+
+// ---- ゲームの同期 ----
+// 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
+function validGame(g){
+  return g && Number.isInteger(g.round) && typeof g.dealer === "string" && Number.isInteger(g.max)
+    && Array.isArray(g.hands) && g.hands.every(h => h && typeof h.id === "string" && Number.isInteger(h.n));
+}
+function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
+function merge(g){
+  g = {...g, hands: g.hands.map(h => ({id: h.id, name: cleanName(h.name), n: h.n})), revealed: !!g.revealed};
+  if(!game || order(g, game) > 0) game = g;
+  else if(order(g, game) === 0 && g.revealed && !game.revealed) game.revealed = true;
+  else return;
+  disarmReveal();
+  render();
+}
+function broadcast(){ if(act && game) act.game.send(game); }
+
+function players(){
+  const list = [{id: selfId, name: myName}];
+  for(const [id, name] of peers) if(name) list.push({id, name});
+  return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
+}
+
+function deal(){
+  const ps = players(), max = Number($("maxSelect").value);
+  if(ps.length < 2 || ps.length > max) return;
+  // 1〜max から重ならないように人数ぶん引く
+  const pool = Array.from({length: max}, (_, i) => i + 1);
+  const rnd = new Uint32Array(ps.length);
+  crypto.getRandomValues(rnd);
+  const hands = ps.map((p, i) => {
+    const j = i + rnd[i] % (pool.length - i);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+    return {id: p.id, name: p.name, n: pool[i]};
+  });
+  game = {round: (game?.round || 0) + 1, dealer: selfId, max, hands, revealed: false};
+  disarmReveal();
+  broadcast();
+  render();
+}
+$("dealBtn").addEventListener("click", deal);
+$("maxSelect").addEventListener("change", () => { store.set("max", $("maxSelect").value); render(); });
+
+// 誤タップで全員の数字が開かないよう、2回押しで開く
+function disarmReveal(){ clearTimeout(revealArmTimer); revealArmTimer = 0; }
+$("revealBtn").addEventListener("click", () => {
+  if(!game || game.revealed) return;
+  if(!revealArmTimer){
+    revealArmTimer = setTimeout(() => { disarmReveal(); render(); }, 3000);
+    render();
+    return;
+  }
+  disarmReveal();
+  game.revealed = true;
+  broadcast();
+  render();
+});
+
+// ---- 描画 ----
+function render(){
+  if(!room) return;
+  const named = [...peers.values()].filter(Boolean);
+  $("peerCount").textContent = `${named.length + 1}人`;
+
+  // お知らせ
+  const notes = [];
+  if(peers.size === 0){
+    notes.push("ほかの人を待っています… 同じ合言葉で入室してもらってください。");
+    if(Date.now() - joinedAt >= NO_PEER_HINT_MS)
+      notes.push("しばらくつながらない場合は、合言葉が一致しているか、同じ Wi‑Fi につなぐと改善するか確かめてください。");
+  }
+  if(named.includes(myName)) notes.push(`「${myName}」という名前の人がほかにもいます。名前を変えて入り直してください。`);
+  $("notice").hidden = !notes.length;
+  $("notice").innerHTML = notes.map(esc).join("<br>");
+
+  $("lobby").hidden = !!game;
+  $("board").hidden = !game;
+  if(!game) renderLobby(); else renderBoard();
+
+  // 配るボタン
+  const ps = players(), max = Number($("maxSelect").value);
+  $("dealBox").hidden = !!game && !game.revealed;
+  $("dealBtn").textContent = game ? "次のラウンドを配る" : "数字を配る";
+  $("dealBtn").disabled = ps.length < 2 || ps.length > max;
+  $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
+    : ps.length > max ? `人数（${ps.length}人）が範囲より多いので、範囲を広げてください`
+    : `${ps.length}人に配ります（誰が押しても全員に配られます）`;
+
+  // 答え合わせボタン
+  const rb = $("revealBtn");
+  rb.hidden = !game || game.revealed;
+  rb.textContent = revealArmTimer ? "もう一度押すと全員の数字を開きます" : "答え合わせ";
+  rb.classList.toggle("ring-4", !!revealArmTimer);
+  rb.classList.toggle("ring-gold", !!revealArmTimer);
+}
+
+function renderLobby(){
+  $("members").innerHTML = players().map(p => `
+    <li class="flex items-center gap-2 rounded-xl bg-felt-2 px-3 py-3 ring-1 ring-white/10">
+      <span class="size-2 shrink-0 rounded-full bg-emerald-400"></span>
+      <span class="truncate">${esc(p.name)}</span>
+      ${p.id === selfId ? '<span class="ml-auto shrink-0 text-xs text-gold">あなた</span>' : ""}
+    </li>`).join("");
+}
+
+function renderBoard(){
+  const g = game;
+  $("roundLabel").textContent = `第${g.round}ラウンド${g.revealed ? "（答え合わせ）" : ""}`;
+  $("rangeLabel").textContent = `1〜${g.max}`;
+  $("spectator").hidden = g.hands.some(isMe);
+
+  // 答え合わせ後は大きい順に並べて順位を付ける
+  const ranked = [...g.hands].sort((a, b) => b.n - a.n);
+  const hands = g.revealed ? ranked : g.hands;
+  const hi = ranked[0]?.n, lo = ranked[ranked.length - 1]?.n;
+
+  $("cards").innerHTML = hands.map(h => {
+    const me = isMe(h), hidden = me && !g.revealed, online = isOnline(h);
+    const rank = ranked.findIndex(r => r.n === h.n) + 1;
+    const face = hidden
+      ? `<div class="card-back flex aspect-[5/7] items-center justify-center rounded-xl text-4xl font-bold text-white/90 shadow-lg ring-2 ring-white/70">?</div>`
+      : `<div class="flex aspect-[5/7] flex-col items-center justify-center rounded-xl bg-paper text-ink shadow-lg ring-2 ${
+            g.revealed && h.n === hi ? "ring-gold" : g.revealed && h.n === lo ? "ring-sky-400" : "ring-white/70"}">
+           <span class="font-num text-5xl font-bold tabular-nums" data-num>${h.n}</span>
+           ${g.revealed ? `<span class="mt-1 text-xs text-ink/60">${rank}位</span>` : ""}
+         </div>`;
+    return `<li class="${online ? "" : "opacity-50"}" data-player="${esc(h.name)}">
+      ${face}
+      <div class="mt-2 flex items-center justify-center gap-1 text-sm">
+        <span class="truncate font-bold">${esc(h.name)}</span>
+        ${me ? '<span class="shrink-0 text-xs text-gold">（あなた）</span>' : ""}
+        ${online ? "" : '<span class="shrink-0 text-xs text-paper/60">切断</span>'}
+      </div>
+    </li>`;
+  }).join("");
+
+  const inHand = new Set(g.hands.map(h => h.name));
+  const waiting = players().filter(p => !inHand.has(p.name));
+  $("waiting").hidden = !waiting.length;
+  $("waitingList").innerHTML = waiting.map(p =>
+    `<li class="rounded-full bg-felt-2 px-3 py-1 text-sm ring-1 ring-white/10">${esc(p.name)}</li>`).join("");
+}
+</script>
+</body>
+</html>
