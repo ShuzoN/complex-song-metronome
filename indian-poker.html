@@ -101,9 +101,10 @@
       <button id="revealBtn" type="button" hidden
         class="w-full rounded-xl bg-card-red py-4 text-lg font-bold text-white shadow-lg active:scale-[.98]">答え合わせ</button>
       <div id="dealBox" class="rounded-2xl bg-felt-2 p-4 ring-1 ring-white/10" hidden>
-        <div class="mb-3 grid grid-cols-2 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
-          <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字（1〜100）</button>
-          <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題（名詞）</button>
+        <div class="mb-3 grid grid-cols-3 gap-1 rounded-xl bg-felt p-1 text-sm font-bold" role="radiogroup" aria-label="配るもの">
+          <button type="button" role="radio" data-mode="num" class="rounded-lg py-2">数字</button>
+          <button type="button" role="radio" data-mode="word" class="rounded-lg py-2">お題</button>
+          <button type="button" role="radio" data-mode="chain" class="rounded-lg py-2">チェーン店</button>
         </div>
         <button id="dealBtn" type="button"
           class="w-full rounded-xl bg-gold py-3 text-lg font-bold text-ink shadow active:scale-[.98] disabled:opacity-40"></button>
@@ -140,7 +141,18 @@ const WORDS = [
   "自動販売機","コンビニ","スーパー","温泉","キャンプ","テント","医者","看護師","先生","警察官","消防士","パイロット","運転手","コック","大工","歌手",
   "忍者","侍","王様","お姫様","宇宙飛行士","サンタクロース","雪だるま","ロボット","恐竜","おばけ","鬼","かっぱ","魔法使い","海賊","宝箱"
 ];
-const MODES = {num: "数字", word: "お題"};
+// チェーン店モードで配る全国チェーン（60個）。グループ会社でもブランドごとに分ける。ローカルチェーンは入れない
+const CHAINS = [
+  "ガスト","バーミヤン","ジョナサン","しゃぶ葉","サイゼリヤ","デニーズ","ロイヤルホスト","びっくりドンキー","吉野家","すき家","松屋","なか卯","マクドナルド",
+  "モスバーガー","ケンタッキー","バーガーキング","スシロー","くら寿司","はま寿司","かっぱ寿司","丸亀製麺","はなまるうどん","天下一品","一蘭","餃子の王将",
+  "リンガーハット","CoCo壱番屋","大戸屋","やよい軒","スターバックス","ドトール","タリーズ","コメダ珈琲","ミスタードーナツ","サーティワン","セブンイレブン",
+  "ローソン","ファミリーマート","ダイソー","セリア","業務スーパー","コストコ","イオン","ドン・キホーテ","ユニクロ","GU","しまむら","無印良品","ニトリ",
+  "ABCマート","GEO","ブックオフ","ヨドバシカメラ","ビックカメラ","ヤマダデンキ","ケーズデンキ","マツモトキヨシ","オートバックス","カラオケまねきねこ",
+  "ビッグエコー"
+];
+const MODES = {num: "数字", word: "お題", chain: "チェーン店"};
+const LISTS = {word: WORDS, chain: CHAINS};   // 数字以外は言葉を配る
+const LABELS = {num: `1〜${MAX}`, word: "お題（名詞）", chain: "全国チェーン店"};
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -156,7 +168,7 @@ let lib = null, room = null, act = null, selfId = null;
 let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
 let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
-let mode = store.get("mode") === "word" ? "word" : "num";   // 次に配るもの
+let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
 let noPeerTimer = 0, joinedAt = 0, revealArmTimer = 0;
 
 // 自分の手札か。再読み込みすると peerId が変わるので、名前でも自分とみなす（自分の数字を見せないため）
@@ -261,13 +273,13 @@ addEventListener("pagehide", () => { if(room) room.leave(); });
 // 配り直しは round を1つ進めて全員へ送る。同時に配ったときは dealer の peerId が大きい方を採る（全員が同じ結論になる）
 function validGame(g){
   if(!g || !Number.isInteger(g.round) || typeof g.dealer !== "string" || !Array.isArray(g.hands)) return false;
-  const word = g.mode === "word";
+  const word = g.mode in LISTS;
   return g.hands.every(h => h && typeof h.id === "string" && (word ? typeof h.w === "string" : Number.isInteger(h.n)));
 }
 function order(a, b){ return a.round - b.round || (a.dealer < b.dealer ? -1 : a.dealer > b.dealer ? 1 : 0); }
 function merge(g){
-  const word = g.mode === "word";
-  g = {...g, mode: word ? "word" : "num", revealed: !!g.revealed,
+  const word = g.mode in LISTS;
+  g = {...g, mode: word ? g.mode : "num", revealed: !!g.revealed,
     hands: g.hands.map(h => word ? {id: h.id, name: cleanName(h.name), w: String(h.w).slice(0, 20)} : {id: h.id, name: cleanName(h.name), n: h.n})};
   if(!game || order(g, game) > 0) game = g;
   else if(order(g, game) === 0 && g.revealed && !game.revealed) game.revealed = true;
@@ -283,16 +295,18 @@ function players(){
   return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 }
 
+const maxPlayers = m => m in LISTS ? LISTS[m].length : MAX;
 function poolFor(m){
   if(m === "num") return Array.from({length: MAX}, (_, i) => i + 1);
-  // お題は直前のラウンドと同じものが続かないようにする
-  const last = new Set(game?.mode === "word" ? game.hands.map(h => h.w) : []);
-  const fresh = WORDS.filter(w => !last.has(w));
-  return fresh.length >= players().length ? fresh : [...WORDS];
+  // 言葉は直前のラウンドと同じものが続かないようにする
+  const list = LISTS[m];
+  const last = new Set(game?.mode === m ? game.hands.map(h => h.w) : []);
+  const fresh = list.filter(w => !last.has(w));
+  return fresh.length >= players().length ? fresh : [...list];
 }
 function deal(){
   const ps = players(), m = mode;
-  if(ps.length < 2 || ps.length > MAX) return;
+  if(ps.length < 2 || ps.length > maxPlayers(m)) return;
   // 重ならないように人数ぶん引く
   const pool = poolFor(m);
   const rnd = new Uint32Array(ps.length);
@@ -300,7 +314,7 @@ function deal(){
   const hands = ps.map((p, i) => {
     const j = i + rnd[i] % (pool.length - i);
     [pool[i], pool[j]] = [pool[j], pool[i]];
-    return m === "word" ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
+    return m in LISTS ? {id: p.id, name: p.name, w: pool[i]} : {id: p.id, name: p.name, n: pool[i]};
   });
   game = {round: (game?.round || 0) + 1, dealer: selfId, mode: m, max: MAX, hands, revealed: false};
   disarmReveal();
@@ -350,15 +364,15 @@ function render(){
   // 配るボタン
   const ps = players();
   $("dealBox").hidden = !!game && !game.revealed;
-  $("dealBtn").textContent = game ? `次のラウンド（${MODES[mode]}）を配る` : `${MODES[mode]}を配る`;
+  $("dealBtn").textContent = game ? "次のラウンドを配る" : `${MODES[mode]}を配る`;
   for(const b of document.querySelectorAll("[data-mode]")){
     const on = b.dataset.mode === mode;
     b.setAttribute("aria-checked", on);
     b.className = `rounded-lg py-2 ${on ? "bg-paper text-ink shadow" : "text-paper/70"}`;
   }
-  $("dealBtn").disabled = ps.length < 2 || ps.length > MAX;
+  $("dealBtn").disabled = ps.length < 2 || ps.length > maxPlayers(mode);
   $("dealMsg").textContent = ps.length < 2 ? "2人以上そろうと配れます"
-    : ps.length > MAX ? `${MAX}人までしか配れません`
+    : ps.length > maxPlayers(mode) ? `${maxPlayers(mode)}人までしか配れません`
     : `${ps.length}人に配ります（誰が押しても全員に配られます）`;
 
   // 答え合わせボタン
@@ -381,8 +395,8 @@ function renderLobby(){
 function renderBoard(){
   const g = game;
   $("roundLabel").textContent = `第${g.round}ラウンド${g.revealed ? "（答え合わせ）" : ""}`;
-  const word = g.mode === "word";
-  $("rangeLabel").textContent = word ? "お題（名詞）" : `1〜${g.max}`;
+  const word = g.mode in LISTS;
+  $("rangeLabel").textContent = LABELS[g.mode] || LABELS.num;
   $("spectator").hidden = g.hands.some(isMe);
 
   // 数字は答え合わせ後に大きい順に並べて順位を付ける。お題は順位なし

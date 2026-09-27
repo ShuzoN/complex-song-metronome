@@ -94,7 +94,7 @@ test("自分の数字だけ見えず、答え合わせで全員の数字が全�
   for(const p of pages){
     await expect(p.locator("#revealBtn")).toBeHidden();
     for(const n of names) await expect(num(p, n)).toHaveText(String(seen[n]));
-    await expect(p.locator("#dealBtn")).toHaveText("次のラウンド（数字）を配る");
+    await expect(p.locator("#dealBtn")).toHaveText("次のラウンドを配る");
   }
 });
 
@@ -234,5 +234,42 @@ test.describe("お題モード", () => {
     await expect(pages[0].locator("#roundLabel")).toHaveText("第2ラウンド");
     await expect(num(pages[0], "はる")).toHaveCount(1);
     await expect(pages[0].locator("[data-word]")).toHaveCount(0);
+  });
+});
+
+test.describe("チェーン店モード", () => {
+  const CHAINS = JSON.parse("[" + PAGE.toString().match(/const CHAINS = \[([\s\S]*?)\];/)[1] + "]");
+  const word = (page, name) => card(page, name).locator("[data-word]");
+
+  test("全国チェーンは重なりなく60個で、ブランドごとに分かれている", () => {
+    expect(CHAINS).toHaveLength(60);
+    expect(new Set(CHAINS).size).toBe(60);
+    for(const w of ["ガスト", "バーミヤン", "吉野家", "GEO", "ダイソー", "業務スーパー", "コストコ"]) expect(CHAINS).toContain(w);
+    expect(CHAINS).not.toContain("スカイラーク");
+  });
+
+  test("チェーン店を選んで配ると、自分の分だけ見えず、答え合わせで開く", async ({context}) => {
+    const a = await openPlayer(context, "あき");
+    const b = await openPlayer(context, "はる");
+    await expect(a.locator("#dealBtn")).toBeEnabled();
+    await a.click('[data-mode="chain"]');
+    await expect(a.locator("#dealBtn")).toHaveText("チェーン店を配る");
+    await a.click("#dealBtn");
+
+    await expect(b.locator("#rangeLabel")).toHaveText("全国チェーン店");
+    await expect(word(a, "あき")).toHaveCount(0);
+    await expect(word(b, "はる")).toHaveCount(0);
+    const aChain = await word(b, "あき").textContent();
+    const bChain = await word(a, "はる").textContent();
+    expect(CHAINS).toContain(aChain);
+    expect(CHAINS).toContain(bChain);
+    expect(aChain).not.toBe(bChain);
+
+    await b.click("#revealBtn");
+    await expect(b.locator("#revealBtn")).toHaveText("もう一度押すと全員のチェーン店を開きます");
+    await b.click("#revealBtn");
+    await expect(word(a, "あき")).toHaveText(aChain);
+    await expect(word(b, "はる")).toHaveText(bChain);
+    await expect(a.locator("#dealBtn")).toHaveText("次のラウンドを配る");
   });
 });
