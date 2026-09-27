@@ -162,8 +162,9 @@ const RELAYS = [
   "relay.damus.io", "nos.lol", "relay.primal.net", "nostr.mom", "relay.snort.social",
   "nostr-relay.corb.net", "basspistol.org", "koru.bitcointxoko.org", "social.amanah.eblessing.co", "relay.mostr.pub"
 ].map(h => "wss://" + h);
-const PING_MS = 4000;               // 生きていることを知らせる間隔
-const PEER_TIMEOUT_MS = 15000;      // これだけ何も届かない相手は切断とみなす
+const PING_MS = 15000;              // 生きていることを知らせる間隔（ライフチェック）
+const PEER_TIMEOUT_MS = 3 * PING_MS; // 3回続けて何も届かない相手は切断とみなす
+const PROBE_MS = 3000;              // 問い合わせてから返事を待つ時間
 const HIDDEN_RECONNECT_MS = 15000;  // これ以上画面を離れていたら、戻ったときに入り直す
 const RESUME_KEY = "ip:resume";     // 入り直し（ページの読み直し）をまたいで状態を持ち越す
 const MAX = 100;   // 数字は 1〜100
@@ -223,6 +224,7 @@ let lib = null, room = null, act = null, selfId = null;
 let myName = "", keyword = "";
 const peers = new Map();   // つながっている相手：peerId → 名前（名前が届くまでは ""）
 const lastSeen = new Map();   // 相手から最後に何か届いた時刻
+const probing = new Set();    // 生きているか問い合わせ中の相手（抜け殻かもしれないので、人数や名前の重なりに数えない）
 let loadedAt = Date.now(), hiddenAt = 0, relayDownChecks = 0;
 let game = null;           // {round, dealer, mode, max, hands:[{id, name, n}（数字）| {id, name, w}（お題）], revealed}
 let mode = MODES[store.get("mode")] ? store.get("mode") : "num";   // 次に配るもの
@@ -301,13 +303,13 @@ function connect(){
     render();
   });
   r.onPeerLeave = id => { if(r === room){ peers.delete(id); lastSeen.delete(id); render(); } };
-  a.ping.onMessage = live(() => {});
+  // ping：{q: 1} は「生きていたら返事して」の問い合わせ
+  a.ping.onMessage = live((msg, {peerId}) => { if(msg?.q) a.ping.send({q: 0}, {target: peerId}); });
   a.name.onMessage = live((msg, {peerId}) => {
     const name = cleanName(msg?.name);
     peers.set(peerId, name);
-    // 同じ人が入り直すと別の peerId で来る。同じ名前の古い相手がしばらく黙っていれば、抜け殻として外す
-    for(const [id, n] of peers)
-      if(id !== peerId && n === name && Date.now() - (lastSeen.get(id) || 0) > 2 * PING_MS) { peers.delete(id); lastSeen.delete(id); }
+    // 同じ人が入り直すと別の peerId で来る。同じ名前の古い相手に問い合わせ、返事がなければ抜け殻として外す
+    for(const [id, n] of peers) if(id !== peerId && n === name) probe(id);
     if(msg?.ask) greet(peerId, false);
     render();
   });
@@ -325,10 +327,23 @@ function heard(id){
   lastSeen.set(id, Date.now());
   if(!peers.has(id)){ peers.set(id, ""); act?.name.send({name: myName, ask: true}, {target: id}); render(); }
 }
+// 相手が生きているか問い合わせ、PROBE_MS のうちに何も届かなければ外す
+function probe(id){
+  if(probing.has(id) || !act) return;
+  const askedAt = Date.now();
+  probing.add(id);
+  act.ping.send({q: 1}, {target: id});
+  setTimeout(() => {
+    probing.delete(id);
+    if(peers.has(id) && (lastSeen.get(id) || 0) < askedAt){ peers.delete(id); lastSeen.delete(id); }
+    render();
+  }, PROBE_MS);
+  render();
+}
 // 生きている印を送り、黙ったままの相手を外す（スリープした端末は切断を知らせてこないため）
 setInterval(() => {
   if(!room) return;
-  act.ping.send(0);
+  act.ping.send({q: 0});
   let changed = false;
   for(const id of [...peers.keys()])
     if(Date.now() - (lastSeen.get(id) || 0) > PEER_TIMEOUT_MS){ peers.delete(id); lastSeen.delete(id); changed = true; }
@@ -365,14 +380,14 @@ document.addEventListener("visibilitychange", () => {
 });
 // 電波が戻ったら入り直す
 addEventListener("online", () => { if(room) reconnect(); });
-// つながっていたリレーがすべて切れたまま 15 秒たったら入り直す。
+// つながっていたリレーがすべて切れたまま、ライフチェック2回ぶん（15秒以上）たったら入り直す。
 // 最初から1つもつながらない（リレーが塞がれている）ときや、電波がないときは、読み直しても変わらないので何もしない
 let relayEverUp = false;
 function checkRelays(){
   const socks = Object.values(lib?.getRelaySockets?.() || {});
   if(socks.some(ws => ws?.readyState === 1)){ relayEverUp = true; relayDownChecks = 0; return; }
   relayDownChecks = relayEverUp && socks.length && navigator.onLine !== false ? relayDownChecks + 1 : 0;
-  if(relayDownChecks * PING_MS >= 15000) autoReconnect();
+  if(relayDownChecks >= 2) autoReconnect();   // 2回続けて（15秒以上）全部切れていたら
 }
 
 function leave(){
@@ -415,7 +430,7 @@ function broadcast(){ if(act && game) act.game.send(game); }
 
 function players(){
   const list = [{id: selfId, name: myName}];
-  for(const [id, name] of peers) if(name) list.push({id, name});
+  for(const [id, name] of peers) if(name && !probing.has(id)) list.push({id, name});
   return list.sort((a, b) => a.name.localeCompare(b.name, "ja"));
 }
 
@@ -591,7 +606,7 @@ $("revealBtn").addEventListener("click", () => {
 // ---- 描画 ----
 function render(){
   if(!room) return;
-  const named = [...peers.values()].filter(Boolean);
+  const named = [...peers].filter(([id, n]) => n && !probing.has(id)).map(([, n]) => n);
   $("peerCount").textContent = `${named.length + 1}人`;
 
   // お知らせ

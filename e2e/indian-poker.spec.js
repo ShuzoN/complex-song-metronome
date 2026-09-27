@@ -15,7 +15,7 @@ export function joinRoom(config, roomId){
   const bc = new BroadcastChannel("fake:" + config.appId + ":" + config.password + ":" + roomId);
   (window.__fakeChannels ||= []).push(bc);
   const known = new Set(), handlers = {};
-  const post = m => bc.postMessage({...m, from: selfId});
+  const post = m => { try{ bc.postMessage({...m, from: selfId}); }catch(_){} };   // 閉じた（切れた）あとは黙って捨てる
   const room = {
     onPeerJoin: null, onPeerLeave: null,
     makeAction(ns){
@@ -23,7 +23,7 @@ export function joinRoom(config, roomId){
       handlers[ns] = a;
       return a;
     },
-    leave(){ try{ post({t: "bye"}); bc.close(); }catch(_){} return Promise.resolve(); }
+    leave(){ post({t: "bye"}); bc.close(); return Promise.resolve(); }
   };
   const meet = id => { if(!known.has(id)){ known.add(id); room.onPeerJoin && room.onPeerJoin(id); } };
   bc.onmessage = ({data: m}) => {
@@ -181,6 +181,9 @@ test("切れている間に配り直されても、再接続すると新しい�
 
   await c.click("#reconnectBtn");
   await expect(c.locator("#roundLabel")).toHaveText("第2ラウンド");
+  // 黙って消えた古い「なつ」は問い合わせに返事をしないので外れ、名前の重なりの警告も出ない
+  await expect(a.locator("#peerCount")).toHaveText("3人");
+  await expect(a.locator("#notice")).toBeHidden({timeout: 6000});
   await expect(num(c, "なつ")).toHaveCount(0);
   await expect(num(c, "あき")).toHaveText(await num(b, "あき").textContent());
 });
@@ -511,15 +514,18 @@ test.describe("接続の安定性", () => {
     await expect(b.locator("#peerCount")).toHaveText("2人");
   });
 
-  test("黙ったままの相手は15秒ほどで切断とみなす", async ({context}) => {
-    test.setTimeout(60000);
+  test("黙ったままの相手は、ライフチェック3回ぶん（45秒）で切断とみなす", async ({context}) => {
+    await context.clock.install();                                  // 時計を差し替え、45秒を待たずに進める
     const a = await openPlayer(context, "あき");
     const b = await openPlayer(context, "はる");
     await expect(a.locator("#dealBtn")).toBeEnabled();
     await a.click("#dealBtn");
     await expect(a.locator("#peerCount")).toHaveText("2人");
     await b.evaluate(() => { for(const bc of window.__fakeChannels) bc.close(); });   // 退室を知らせずに消える（スリープ）
-    await expect(a.locator("#peerCount")).toHaveText("1人", {timeout: 25000});
+    await a.clock.fastForward(30000);                                // 2回ぶんではまだ切断にしない
+    await expect(a.locator("#peerCount")).toHaveText("2人");
+    await a.clock.fastForward(20000);
+    await expect(a.locator("#peerCount")).toHaveText("1人");
     await expect(card(a, "はる")).toContainText("切断");
   });
 });
